@@ -10,7 +10,9 @@
 //! Each such offer is then classified against the `[plugins]` config and the
 //! [audits list](crate::audits): already enabled,
 //! auto-enabled, declined, revoked, or a candidate still awaiting consent.
-//! Discovery itself neither fetches nor writes.
+//! Each offer not revoked also carries what the audits say about it (a
+//! [`Verdict`]), which the prompt, the hint and `status` show; only a
+//! revocation changes the classification. Discovery itself neither fetches nor writes.
 //!
 //! On top of that read side sits the consent write side:
 //! [`prompt_for_consent`] asks about each candidate and [`apply_consent`]
@@ -42,7 +44,7 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use symposium_install::UpdateLevel;
 
-use crate::audits::{AuditIndex, Revocation};
+use crate::audits::{Answer, AuditIndex, Revocation, Verdict};
 use crate::config::Symposium;
 use crate::output::Output;
 use crate::plugins::Plugin;
@@ -88,6 +90,12 @@ pub struct DiscoveredPlugin {
     /// How the `[plugins]` config decided this offer.
     pub enablement: Enablement,
     pub format: Option<&'static str>,
+    /// What the audits list says about this release and payload, looked up
+    /// once, cache-only. `None` when the list revokes it (the revocation is
+    /// the `enablement` of a revoked offer, and a declined one stays
+    /// declined), and when no list was read
+    /// ([`AuditIndex::is_read`](crate::audits::AuditIndex::is_read)).
+    pub audit: Option<Verdict>,
 }
 
 impl DiscoveredPlugin {
@@ -156,7 +164,13 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
                 ),
                 None => describe_plugin(&plugin.manifest),
             });
-            let enablement = decide(sym, pms, &audits, &used, &plugin.canonical).await;
+            // A verdict is shown only when a list was read: without one,
+            // "not audited" would claim a check that never happened.
+            let (revocation, audit) = match audits.answer(pms, &plugin.canonical).await {
+                Answer::Revoked(revocation) => (Some(revocation), None),
+                Answer::Verdict(verdict) => (None, audits.is_read().then_some(verdict)),
+            };
+            let enablement = decide(sym, pms, revocation, &used, &plugin.canonical).await;
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
                 format: plugin.format(),
@@ -164,6 +178,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
                 recommends: name,
                 description,
                 enablement,
+                audit,
             };
             match discovered.enablement {
                 Enablement::Used => discovery.active.push(discovered),
@@ -286,19 +301,14 @@ pub async fn discover_for(sym: &Symposium, ws: &Arc<Workspace>) -> Discovery {
     discover(sym, ws, &registry.plugins).await
 }
 
-/// The names of the discovered offers still awaiting consent, deduplicated
-/// and sorted — what a consent prompt would ask about, and what the
-/// non-interactive hint names.
-pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<String> {
-    let mut names: Vec<String> = discover_for(sym, deps)
-        .await
-        .candidates
-        .into_iter()
-        .map(|c| c.id.name)
-        .collect();
-    names.sort();
-    names.dedup();
-    names
+/// The discovered offers still awaiting consent, one per name, sorted by
+/// name — what a consent prompt would ask about, and what the
+/// non-interactive hint names, each with its audit answer.
+pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<DiscoveredPlugin> {
+    let mut candidates = discover_for(sym, deps).await.candidates;
+    candidates.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+    candidates.dedup_by(|a, b| a.id.name == b.id.name);
+    candidates
 }
 
 /// Record consent decisions: approvals into `[plugins] auto-enable`,
@@ -363,6 +373,8 @@ pub async fn apply_consent(
 /// Only explicit answers are recorded — the default ("ask me later") leaves
 /// the dependency undecided, so reflexively hitting Enter never permanently
 /// declines anything, and Escape leaves the remaining offers undecided too.
+/// Each question also says what the audits say about the plugin; that
+/// changes nothing about what is asked or recorded.
 pub async fn prompt_for_consent(
     sym: &mut Symposium,
     deps: &Arc<Workspace>,
@@ -371,25 +383,16 @@ pub async fn prompt_for_consent(
     if !out.is_interactive() {
         return Ok(());
     }
-    let candidates = discover_for(sym, deps).await.candidates;
+    let candidates = pending_candidates(sym, deps).await;
     if candidates.is_empty() {
         return Ok(());
     }
 
     let mut approved = Vec::new();
     let mut declined = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     for candidate in candidates {
-        let name = &candidate.id.name;
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        let what = candidate
-            .description
-            .as_deref()
-            .unwrap_or("agent extensions");
         let answer = dialoguer::Select::new()
-            .with_prompt(format!("Dependency `{name}` provides {what}. Enable it?"))
+            .with_prompt(consent_question(&candidate))
             .items(["Ask me later", "Enable", "No — don't ask again"])
             .default(0)
             .interact_opt()
@@ -402,6 +405,26 @@ pub async fn prompt_for_consent(
         }
     }
     apply_consent(sym, deps.pms(), &approved, &declined).await
+}
+
+/// The question the consent prompt asks about one candidate: what it
+/// provides and what the audits say about it, in the words `status` uses. A
+/// candidate is never revoked, so it always has a verdict; like a `status`
+/// line, the question would simply leave it out otherwise.
+fn consent_question(candidate: &DiscoveredPlugin) -> String {
+    let what = candidate
+        .description
+        .as_deref()
+        .unwrap_or("agent extensions");
+    let audit = candidate
+        .audit
+        .as_ref()
+        .map(|audit| format!(" — {audit}"))
+        .unwrap_or_default();
+    format!(
+        "Dependency `{}` provides {what}{audit}. Enable it?",
+        candidate.name()
+    )
 }
 
 /// A short human summary of what a discovered plugin contributes, for the
@@ -430,15 +453,16 @@ fn count_phrase(n: usize, singular: &str, plural: &str) -> Option<String> {
     (n > 0).then(|| format!("{n} {}", if n == 1 { singular } else { plural }))
 }
 
-/// Classify one offer against the `[plugins]` config. Precedence, first match
-/// wins: `disable` (the last word), then a revocation in the audits list
-/// (outranks every grant, so a revoked release stays out whatever consented
-/// to it), then `use`, then the standing `auto-enable`; anything else is a
-/// candidate.
+/// Classify one offer against the `[plugins]` config and the `revocation`
+/// the audits list holds for it, if any. Precedence, first match wins:
+/// `disable` (the last word), then a revocation (outranks every grant, so a
+/// revoked release stays out whatever consented to it), then `use`, then the
+/// standing `auto-enable`; anything else is a candidate. An audit is not a
+/// grant: an audited offer nobody consented to is a candidate like any other.
 async fn decide(
     sym: &Symposium,
     pms: &PmRegistry,
-    audits: &AuditIndex,
+    revocation: Option<Revocation>,
     used: &HashSet<PackageId>,
     id: &PackageId,
 ) -> Enablement {
@@ -453,7 +477,7 @@ async fn decide(
     };
     if plugins.is_disabled(pms, id).await {
         Enablement::Declined
-    } else if let Some(revocation) = audits.revocation(pms, id).await {
+    } else if let Some(revocation) = revocation {
         Enablement::Revoked(revocation)
     } else if used.contains(&identity) {
         Enablement::Used
@@ -541,6 +565,153 @@ mod tests {
         let names: Vec<&str> = found.auto_enabled.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["widget-lib"]);
         assert!(found.enabled().count() == 1);
+    }
+
+    /// [`sym_with`], with the audits list on and `widget-lib`'s audits file
+    /// holding `audits` (no file when empty).
+    fn sym_with_audits(root: &Path, config: &str, audits: &str) -> Symposium {
+        let mut sym = sym_with(root, config);
+        sym.config.defaults.symposium_audits = true;
+        let dir = sym.audits_dir().unwrap().join("audits/cargo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("widget-lib.toml");
+        if audits.is_empty() {
+            let _ = std::fs::remove_file(file);
+        } else {
+            std::fs::write(file, audits).unwrap();
+        }
+        sym
+    }
+
+    /// An audit of `widget-lib`'s payload in the [`workspace`] fixture.
+    fn widget_audited(root: &Path) -> String {
+        let digest = crate::audits::digest::payload_digest(&root.join("widget-lib")).unwrap();
+        format!("format = 1\n[[audit]]\ndigest = \"{digest}\"\n")
+    }
+
+    /// A revocation outranks every grant (`use`, `auto-enable`) and is
+    /// outranked only by `disable`. A revoked offer is never a candidate, and
+    /// has no verdict to show in place of the revocation.
+    #[tokio::test]
+    async fn revocation_outranks_grants_and_only_disable_outranks_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = workspace(tmp.path());
+        let revoke = "format = 1\n[[revoked]]\nversions = \"^1\"\nreason = \"exfiltration\"\n";
+        let revoked = Enablement::Revoked(Revocation {
+            reason: symposium_sdk::audits::RevokeReason::Exfiltration,
+        });
+        for config in [
+            "",
+            "[plugins]\nuse = [\"widget-lib\"]",
+            "[plugins]\nauto-enable = [\"widget-lib\"]",
+        ] {
+            let found = discover(&sym_with_audits(tmp.path(), config, revoke), &ws, &[]).await;
+            assert!(found.candidates.is_empty(), "{config}");
+            assert_eq!(found.enabled().count(), 0, "{config}");
+            assert_eq!(found.revoked.len(), 1, "{config}");
+            assert_eq!(found.revoked[0].enablement, revoked, "{config}");
+            assert_eq!(found.revoked[0].audit, None, "{config}");
+        }
+        assert!(!revoked.is_enabled());
+
+        let sym = sym_with_audits(
+            tmp.path(),
+            "[plugins]\nuse = [\"widget-lib\"]\ndisable = [\"widget-lib\"]",
+            revoke,
+        );
+        let found = discover(&sym, &ws, &[]).await;
+        assert!(found.revoked.is_empty());
+        assert_eq!(found.declined.len(), 1);
+        // Declined, and still revoked: no verdict to show in its place.
+        assert_eq!(found.declined[0].audit, None);
+        assert!(
+            pending_candidates(&sym_with_audits(tmp.path(), "", revoke), &ws)
+                .await
+                .is_empty()
+        );
+    }
+
+    /// An audit changes nothing about consent in this release: an audited
+    /// offer is still a candidate, and the consent prompt still asks.
+    #[tokio::test]
+    async fn an_audited_offer_is_still_a_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = workspace(tmp.path());
+        let sym = sym_with_audits(tmp.path(), "", &widget_audited(tmp.path()));
+        let found = discover(&sym, &ws, &[]).await;
+        let names: Vec<&str> = found.candidates.iter().map(|c| c.name()).collect();
+        assert_eq!(names, vec!["widget-lib"]);
+        assert_eq!(found.candidates[0].audit, Some(Verdict::Audited));
+    }
+
+    /// A candidate offering one skill group, with the given verdict.
+    fn candidate_with(name: &str, audit: Verdict) -> DiscoveredPlugin {
+        DiscoveredPlugin {
+            registry: CARGO_PM.to_string(),
+            id: PackageId::new(CARGO_PM, name, "1.0.0"),
+            recommends: name.to_string(),
+            description: Some("1 skill group".to_string()),
+            enablement: Enablement::Candidate,
+            format: None,
+            audit: Some(audit),
+        }
+    }
+
+    /// Each question says what the audits say, in the words `status` uses,
+    /// and for a payload that cannot be digested, why in a few words.
+    #[test]
+    fn the_consent_question_says_whether_the_plugin_is_audited() {
+        let questions: Vec<String> = [
+            candidate_with("audited-lib", Verdict::Audited),
+            candidate_with("plain-lib", Verdict::NotAudited),
+            candidate_with(
+                "git-lib",
+                Verdict::Ineligible(crate::audits::digest::Ineligible::GitSkillSource(
+                    "https://github.com/example/skills".into(),
+                )),
+            ),
+        ]
+        .iter()
+        .map(consent_question)
+        .collect();
+        assert_eq!(
+            questions,
+            [
+                "Dependency `audited-lib` provides 1 skill group — audited by the `symposium-audits` list. Enable it?",
+                "Dependency `plain-lib` provides 1 skill group — not audited. Enable it?",
+                "Dependency `git-lib` provides 1 skill group — not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`. Enable it?",
+            ]
+        );
+    }
+
+    /// The list audits the package, but this payload has no digest: the
+    /// candidate is not audited, and its answer says why.
+    #[tokio::test]
+    async fn an_undigestable_audited_offer_says_why_it_is_not_audited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = workspace(tmp.path());
+        let audited = widget_audited(tmp.path());
+        std::fs::write(
+            tmp.path().join("widget-lib/Symposium.toml"),
+            "[[skills]]\nsource.git = \"https://github.com/example/skills\"\n",
+        )
+        .unwrap();
+
+        let pending = pending_candidates(&sym_with_audits(tmp.path(), "", &audited), &ws).await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].audit,
+            Some(Verdict::Ineligible(
+                crate::audits::digest::Ineligible::GitSkillSource(
+                    "https://github.com/example/skills".into()
+                )
+            ))
+        );
+
+        // Nobody audited a package with no audits file: no reason is given,
+        // since a digest would not have changed the answer.
+        let pending = pending_candidates(&sym_with_audits(tmp.path(), "", ""), &ws).await;
+        assert_eq!(pending[0].audit, Some(Verdict::NotAudited));
     }
 
     #[tokio::test]

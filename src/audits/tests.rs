@@ -69,10 +69,10 @@ fn lookup_answers_revoked_audited_or_not_audited() {
     };
     let revoked = |reason| Answer::Revoked(Revocation { reason });
 
-    assert_eq!(lookup("1.4.2", Some(A)), Answer::Audited);
+    assert_eq!(lookup("1.4.2", Some(A)), Answer::Verdict(Verdict::Audited));
     // `versions` on an audit is bookkeeping: another release with the same
     // payload is audited too.
-    assert_eq!(lookup("9.0.0", Some(A)), Answer::Audited);
+    assert_eq!(lookup("9.0.0", Some(A)), Answer::Verdict(Verdict::Audited));
     assert_eq!(
         lookup("1.4.2", Some(B)),
         revoked(RevokeReason::HiddenBehavior)
@@ -83,10 +83,10 @@ fn lookup_answers_revoked_audited_or_not_audited() {
         revoked(RevokeReason::MaliciousCrate)
     );
     // No digest, or one nobody listed, or no file at all.
-    assert_eq!(lookup("1.4.2", None), Answer::NotAudited);
+    assert_eq!(lookup("1.4.2", None), Answer::Verdict(Verdict::NotAudited));
     assert_eq!(
         lookup("1.4.2", Some(&format!("sha256:{}", "c".repeat(64)))),
-        Answer::NotAudited
+        Answer::Verdict(Verdict::NotAudited)
     );
     for (pm, name) in [
         ("cargo", "gadget"),
@@ -95,14 +95,14 @@ fn lookup_answers_revoked_audited_or_not_audited() {
     ] {
         assert_eq!(
             index.lookup(pm, name, "0.9.0", Some(&digest(A))),
-            Answer::NotAudited,
+            Answer::Verdict(Verdict::NotAudited),
             "{pm} {name}"
         );
     }
     // No list at all.
     assert_eq!(
         AuditIndex::default().lookup("cargo", "widget-lib", "0.9.0", None),
-        Answer::NotAudited
+        Answer::Verdict(Verdict::NotAudited)
     );
 }
 
@@ -128,7 +128,7 @@ fn version_revocations_follow_semver_requirements() {
     );
     assert_eq!(
         AuditIndex::new(tmp.path()).lookup("cargo", "w", "latest", None),
-        Answer::NotAudited
+        Answer::Verdict(Verdict::NotAudited)
     );
 }
 
@@ -284,6 +284,9 @@ fn the_file_size_cap_is_exact() {
 /// is asked for; with no `root`, it must never be asked for a payload.
 struct OnePackage {
     root: Option<PathBuf>,
+    /// The release every fetch serves, whatever was asked for; `None` serves
+    /// the release asked for.
+    serves: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -306,7 +309,10 @@ impl PackageManager for OnePackage {
         };
         anyhow::ensure!(root.exists(), "not cached");
         // Resolve an exact requirement to its release, as a real one does.
-        let version = id.version.strip_prefix('=').unwrap_or(&id.version);
+        let version = match &self.serves {
+            Some(served) => served,
+            None => id.version.strip_prefix('=').unwrap_or(&id.version),
+        };
         Ok(FetchedPackage {
             id: PackageId::new(&id.pm, &id.name, version),
             root: root.clone(),
@@ -321,6 +327,20 @@ fn package_at(root: Option<&Path>) -> PmRegistry {
         PluginKind::Package,
         Box::new(OnePackage {
             root: root.map(Path::to_path_buf),
+            serves: None,
+        }),
+    )])
+}
+
+/// A package manager whose only payload, at `root`, is release `version`.
+fn release_at(root: &Path, version: &str) -> PmRegistry {
+    PmRegistry::new(vec![PmInstance::new(
+        CARGO_PM,
+        false,
+        PluginKind::Package,
+        Box::new(OnePackage {
+            root: Some(root.to_path_buf()),
+            serves: Some(version.to_string()),
         }),
     )])
 }
@@ -392,11 +412,111 @@ async fn answer_skips_the_digest_when_nothing_could_match_it() {
     let index = AuditIndex::new(tmp.path());
     let pms = package_at(None);
     let id = |version: &str| PackageId::new(CARGO_PM, "widget-lib", version);
-    assert_eq!(index.answer(&pms, &id("2.0.0")).await, Answer::NotAudited);
+    assert_eq!(
+        index.answer(&pms, &id("2.0.0")).await,
+        Answer::Verdict(Verdict::NotAudited)
+    );
     assert!(matches!(
         index.answer(&pms, &id("0.5.0")).await,
         Answer::Revoked(_)
     ));
+}
+
+/// `AuditIndex::answer` (what discovery and `status` show) digests the loaded
+/// payload to find its audit, and agrees with `lookup`.
+#[tokio::test]
+async fn answer_digests_the_loaded_payload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let krate = tmp.path().join("crate");
+    std::fs::create_dir_all(krate.join("skills/s")).unwrap();
+    std::fs::write(krate.join("skills/s/SKILL.md"), "---\nname: s\n---\n").unwrap();
+    let payload = digest::payload_digest(&krate).unwrap();
+    let list = tmp.path().join("list");
+    write_audits(
+        &list,
+        "widget-lib",
+        &format!("format = 1\n[[audit]]\ndigest = \"{payload}\"\n"),
+    );
+    let index = AuditIndex::new(&list);
+    let id = PackageId::new(CARGO_PM, "widget-lib", "1.0.0");
+    let expected = Answer::Verdict(Verdict::Audited);
+    assert_eq!(index.answer(&package_at(Some(&krate)), &id).await, expected);
+    assert_eq!(
+        index.lookup("cargo", "widget-lib", "1.0.0", Some(&payload)),
+        expected
+    );
+
+    // No payload to digest, or only another release's: plainly not audited,
+    // with no reason, since there is no payload of this release to blame.
+    let not_audited = Answer::Verdict(Verdict::NotAudited);
+    let missing = tmp.path().join("missing");
+    assert_eq!(
+        index.answer(&package_at(Some(&missing)), &id).await,
+        not_audited
+    );
+    assert_eq!(
+        index.answer(&release_at(&krate, "1.1.0"), &id).await,
+        not_audited
+    );
+
+    // A skill text change is a new payload, which nobody audited.
+    std::fs::write(krate.join("skills/s/SKILL.md"), "---\nname: s\n---\nmore\n").unwrap();
+    assert_eq!(
+        index.answer(&package_at(Some(&krate)), &id).await,
+        not_audited
+    );
+}
+
+/// A payload that cannot be digested is not audited. When the list audits
+/// the package, the answer says why; when only a digest revocation needed the
+/// digest, no audit could have matched, so it is plainly not audited.
+#[tokio::test]
+async fn answer_says_why_an_undigestable_payload_is_not_audited() {
+    let tmp = tempfile::tempdir().unwrap();
+    let krate = tmp.path().join("crate");
+    std::fs::create_dir_all(&krate).unwrap();
+    std::fs::write(
+        krate.join("Symposium.toml"),
+        "[[skills]]\nsource.git = \"https://github.com/example/skills\"\n",
+    )
+    .unwrap();
+    let other = "sha256:".to_string() + &"0".repeat(64);
+    let list = tmp.path().join("list");
+    write_audits(
+        &list,
+        "widget-lib",
+        &format!("format = 1\n[[audit]]\ndigest = \"{other}\"\n"),
+    );
+    write_audits(
+        &list,
+        "gadget",
+        &format!("format = 1\n[[revoked]]\ndigest = \"{other}\"\nreason = \"off-task\"\n"),
+    );
+    let index = AuditIndex::new(&list);
+    let pms = package_at(Some(&krate));
+
+    let Answer::Verdict(verdict) = index
+        .answer(&pms, &PackageId::new(CARGO_PM, "widget-lib", "1.0.0"))
+        .await
+    else {
+        panic!("nothing revoked widget-lib");
+    };
+    assert_eq!(
+        verdict,
+        Verdict::Ineligible(digest::Ineligible::GitSkillSource(
+            "https://github.com/example/skills".into()
+        ))
+    );
+    assert_eq!(
+        verdict.to_string(),
+        "not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`"
+    );
+    assert_eq!(
+        index
+            .answer(&pms, &PackageId::new(CARGO_PM, "gadget", "1.0.0"))
+            .await,
+        Answer::Verdict(Verdict::NotAudited)
+    );
 }
 
 /// A failed first fetch of the list is not retried under `UpdateLevel::None`
@@ -468,4 +588,18 @@ async fn one_invocation_digests_a_payload_once() {
 
     let next = package_at(Some(&krate));
     assert!(index.revocation(&next, &id).await.is_none());
+}
+
+/// A list is read only when it is configured and its `audits/` directory
+/// exists: a list that is off, or was never fetched, reads as no list.
+#[test]
+fn a_list_is_read_only_when_its_audits_directory_exists() {
+    assert!(!AuditIndex::default().is_read());
+    let tmp = tempfile::tempdir().unwrap();
+    let index = AuditIndex::new(tmp.path().join("list"));
+    assert!(!index.is_read());
+    std::fs::create_dir_all(tmp.path().join("list")).unwrap();
+    assert!(!index.is_read());
+    write_audits(&tmp.path().join("list"), "other", "format = 1\n");
+    assert!(index.is_read());
 }

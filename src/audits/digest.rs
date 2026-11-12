@@ -132,6 +132,28 @@ impl fmt::Display for Ineligible {
 
 impl std::error::Error for Ineligible {}
 
+impl Ineligible {
+    /// Why, in a few words and without paths, completing "the payload ...":
+    /// the form the consent prompt and the `SessionStart` hint use, where the
+    /// full [`Display`](fmt::Display) sentence would not fit.
+    pub fn brief(&self) -> &'static str {
+        match self {
+            Self::NotADirectory(_) => "has no source directory",
+            Self::Manifest(_) => "has a plugin manifest that does not parse",
+            Self::GitSkillSource(_) => "fetches skills with `source.git`",
+            Self::EscapesCrate(_) => "reaches outside the crate",
+            Self::BrokenLink(_) => "contains a broken symlink",
+            Self::LinkLoop(_) => "contains a symlink loop",
+            Self::Unsupported(_) => "contains an entry that is not a file or directory",
+            Self::TooLarge => "is larger than 4 MiB",
+            Self::Unreadable(_) => "cannot be read",
+        }
+    }
+}
+
+// `brief` states the limit in words: changing it means changing that text.
+const _: () = assert!(MAX_PAYLOAD_BYTES == 4 * 1024 * 1024);
+
 /// The payload digest of the crate whose source is at `root`.
 pub fn payload_digest(root: &Path) -> Result<Digest, Ineligible> {
     let entries = payload_entries(root)?;

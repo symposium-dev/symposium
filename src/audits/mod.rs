@@ -14,17 +14,28 @@
 //! source, so it never holds back the cleanup of installed skills or MCP
 //! servers.
 //!
-//! The lookup ([`AuditIndex::lookup`]) gives exactly one [`Answer`]:
+//! The lookup ([`AuditIndex::answer`] for a loaded package,
+//! [`AuditIndex::lookup`] for a known release and digest) gives exactly one
+//! [`Answer`]:
 //!
 //! - **revoked**: a `[[revoked]]` entry matches the version or the payload
 //!   digest.
-//! - **audited**: otherwise, the digest matches an `[[audit]]` entry.
-//! - **not audited**: anything else, including a payload that cannot be
-//!   digested and a file that cannot be used.
+//! - otherwise a [`Verdict`]:
+//!   - **audited**: the digest matches an `[[audit]]` entry.
+//!   - **not audited**: anything else, including a file that cannot be used.
+//!     When the list audited the package but the loaded payload cannot be
+//!     digested, [`AuditIndex::answer`] says why ([`Verdict::Ineligible`]),
+//!     since no audit can ever cover it; [`AuditIndex::lookup`], handed no
+//!     digest, answers plain not audited.
 //!
 //! Only a revocation changes what loads: a revoked package never loads, on
 //! any route (see [`crate::plugins::active_plugins`] and
-//! [`crate::discovery`]). Only packages of the cargo package manager are
+//! [`crate::discovery`]). A verdict is shown wherever the user is asked
+//! about, or told about, a dependency plugin (the consent prompt, the
+//! `SessionStart` hint, `cargo agents status`), always in the words of
+//! [`Verdict`]'s `Display`, and changes nothing else. Keeping the two apart
+//! in the type means a surface that shows a verdict cannot show a
+//! revocation in its place. Only packages of the cargo package manager are
 //! looked up: a registry or the workspace is a trust root, and a revocation
 //! has nothing to say about what the user put there.
 //!
@@ -59,6 +70,8 @@ use symposium_sdk::pm::{CARGO_PM, PackageId};
 use crate::config::{BUILTIN_AUDITS_LIST, BUILTIN_AUDITS_URL, REGISTRY_CACHE_SUBDIR, Symposium};
 use crate::pm::PmRegistry;
 
+use self::digest::Ineligible;
+
 pub mod digest;
 pub mod digest_command;
 
@@ -80,10 +93,41 @@ pub struct AuditIndex {
 pub enum Answer {
     /// The list revokes this release or payload: it never loads.
     Revoked(Revocation),
+    /// Nobody revoked it: what the list says, which changes nothing about
+    /// what loads.
+    Verdict(Verdict),
+}
+
+/// What the list says about a package it does not revoke: the part of an
+/// [`Answer`] the consent prompt, the `SessionStart` hint and
+/// `cargo agents status` show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
     /// The list audited this payload.
     Audited,
-    /// Neither: no file, no matching entry, or no digest to match.
+    /// No file, no matching entry, a package of another package manager, no
+    /// payload found, or a payload that cannot be digested when the list
+    /// does not audit the package (see [`Verdict::Ineligible`]).
     NotAudited,
+    /// Not audited either, though the list audits this package: this payload
+    /// cannot be digested, so no audit can match it.
+    Ineligible(Ineligible),
+}
+
+/// The words every surface uses for a verdict: the consent prompt, the
+/// `SessionStart` hint and `cargo agents status`.
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Audited => write!(f, "audited by the `{BUILTIN_AUDITS_LIST}` list"),
+            Self::NotAudited => f.write_str("not audited"),
+            Self::Ineligible(why) => write!(
+                f,
+                "not audited: its payload cannot be checked against an audit because it {}",
+                why.brief()
+            ),
+        }
+    }
 }
 
 /// A revocation that matched.
@@ -92,8 +136,8 @@ pub struct Revocation {
     pub reason: RevokeReason,
 }
 
-/// The sentence the activation report uses: who issued the revocation and
-/// why.
+/// The sentence status output and the activation report both use: who
+/// issued the revocation and why.
 impl std::fmt::Display for Revocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -118,6 +162,15 @@ impl AuditIndex {
         Self {
             dir: sym.audits_dir(),
         }
+    }
+
+    /// Whether there is a list to read: it is on and its `audits/` directory
+    /// exists. Without one every verdict is "not audited" though nothing was
+    /// read, so the surfaces that show verdicts show none.
+    pub fn is_read(&self) -> bool {
+        self.dir
+            .as_ref()
+            .is_some_and(|dir| dir.join(AUDITS_DIR).is_dir())
     }
 
     /// Everything the list says about the package `name` of package manager
@@ -161,17 +214,17 @@ impl AuditIndex {
         if !audits.has_digest_revocation() {
             return None;
         }
-        let digest = loaded_digest(pms, id).await?;
+        let digest = loaded_digest(pms, id).await?.ok()?;
         audits.revocation(None, Some(&digest))
     }
 
-    /// The full [`Answer`] for the loaded package `id`. The payload is
-    /// digested only when no version revocation matched and the file holds
-    /// an audit or a digest revocation, the only entries a digest could
-    /// match.
+    /// The full [`Answer`] for the loaded package `id`, for discovery and
+    /// `status`. The payload is digested only when no version revocation
+    /// matched and the file holds an audit or a digest revocation, the only
+    /// entries a digest could match, and only cache-only.
     pub async fn answer(&self, pms: &PmRegistry, id: &PackageId) -> Answer {
         if id.pm != CARGO_PM {
-            return Answer::NotAudited;
+            return Answer::Verdict(Verdict::NotAudited);
         }
         let audits = self.for_package(&id.pm, &id.name);
         let version = semver::Version::parse(&id.version).ok();
@@ -179,16 +232,23 @@ impl AuditIndex {
             return Answer::Revoked(hit);
         }
         if audits.audited.is_empty() && !audits.has_digest_revocation() {
-            return Answer::NotAudited;
+            return Answer::Verdict(Verdict::NotAudited);
         }
-        let digest = loaded_digest(pms, id).await;
-        audits.answer(version.as_ref(), digest.as_ref())
+        match loaded_digest(pms, id).await {
+            Some(Ok(digest)) => audits.answer(version.as_ref(), Some(&digest)),
+            // No version revocation matched and no digest can, so only an
+            // audit could have mattered: say why it cannot match.
+            Some(Err(why)) if !audits.audited.is_empty() => {
+                Answer::Verdict(Verdict::Ineligible(why))
+            }
+            Some(Err(_)) | None => Answer::Verdict(Verdict::NotAudited),
+        }
     }
 }
 
 /// The payload digest of the package `id` already loaded, read from where its
-/// package manager keeps it (cache-only). `None` when it cannot be found or
-/// cannot be digested, which never matches a digest.
+/// package manager keeps it (cache-only): `None` when the payload cannot be
+/// found, and why when it cannot be digested. Neither matches a digest.
 ///
 /// The fetch asks for the name at any version first, which is how the package
 /// was loaded: for a workspace dependency that is the source `cargo metadata`
@@ -198,7 +258,7 @@ impl AuditIndex {
 /// reads a bare `1.5.3` as `^1.5.3`, which would serve a cached 1.6.0. A fetch
 /// that still answers with another release yields no digest rather than the
 /// digest of a payload that did not load.
-async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Digest> {
+async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Result<Digest, Ineligible>> {
     let fetched = match pms
         .fetch(&PackageId::any_version(&id.pm, &id.name), UpdateLevel::None)
         .await
@@ -217,13 +277,11 @@ async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Digest> {
             return None;
         }
     };
-    match pms.payload_digests.digest(&fetched.id, &fetched.root) {
-        Ok(digest) => Some(digest),
-        Err(why) => {
-            tracing::debug!(id = %id, %why, "no payload digest; digest entries cannot match");
-            None
-        }
+    let digest = pms.payload_digests.digest(&fetched.id, &fetched.root);
+    if let Err(why) = &digest {
+        tracing::debug!(id = %id, %why, "no payload digest; digest entries cannot match");
     }
+    Some(digest)
 }
 
 /// The payload digests one invocation has computed, by the package and the
@@ -355,9 +413,9 @@ impl PackageAudits {
         if let Some(hit) = self.revocation(version, digest) {
             Answer::Revoked(hit)
         } else if digest.is_some_and(|d| self.audited.contains(d)) {
-            Answer::Audited
+            Answer::Verdict(Verdict::Audited)
         } else {
-            Answer::NotAudited
+            Answer::Verdict(Verdict::NotAudited)
         }
     }
 

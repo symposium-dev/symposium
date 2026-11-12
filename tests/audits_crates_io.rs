@@ -12,6 +12,7 @@ use symposium::audits::AuditIndex;
 use symposium::audits::digest::payload_digest;
 use symposium::config::{Symposium, UseEntry};
 use symposium::pm::PackageId;
+use symposium::status_command::{StatusEntry, StatusState};
 use symposium_testlib::{TestContext, TestMode, with_fixture};
 
 /// Put `name-version` into the fake cargo registry cache the way cargo leaves
@@ -90,8 +91,20 @@ async fn crate_x_dispatches(ctx: &mut TestContext) -> bool {
     }
 }
 
-/// A revocation applies to a `use`d crate the workspace does not depend on;
-/// revoking a `use`d crate that is cached nowhere is no error.
+/// The `status` line for `name`.
+async fn status(ctx: &TestContext, name: &str) -> StatusEntry {
+    let ws = ctx.sym.workspace(ctx.workspace_root.as_ref().unwrap());
+    symposium::status_command::workspace_status(&ctx.sym, &ws)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.name == name)
+        .unwrap_or_else(|| panic!("no status entry for `{name}`"))
+}
+
+/// A revocation applies to a `use`d crate the workspace does not depend on,
+/// and `status` shows its version and the reason; revoking a `use`d crate
+/// that is cached nowhere is no error.
 #[tokio::test]
 async fn a_used_crate_that_is_not_a_dependency_can_be_revoked() {
     cargo_home();
@@ -104,6 +117,7 @@ async fn a_used_crate_that_is_not_a_dependency_can_be_revoked() {
 
         // Without a revocation the cached crate loads.
         assert!(crate_x_dispatches(&mut ctx).await, "cached and not revoked");
+        assert_eq!(status(&ctx, "crate-x").await.state, StatusState::Active);
 
         for krate in ["crate-x", "crate-y"] {
             write_audits(
@@ -116,6 +130,19 @@ async fn a_used_crate_that_is_not_a_dependency_can_be_revoked() {
             !crate_x_dispatches(&mut ctx).await,
             "a revoked crate is withheld"
         );
+        let x = status(&ctx, "crate-x").await;
+        assert_eq!(x.state, StatusState::Revoked, "{x:?}");
+        assert_eq!(x.version.as_deref(), Some("2.0.0"));
+        assert_eq!(
+            x.root,
+            "revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code"
+        );
+        // crate-y is in no cache, so its release is unknown and it falls
+        // through to the ordinary line.
+        let y = status(&ctx, "crate-y").await;
+        assert_eq!(y.state, StatusState::Dormant, "{y:?}");
+        assert!(y.root.contains("cached crate"), "{y:?}");
+        assert_eq!(y.version, None);
         Ok(())
     })
     .await

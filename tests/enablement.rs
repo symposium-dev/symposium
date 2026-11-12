@@ -670,6 +670,18 @@ async fn status_reports_dormant_registry_plugin() {
 
 // ── consent ──────────────────────────────────────────────────────────
 
+/// The names of the dependency plugins awaiting consent.
+async fn pending_names(
+    sym: &symposium::config::Symposium,
+    deps: &std::sync::Arc<symposium::pm::Workspace>,
+) -> Vec<String> {
+    symposium::discovery::pending_candidates(sym, deps)
+        .await
+        .into_iter()
+        .map(|c| c.id.name)
+        .collect()
+}
+
 /// The consent prompt must never block on stdin outside a terminal session.
 ///
 /// The gate is [`Output::is_interactive`], not a bare TTY check: `cargo test`
@@ -691,10 +703,7 @@ async fn consent_prompt_never_fires_non_interactively() {
             // There *is* something to ask about — so nothing below is
             // vacuous.
             let deps = ctx.sym.workspace(&workspace_root);
-            assert_eq!(
-                symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
-                vec!["crate-a".to_string()]
-            );
+            assert_eq!(pending_names(&ctx.sym, &deps).await, ["crate-a"]);
 
             // The prompt returns without reading stdin, recording nothing.
             let deps = ctx.sym.workspace(&workspace_root);
@@ -711,10 +720,7 @@ async fn consent_prompt_never_fires_non_interactively() {
 
             // Still undecided, and still not installed.
             let deps = ctx.sym.workspace(&workspace_root);
-            assert_eq!(
-                symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
-                vec!["crate-a".to_string()]
-            );
+            assert_eq!(pending_names(&ctx.sym, &deps).await, ["crate-a"]);
             assert!(
                 find_installed_skills(&workspace_root.join(".claude/skills"), "a-guidance")
                     .is_empty()
@@ -819,7 +825,13 @@ async fn session_start_hints_pending_candidates() {
                 .next()
                 .expect("session-start should produce additionalContext");
 
-            assert!(context.contains("crate-a"), "{context}");
+            // No audits list is read here, so the candidate is named with no
+            // audit answer at all.
+            assert!(
+                context
+                    .contains("not enabled yet: crate-a. They stay off until the user consents —"),
+                "{context}"
+            );
             assert!(context.contains("cargo agents use"), "{context}");
             assert!(context.contains("Do not enable them yourself"), "{context}");
             Ok(())
