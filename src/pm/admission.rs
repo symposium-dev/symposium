@@ -41,6 +41,13 @@ pub(super) enum PackageAuthority {
 /// Constructing this value does not grant authority: the policy accepts it
 /// only as part of a [`PackageNamingView`] minted from an admitted package.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "resolution producers activate every public-naming authority in a later slice"
+    )
+)]
 pub(crate) enum PackageNamingAuthority {
     BuiltinCargo,
     Recommendations,
@@ -54,26 +61,12 @@ pub(crate) enum PackageNamingAuthority {
 /// diagnostic or serialization implementation because its admitted coordinate
 /// may still be private.
 #[derive(Clone, Copy)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the public-naming policy slice consumes the admitted naming view"
-    )
-)]
 pub(crate) struct PackageNamingView<'a> {
     id: &'a PackageId,
     source: PackageSourceClaim,
     authority: PackageNamingAuthority,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the public-naming policy slice consumes the admitted naming view"
-    )
-)]
 impl<'a> PackageNamingView<'a> {
     pub(crate) fn id(self) -> &'a PackageId {
         self.id
@@ -85,6 +78,19 @@ impl<'a> PackageNamingView<'a> {
 
     pub(crate) fn authority(self) -> PackageNamingAuthority {
         self.authority
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        id: &'a PackageId,
+        source: PackageSourceClaim,
+        authority: PackageNamingAuthority,
+    ) -> Self {
+        Self {
+            id,
+            source,
+            authority,
+        }
     }
 }
 
@@ -131,7 +137,7 @@ impl ResolvedPackage {
         not(test),
         expect(
             dead_code,
-            reason = "the public-naming policy slice consumes the admitted naming view"
+            reason = "resolution producers activate the public-naming policy in a later slice"
         )
     )]
     pub(crate) fn naming_view(&self) -> PackageNamingView<'_> {

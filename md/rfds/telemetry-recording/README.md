@@ -219,7 +219,7 @@ Source reasons take precedence. `invalid_coordinate` applies only to an otherwis
 - `unnamed_only`: extension content matched, but none was safe to name;
 - `none`: no resolved extension matched.
 
-Plugin, skill, and command names follow the same public-by-allowlist rule. The admitted package now survives plugin validation as a private `ResolvedPackage`; the public-identity policy consumes a narrow semantic view rather than the supplier key, URL, or path.
+Plugin, skill, and command names follow the same public-by-allowlist rule. Package plugins retain private admitted content through validation, while the public-identity policy consumes only its narrow semantic view. Skill naming additionally requires the discovery-bound content proof, so a detached Git skill or a canonical file outside its package cannot inherit the plugin's authority.
 
 ### Complete safe resolution paths
 

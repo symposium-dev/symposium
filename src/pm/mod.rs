@@ -37,7 +37,7 @@ pub mod remote;
 
 pub use admission::ResolvedContent;
 use admission::ResolvedDependency;
-pub(crate) use admission::{PackageNamingView, ResolvedPackage};
+pub(crate) use admission::{PackageNamingAuthority, PackageNamingView, ResolvedPackage};
 pub use git::GitPm;
 pub use path::PathPm;
 pub use remote::{RemotePm, RemotePmCommand};

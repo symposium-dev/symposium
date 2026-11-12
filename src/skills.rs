@@ -111,6 +111,13 @@ pub struct SkillWithGroupContext {
     pub agent_plugin_root: Option<PathBuf>,
     /// Proof that this skill's canonical `SKILL.md` belonged to its admitted
     /// package. Kept private so it cannot be paired with another skill.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "resolution producers activate skill naming in a later slice"
+        )
+    )]
     package_content: Option<PackageContent>,
 }
 
@@ -121,12 +128,26 @@ pub struct SkillWithGroupContext {
 /// containing record preserves the same skill/proof pairing; callers cannot
 /// project the proof without the skill name it was bound to.
 #[derive(Clone)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "resolution producers activate skill naming in a later slice"
+    )
+)]
 struct PackageContent {
     package: crate::pm::ResolvedPackage,
     canonical_file: PathBuf,
 }
 
 impl PackageContent {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "resolution producers activate skill naming in a later slice"
+        )
+    )]
     fn naming_view(&self) -> crate::pm::PackageNamingView<'_> {
         debug_assert!(
             self.canonical_file.is_absolute(),
@@ -141,13 +162,6 @@ impl PackageContent {
 /// Callers cannot pair a package proof from one skill with another skill's
 /// name: both values are projected together from [`SkillWithGroupContext`].
 #[derive(Clone, Copy)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the public-naming policy slice consumes resolved skill origins"
-    )
-)]
 pub(crate) struct SkillNamingView<'a> {
     name: &'a str,
     package: Option<crate::pm::PackageNamingView<'a>>,
@@ -185,7 +199,7 @@ impl SkillWithGroupContext {
         not(test),
         expect(
             dead_code,
-            reason = "the public-naming policy slice consumes resolved skill origins"
+            reason = "resolution producers activate skill naming in a later slice"
         )
     )]
     pub(crate) fn naming_view(&self) -> SkillNamingView<'_> {
@@ -199,13 +213,6 @@ impl SkillWithGroupContext {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the public-naming policy slice consumes resolved skill origins"
-    )
-)]
 impl<'a> SkillNamingView<'a> {
     pub(crate) fn name(self) -> &'a str {
         self.name
@@ -213,6 +220,14 @@ impl<'a> SkillNamingView<'a> {
 
     pub(crate) fn package(self) -> Option<crate::pm::PackageNamingView<'a>> {
         self.package
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        name: &'a str,
+        package: Option<crate::pm::PackageNamingView<'a>>,
+    ) -> Self {
+        Self { name, package }
     }
 }
 
