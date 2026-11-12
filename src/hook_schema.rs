@@ -114,7 +114,7 @@ pub trait AgentHookEvent {
     }
 }
 
-/// What `cargo agents hook` hands back to the agent. Most agents read the
+/// What `symposium hook` hands back to the agent. Most agents read the
 /// result from stdout, but blocking can hinge on the exit code, so the
 /// response carries all three.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

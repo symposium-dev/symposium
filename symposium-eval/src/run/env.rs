@@ -3,7 +3,7 @@
 //!
 //! Nothing is inherited from the runner. `PATH` holds the trial's `bin/`, then the
 //! toolchain's own `bin/`, then the system directories, and never the developer's
-//! `~/.cargo/bin`, which can hold their own `cargo-agents`.
+//! `~/.cargo/bin`, which can hold their own `symposium`.
 
 use std::env;
 use std::ffi::OsString;

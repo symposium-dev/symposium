@@ -18,7 +18,7 @@
 //!
 //! FIXME: run that preflight before launch, once clients are launched.
 //!
-//! Setup and pre-launch checks are as in enforced mode, with `cargo agents init` run
+//! Setup and pre-launch checks are as in enforced mode, with `symposium init` run
 //! through the local backend.
 //!
 //! FIXME: label the results exploratory, once there are results.

@@ -225,7 +225,7 @@ The MCP server entry is added under `[mcp_servers]` in the TOML config:
 
 ```toml
 [mcp_servers.symposium]
-command = "/path/to/cargo-agents"
+command = "/path/to/symposium"
 args = ["mcp"]
 ```
 
@@ -267,7 +267,7 @@ and a copy of the compiled directory in Codex's plugin cache,
 
 Verified against Codex CLI 0.159.3 by asking the agent (`codex debug
 prompt-input`, the model request a session sends, `codex plugin list`, and
-the TUI's `/skills` and `/plugins`) after `cargo agents sync`, with Codex as
+the TUI's `/skills` and `/plugins`) after `symposium sync`, with Codex as
 the only agent and with the Copilot CLI configured too:
 
 - `codex plugin list` shows `<plugin>@symposium` installed and enabled,

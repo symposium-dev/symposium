@@ -164,7 +164,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
 /// 1. workspace **dependencies** covered by `[plugins] auto-enable` or an
 ///    applicable `use` entry, and
 /// 2. packages named by a `use` entry that are **not** dependencies:
-///    `cargo agents use <crate>` pulls a plugin in from crates.io whether or
+///    `symposium use <crate>` pulls a plugin in from crates.io whether or
 ///    not the workspace depends on it.
 ///
 /// `auto-enable` intentionally contributes only (1): it is consent for what a

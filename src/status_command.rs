@@ -1,4 +1,4 @@
-//! `cargo agents status` — the enablement report.
+//! `symposium status`: the enablement report.
 //!
 //! Enablement answers *whether a plugin may run at all*; activation
 //! predicates answer *when it applies*. This command reports both, one line
@@ -101,7 +101,7 @@ pub async fn workspace_status(
             root: if active || !parsed.manifest.requires_use {
                 root
             } else {
-                format!("{root} (dormant: awaiting `cargo agents use`)")
+                format!("{root} (dormant: awaiting `symposium use`)")
             },
             state: if active {
                 StatusState::Active
@@ -125,7 +125,7 @@ pub async fn workspace_status(
     }
 
     // Crates enabled by `use` that are *not* dependency-embedded offers — e.g.
-    // `cargo agents use <crate>` for a crate the workspace doesn't depend on.
+    // `symposium use <crate>` for a crate the workspace doesn't depend on.
     // Discovery only sees dependencies, so these are invisible above; surface
     // them from the config the same way sync loads them
     // ([`enabled_dependencies`](crate::discovery::enabled_dependencies)).
@@ -255,7 +255,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
         Enablement::Candidate => (
             StatusState::Candidate,
             format!(
-                "found via dependency `{}`, awaiting consent (`cargo agents use {}`)",
+                "found via dependency `{}`, awaiting consent (`symposium use {}`)",
                 found.recommends,
                 found.name()
             ),
@@ -269,7 +269,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
     }
 }
 
-/// The `cargo agents status` entry point.
+/// The `symposium status` entry point.
 pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
     let deps = sym.workspace(cwd);
     let entries = workspace_status(sym, &deps).await?;

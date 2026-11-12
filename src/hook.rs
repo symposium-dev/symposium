@@ -649,7 +649,7 @@ async fn handle_session_start(
     }
 }
 
-/// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
+/// Suggest `symposium --help` when the active workspace exposes crate-aware plugin subcommands.
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
 async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
     let workspace = deps.info().await.cloned();
@@ -675,8 +675,8 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 
     any_subcommand.then(|| {
         format!(
-            "This project has crate-aware tools available via `cargo agents`. \
-             Run `cargo agents --help` to list them before working with the Rust code. \
+            "This project has crate-aware tools available via `symposium`. \
+             Run `symposium --help` to list them before working with the Rust code. \
              Only use tools under the '{AGENTS_HEADING}' section unless the user \
              explicitly asks you to run one from '{HUMANS_HEADING}'."
         )
@@ -695,8 +695,8 @@ async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> 
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
          They stay off until the user consents — tell the user to run \
-         `cargo agents sync` (which asks about each one) or \
-         `cargo agents use <name>`. Do not enable them yourself.",
+         `symposium sync` (which asks about each one) or \
+         `symposium use <name>`. Do not enable them yourself.",
         names.join(", ")
     ))
 }
@@ -718,7 +718,7 @@ fn update_nudge(sym: &Symposium) -> Option<String> {
     let latest = crate::self_update::check_upgrade(sym).ok()??;
     Some(format!(
         "symposium {latest} is available (current: {CURRENT_VERSION}). \
-         Run `cargo agents self-update` to upgrade."
+         Run `symposium self-update` to upgrade."
     ))
 }
 
@@ -730,7 +730,7 @@ fn mid_session_sync_notices(
     let possible_new_plugins = notify_about_possible_new_plugins.then(|| {
         "The workspace's dependencies just changed, so there may be new agent plugins \
          available from them. They stay off until the user consents: tell the user to run \
-         `cargo agents sync` in their terminal to review them. Do not enable them yourself."
+         `symposium sync` in their terminal to review them. Do not enable them yourself."
             .to_string()
     });
     let fragments: Vec<String> = [possible_new_plugins, plugin_reload_notice]

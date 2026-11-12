@@ -34,7 +34,7 @@ async fn session_start_returns_plugin_context() {
 }
 
 /// In a workspace with crate-aware plugin subcommands, SessionStart nudges the
-/// agent to discover them via `cargo agents --help`.
+/// agent to discover them via `symposium --help`.
 #[tokio::test]
 async fn session_start_hints_discovery_when_subcommands_apply() {
     with_fixture(
@@ -63,7 +63,7 @@ async fn session_start_hints_discovery_when_subcommands_apply() {
                 .next()
                 .expect("session-start should produce additionalContext");
 
-            expect_test::expect![[r#"This project has crate-aware tools available via `cargo agents`. Run `cargo agents --help` to list them before working with the Rust code. Only use tools under the 'Commands for agents' section unless the user explicitly asks you to run one from 'Commands for humans'."#]]
+            expect_test::expect![[r#"This project has crate-aware tools available via `symposium`. Run `symposium --help` to list them before working with the Rust code. Only use tools under the 'Commands for agents' section unless the user explicitly asks you to run one from 'Commands for humans'."#]]
                 .assert_eq(context);
             Ok(())
         },

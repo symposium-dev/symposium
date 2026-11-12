@@ -330,7 +330,7 @@ pub struct RawCustomPredicate {
 
 /// Whether a subcommand is intended for human or agent use.
 ///
-/// Controls grouping in `cargo agents --help`; does not gate dispatch.
+/// Controls grouping in `symposium --help`; does not gate dispatch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Audience {

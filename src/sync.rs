@@ -577,7 +577,7 @@ pub async fn sync(
     if agent_names.is_empty() {
         tracing::info!(
             report = %crate::report::ReportEvent::Info {
-                message: "no agents configured, run `cargo agents init` to add one".into(),
+                message: "no agents configured, run `symposium init` to add one".into(),
             },
         );
     }
@@ -974,7 +974,7 @@ fn record_mcp_registrations(sym: &Symposium, agent: Agent, file: &Path, names: V
 
 fn unknown_agent_warning(agent_name: &str) -> String {
     format!(
-        "unknown agent `{agent_name}` in config.toml, skipped; remove it with `cargo agents init --remove-agent {agent_name}`"
+        "unknown agent `{agent_name}` in config.toml, skipped; remove it with `symposium init --remove-agent {agent_name}`"
     )
 }
 

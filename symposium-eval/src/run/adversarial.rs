@@ -236,7 +236,7 @@ fn check_failed_setup(timeout: bool) {
 
     let mut real = RealSrt::new(api_key());
     let source = TempDir::new().unwrap();
-    let fake = source.path().join("cargo-agents");
+    let fake = source.path().join("symposium");
     let mut script = String::from(
         r#"#!/bin/sh
 set -eu
@@ -251,7 +251,7 @@ while [ ! -f "$TMPDIR/child-ready" ]; do sleep 0.02; done
     );
     script.push_str(if timeout { "sleep 60\n" } else { "exit 23\n" });
     executable(&fake, &script);
-    real.stage("cargo-agents", &Tool::Executable(fake), Audience::Symposium);
+    real.stage("symposium", &Tool::Executable(fake), Audience::Symposium);
     let trial = real.trial(1, Configuration::Symposium);
     let result = real.try_set_up_symposium(&trial, Client::ClaudeCode, Duration::from_secs(5));
     assert!(

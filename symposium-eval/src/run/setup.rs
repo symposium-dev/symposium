@@ -2,7 +2,7 @@
 //!
 //! A Symposium trial's home gets a config whose only registry is the trial's `registry/`,
 //! which holds the task's plugins; the built-in registries are off, and so is
-//! auto-update, so nothing is fetched mid-trial. Then the staged `cargo-agents` runs
+//! auto-update, so nothing is fetched mid-trial. Then the staged `symposium` runs
 //! `init` inside the trial's sandbox, as every other command there does. `init` registers
 //! hooks without syncing, and globally, in the trial's home: project-scoped hooks exist
 //! only after a sync, which would install skills before the behavior under test.
@@ -54,7 +54,7 @@ impl Trial {
         self.home().join(SYMPOSIUM_CONFIG)
     }
 
-    /// Writes the trial's Symposium config, then runs the staged `cargo agents init` for
+    /// Writes the trial's Symposium config, then runs the staged `symposium init` for
     /// `client` through `backend`, with `env` as its whole environment.
     ///
     /// # Errors
@@ -74,7 +74,7 @@ impl Trial {
         self.write_symposium_config()?;
         let invocation = self.init_invocation(client, env);
         let finished = backend.run(&invocation, deadline, &self.evidence());
-        succeeded("cargo agents init", finished).map(drop)
+        succeeded("symposium init", finished).map(drop)
     }
 
     fn write_symposium_config(&self) -> Result<(), RunError> {
@@ -102,10 +102,10 @@ impl Trial {
         fs::write(&path, text).map_err(|source| RunError::Create { path, source })
     }
 
-    /// `cargo-agents init`, found on the trial's `PATH` through its `bin/` link.
+    /// `symposium init`, found on the trial's `PATH` through its `bin/` link.
     fn init_invocation(&self, client: Client, env: Vec<(OsString, OsString)>) -> Invocation {
         Invocation {
-            program: "cargo-agents".into(),
+            program: "symposium".into(),
             args: vec![
                 "init".into(),
                 "--add-agent".into(),
@@ -161,29 +161,29 @@ mod tests {
     }
 
     #[test]
-    fn init_registers_the_client_from_the_staged_cargo_agents() {
+    fn init_registers_the_client_from_the_staged_symposium() {
         let host = Host::new();
         let trial = trial(&host.batch(), 1, Configuration::Symposium);
 
         let invocation = trial.init_invocation(Client::Codex, Vec::new());
 
-        assert_eq!(invocation.program, "cargo-agents");
+        assert_eq!(invocation.program, "symposium");
         assert_eq!(invocation.args, ["init", "--add-agent", "codex"]);
         assert_eq!(invocation.dir, trial.project());
     }
 
-    /// Runs the `cargo-agents` built from this checkout under real `srt`: run it on Linux
+    /// Runs the `symposium` built from this checkout under real `srt`: run it on Linux
     /// with `cargo test -p symposium-eval -- --ignored`.
     #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap installed, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap installed, and builds symposium"]
     fn a_symposium_trial_registers_hooks_without_syncing() {
         use crate::run::stage::{Audience, Tool};
-        use crate::run::test_support::{RealSrt, api_key, built_cargo_agents};
+        use crate::run::test_support::{RealSrt, api_key, built_symposium};
 
         let mut real = RealSrt::new(api_key());
-        let tool = Tool::Executable(built_cargo_agents());
-        real.stage("cargo-agents", &tool, Audience::Symposium);
+        let tool = Tool::Executable(built_symposium());
+        real.stage("symposium", &tool, Audience::Symposium);
         let trial = real.trial(1, Configuration::Symposium);
 
         real.set_up_symposium(&trial, Client::ClaudeCode);
@@ -191,7 +191,7 @@ mod tests {
         assert_isolation_survives_init(&trial);
         let settings = trial.home().join(".claude/settings.json");
         let settings = fs::read_to_string(settings).unwrap();
-        assert!(settings.contains("cargo-agents hook claude"), "{settings}");
+        assert!(settings.contains("symposium hook claude"), "{settings}");
         // No sync ran, so no skill is installed before the agent starts. The registry's
         // plugin applies to the project, so a sync would have installed one here.
         for skills in [trial.project(), trial.home()].map(|root| root.join(".claude/skills")) {
@@ -208,18 +208,18 @@ mod tests {
     /// project, which the sandbox must allow.
     #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap installed, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap installed, and builds symposium"]
     fn a_sync_in_a_symposium_trial_installs_the_tasks_skill() {
         use crate::run::stage::{Audience, Tool};
-        use crate::run::test_support::{RealSrt, api_key, built_cargo_agents};
+        use crate::run::test_support::{RealSrt, api_key, built_symposium};
 
         let mut real = RealSrt::new(api_key());
-        let tool = Tool::Executable(built_cargo_agents());
-        real.stage("cargo-agents", &tool, Audience::Symposium);
+        let tool = Tool::Executable(built_symposium());
+        real.stage("symposium", &tool, Audience::Symposium);
         let trial = real.trial(1, Configuration::Symposium);
         real.set_up_symposium(&trial, Client::ClaudeCode);
 
-        let finished = real.run(&trial, "cargo-agents sync", &[], Duration::from_secs(60));
+        let finished = real.run(&trial, "symposium sync", &[], Duration::from_secs(60));
 
         assert!(finished.succeeded(), "{}", finished.stderr.tail());
         let skill = trial

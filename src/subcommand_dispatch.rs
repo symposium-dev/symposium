@@ -1,4 +1,4 @@
-//! Dispatch for plugin-vended `cargo agents <name>` subcommands.
+//! Dispatch for plugin-vended `symposium <name>` subcommands.
 //!
 //! The top-level CLI declares `allow_external_subcommands = true`, any
 //! unknown subcommand is routed here. This module looks up the name across configured plugins

@@ -1,4 +1,4 @@
-//! The enablement commands: `cargo agents use`, `search`, and `status`,
+//! The enablement commands: `symposium use`, `search`, and `status`,
 //! plus the discovery consent prompt they share a config section with.
 
 use std::path::{Path, PathBuf};
@@ -635,7 +635,7 @@ async fn status_reports_dormant_registry_plugin() {
                 .find(|e| e.name == "gateless-plugin")
                 .expect("gateless-plugin present");
             assert_eq!(dormant.state, StatusState::Dormant);
-            assert!(dormant.root.contains("awaiting `cargo agents use`"));
+            assert!(dormant.root.contains("awaiting `symposium use`"));
 
             // And `search` finds it, tagged with the registry it came from
             // and flagged as needing `use`.
@@ -820,7 +820,7 @@ async fn session_start_hints_pending_candidates() {
                 .expect("session-start should produce additionalContext");
 
             assert!(context.contains("crate-a"), "{context}");
-            assert!(context.contains("cargo agents use"), "{context}");
+            assert!(context.contains("symposium use"), "{context}");
             assert!(context.contains("Do not enable them yourself"), "{context}");
             Ok(())
         },

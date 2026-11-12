@@ -24,7 +24,7 @@ use crate::task::ToolName;
 pub(crate) enum Audience {
     /// Every trial: the clients and what they need.
     Common,
-    /// Symposium trials only: the `cargo-agents` under evaluation.
+    /// Symposium trials only: the `symposium` under evaluation.
     Symposium,
 }
 
@@ -282,7 +282,7 @@ mod tests {
     }
 
     /// The guarantee behind "without Symposium": a baseline trial's `bin/` has no
-    /// `cargo-agents`.
+    /// `symposium`.
     #[cfg(unix)]
     #[test]
     fn only_a_symposium_trial_links_symposium_tools() {
@@ -297,7 +297,7 @@ mod tests {
             .stage(tool_name("client"), &tool, Audience::Common)
             .unwrap();
         batch
-            .stage(tool_name("cargo-agents"), &tool, Audience::Symposium)
+            .stage(tool_name("symposium"), &tool, Audience::Symposium)
             .unwrap();
 
         let symposium = trial(&batch, 1, Configuration::Symposium);
@@ -311,11 +311,11 @@ mod tests {
             names.sort();
             names
         };
-        assert_eq!(linked(&symposium), ["cargo-agents", "client"]);
+        assert_eq!(linked(&symposium), ["client", "symposium"]);
         assert_eq!(linked(&baseline), ["client"]);
         assert_eq!(
-            fs::read_link(symposium.bin().join("cargo-agents")).unwrap(),
-            batch.symposium_tools().join("cargo-agents")
+            fs::read_link(symposium.bin().join("symposium")).unwrap(),
+            batch.symposium_tools().join("symposium")
         );
     }
 }

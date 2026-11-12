@@ -42,7 +42,7 @@ Hooks defined in **`.github/hooks/*.json`**. For the Cloud Agent, files must be 
 
 The CLI combines hooks from several places: repository `.github/hooks/*.json`, user-level `~/.copilot/hooks/*.json` or a `hooks` key in `~/.copilot/settings.json` (where symposium registers globally; `config.json` is managed by the CLI), and also `.claude/settings.json`. It loads a repository's hooks only once the folder is trusted: it asks interactively, or `COPILOT_ALLOW_ALL=true` trusts the working directory. Because it reads Claude's settings too, a project with both agents configured runs symposium's hook twice per Copilot event.
 
-`COPILOT_HOME` moves the user level as a whole: when it is set, the CLI reads `settings.json` and `mcp-config.json` from `$COPILOT_HOME` instead of `~/.copilot/`, so symposium writes its global hooks and MCP servers there. Verified against the Copilot CLI 1.0.89 with the variable set: symposium's hooks and MCP server left in `~/.copilot/` were ignored (`copilot mcp list` reported no server and no hook ran), while with them under `$COPILOT_HOME` each event ran `cargo-agents hook copilot`, and `copilot mcp list` and the `/mcp` dashboard showed the server, which a session started and offered as a tool. The CLI still keeps its cache of each MCP server's tools in `~/Library/Caches/copilot/mcp-tools/` on macOS, which the variable does not move.
+`COPILOT_HOME` moves the user level as a whole: when it is set, the CLI reads `settings.json` and `mcp-config.json` from `$COPILOT_HOME` instead of `~/.copilot/`, so symposium writes its global hooks and MCP servers there. Verified against the Copilot CLI 1.0.89 with the variable set: symposium's hooks and MCP server left in `~/.copilot/` were ignored (`copilot mcp list` reported no server and no hook ran), while with them under `$COPILOT_HOME` each event ran `symposium hook copilot`, and `copilot mcp list` and the `/mcp` dashboard showed the server, which a session started and offered as a tool. The CLI still keeps its cache of each MCP server's tools in `~/Library/Caches/copilot/mcp-tools/` on macOS, which the variable does not move.
 
 ```json
 {
@@ -186,7 +186,7 @@ Symposium registers MCP servers in the Copilot config as top-level keys
 ```json
 {
   "symposium": {
-    "command": "/path/to/cargo-agents",
+    "command": "/path/to/symposium",
     "args": ["mcp"]
   }
 }
@@ -232,7 +232,7 @@ These are the entries `copilot plugin marketplace add` and `copilot plugin insta
 
 Verified against the Copilot CLI 1.0.89 by asking the agent (`copilot plugin list --json`, `copilot skill list --json`, the `/skills` dashboard, and the skills a `-p` session offers its model):
 
-- The plugin loads in place in the first session after `cargo agents sync`, interactive and `-p` alike, and its skills keep their plain names (`/<skill>`). An edit at the same version reaches the next session.
+- The plugin loads in place in the first session after `symposium sync`, interactive and `-p` alike, and its skills keep their plain names (`/<skill>`). An edit at the same version reaches the next session.
 - Removing the entries and the directory leaves nothing behind. An entry left for a missing root makes every session warn that the marketplace was skipped.
 - A plugin registered during the `sessionStart` hook is offered after `/restart` or in the next session; `/skills reload` does not pick it up.
 - A skill of the same name in `~/.copilot/skills/`, `~/.agents/skills/` or the project's `.agents/skills/` silently replaces the plugin's, including a per-skill copy symposium writes there for another agent.

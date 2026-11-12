@@ -186,7 +186,7 @@ async fn plugin_exit_2_on_a_prompt_passes_through() {
 }
 
 /// The exit code and stderr are what the agent actually sees, so check them on
-/// the real `cargo agents hook` process, not just the in-process pipeline.
+/// the real `symposium hook` process, not just the in-process pipeline.
 #[tokio::test(flavor = "multi_thread")]
 async fn hook_command_exits_2_with_the_reason_on_stderr() {
     with_fixture(
@@ -237,7 +237,7 @@ fn run_hook_command(
 ) -> std::process::Output {
     use std::io::Write;
 
-    let binary = std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
+    let binary = std::env::var("CARGO_BIN_EXE_symposium").expect("must run via cargo test");
     let mut child = std::process::Command::new(binary)
         .args(["hook", agent.as_str(), event_arg])
         .env("SYMPOSIUM_HOME", ctx.sym.config_dir())
@@ -246,7 +246,7 @@ fn run_hook_command(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("spawn cargo-agents");
+        .expect("spawn symposium");
     child
         .stdin
         .take()

@@ -60,7 +60,7 @@ async fn start_session(ctx: &TestContext, agent: HookAgent) {
 }
 
 fn assert_notice(agent: HookAgent, stdout: &str) {
-    for expected in [NOTICE, "cargo agents sync", "Do not enable them yourself"] {
+    for expected in [NOTICE, "symposium sync", "Do not enable them yourself"] {
         assert!(
             stdout.contains(expected),
             "{agent:?} should get the notice: {stdout}"

@@ -108,10 +108,10 @@ pub(crate) enum Unready {
     HookRecord,
     #[error("holds managed settings, which override the trial's own")]
     ManagedSettings,
-    #[error("puts `cargo-agents` on a baseline trial's `PATH`")]
-    CargoAgentsOnPath,
+    #[error("puts `symposium` on a baseline trial's `PATH`")]
+    SymposiumOnPath,
     #[error("is a Symposium config, in a baseline trial")]
     SymposiumConfig,
-    #[error("runs `cargo-agents`, in a baseline trial")]
+    #[error("runs `symposium`, in a baseline trial")]
     SymposiumEntry,
 }

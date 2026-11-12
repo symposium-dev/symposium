@@ -333,11 +333,11 @@ async fn sync_installs_antigravity_at_project_scope() {
             let entry = &hooks["symposium"];
             assert_eq!(
                 entry["PreToolUse"][0]["hooks"][0]["command"],
-                "cargo-agents hook antigravity pre-tool-use",
+                "symposium hook antigravity pre-tool-use",
                 "tool events are wrapped in a matcher group"
             );
             assert_eq!(
-                entry["SessionStart"][0]["command"], "cargo-agents hook antigravity session-start",
+                entry["SessionStart"][0]["command"], "symposium hook antigravity session-start",
                 "lifecycle events are a flat handler list"
             );
 
@@ -732,7 +732,7 @@ async fn removing_agent_removes_hooks() {
         assert!(
             std::fs::read_to_string(&codex_hooks)
                 .unwrap()
-                .contains("cargo-agents hook"),
+                .contains("symposium hook"),
             "codex should have symposium hooks"
         );
 
@@ -741,13 +741,13 @@ async fn removing_agent_removes_hooks() {
 
         let contents = std::fs::read_to_string(&claude_settings).unwrap();
         assert!(
-            contents.contains("cargo-agents hook"),
+            contents.contains("symposium hook"),
             "claude hooks should remain"
         );
 
         let contents = std::fs::read_to_string(&codex_hooks).unwrap();
         assert!(
-            !contents.contains("cargo-agents hook"),
+            !contents.contains("symposium hook"),
             "codex hooks should be removed"
         );
         Ok(())
@@ -827,7 +827,7 @@ async fn sync_keeps_skills_and_hooks_while_the_config_cannot_be_read() {
                 .join(".claude/skills/serde-guidance/skills");
             let settings = ctx.sym.home_dir().join(".claude/settings.json");
             assert!(!find_installed_skills(&skills, "serde-guidance").is_empty());
-            assert!(std::fs::read_to_string(&settings)?.contains("cargo-agents hook"));
+            assert!(std::fs::read_to_string(&settings)?.contains("symposium hook"));
 
             let recommendations = symposium_install::git::GitCacheManager::new(
                 &ctx.sym.install_context(),
@@ -844,13 +844,13 @@ async fn sync_keeps_skills_and_hooks_while_the_config_cannot_be_read() {
             ctx.sym = symposium::config::Symposium::from_dir(&config_dir);
             assert!(ctx.symposium(&["sync"]).await.is_err());
             assert!(!find_installed_skills(&skills, "serde-guidance").is_empty());
-            assert!(std::fs::read_to_string(&settings)?.contains("cargo-agents hook"));
+            assert!(std::fs::read_to_string(&settings)?.contains("symposium hook"));
 
             std::fs::write(&config, contents)?;
             ctx.sym = symposium::config::Symposium::from_dir(&config_dir);
             ctx.symposium(&["init", "--remove-agent", "claude"]).await?;
             assert!(find_installed_skills(&skills, "serde-guidance").is_empty());
-            assert!(!std::fs::read_to_string(&settings)?.contains("cargo-agents hook"));
+            assert!(!std::fs::read_to_string(&settings)?.contains("symposium hook"));
             Ok(())
         },
     )
@@ -881,12 +881,12 @@ async fn add_agent_is_additive() {
         assert!(
             std::fs::read_to_string(&claude_settings)
                 .unwrap()
-                .contains("cargo-agents hook")
+                .contains("symposium hook")
         );
         assert!(
             std::fs::read_to_string(&codex_hooks)
                 .unwrap()
-                .contains("cargo-agents hook")
+                .contains("symposium hook")
         );
         Ok(())
     })
@@ -2092,8 +2092,7 @@ async fn concurrent_syncs_keep_every_skill() {
             ctx.symposium(&["sync"]).await?;
             let expected = entries()?;
 
-            let binary =
-                std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
+            let binary = std::env::var("CARGO_BIN_EXE_symposium").expect("must run via cargo test");
             for _ in 0..5 {
                 std::fs::remove_dir_all(root.join(".agents"))?;
                 let children: Vec<_> = (0..3)
@@ -2615,7 +2614,7 @@ async fn sync_triggers_update_check() {
                 "init should have triggered an update check"
             );
             expect_test::expect![[r#"
-                ⚠️  symposium 99.0.0 is available (current: $VERSION). Run `cargo agents self-update` to upgrade.
+                ⚠️  symposium 99.0.0 is available (current: $VERSION). Run `symposium self-update` to upgrade.
                 Setting up symposium for your user account.
 
                 ✅ $CONFIG_DIR/config.toml: wrote user config (agents: Claude Code)"#]].assert_eq(&output);
@@ -2732,8 +2731,8 @@ fn setup_auto_update_fixture() -> AutoUpdateFixture {
 
     let bin_dir = root.join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let real_binary = std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
-    let binary = bin_dir.join("cargo-agents");
+    let real_binary = std::env::var("CARGO_BIN_EXE_symposium").expect("must run via cargo test");
+    let binary = bin_dir.join("symposium");
     std::fs::copy(&real_binary, &binary).unwrap();
 
     let mock_cargo = root.join("mock-cargo");
@@ -2913,7 +2912,7 @@ async fn session_start_hook_warns_about_update_in_context() {
                 result.hooks,
             );
             assert!(
-                result.has_context_containing("cargo agents self-update"),
+                result.has_context_containing("symposium self-update"),
                 "nudge should mention self-update command: {:#?}",
                 result.hooks,
             );
@@ -3699,7 +3698,7 @@ fn empty_env_dirs_are_ignored() {
     ];
     for vars in cases {
         let _ = std::fs::remove_file(config_dir.join("state.toml"));
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-agents"))
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_symposium"))
             .args(["telemetry", "status"])
             .current_dir(&cwd)
             .env("HOME", &home)

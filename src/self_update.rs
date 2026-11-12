@@ -73,7 +73,7 @@ pub fn maybe_warn_for_update(sym: &Symposium, out: &Output) {
     if let Ok(Some(latest)) = check_upgrade(sym) {
         out.warn(format!(
             "symposium {latest} is available (current: {CURRENT_VERSION}). \
-             Run `cargo agents self-update` to upgrade.",
+             Run `symposium self-update` to upgrade.",
         ));
     }
 }
@@ -101,7 +101,7 @@ pub async fn maybe_check_for_update(sym: &Symposium, out: &Output) -> bool {
         AutoUpdate::Warn => {
             out.warn(format!(
                 "symposium {latest} is available (current: {CURRENT_VERSION}). \
-                 Run `cargo agents self-update` to upgrade.",
+                 Run `symposium self-update` to upgrade.",
             ));
             false
         }

@@ -10,7 +10,7 @@ fn redact(s: String) -> String {
 }
 
 #[tokio::test]
-async fn cargo_agents_help_lists_plugin_vended() {
+async fn help_lists_plugin_vended() {
     symposium_testlib::with_fixture(
         TestMode::SimulationOnly,
         &["help_render0"],
@@ -19,7 +19,7 @@ async fn cargo_agents_help_lists_plugin_vended() {
             expect_test::expect![[r#"
                 AI the Rust Way
 
-                Usage: cargo agents [OPTIONS] [COMMAND]
+                Usage: symposium [OPTIONS] [COMMAND]
 
                 Commands for humans:
                 init          Set up user-wide configuration

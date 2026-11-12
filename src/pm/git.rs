@@ -70,7 +70,7 @@ impl PackageManager for GitPm {
         let name = &self.name;
         if !self.inner.dir.exists() {
             anyhow::bail!(
-                "registry `{name}` has not been fetched yet; run `cargo agents plugin sync {name}`"
+                "registry `{name}` has not been fetched yet; run `symposium plugin sync {name}`"
             );
         }
         self.inner.active_plugins(deps).await

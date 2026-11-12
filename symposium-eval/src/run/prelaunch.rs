@@ -2,9 +2,9 @@
 //!
 //! Every trial starts with no skill installed and no managed settings for its client,
 //! since either would change what the agent sees before Symposium does anything. A
-//! baseline trial must also have no way to reach Symposium: no `cargo-agents` on its
+//! baseline trial must also have no way to reach Symposium: no `symposium` on its
 //! `PATH`, no Symposium config, and nothing in the client's configuration that runs
-//! `cargo-agents`. A failed check is a setup failure.
+//! `symposium`. A failed check is a setup failure.
 //!
 //! Each check reads the host. That is what the sandbox sees: it mounts the host's root
 //! read-only, and the trial's own directories as they are.
@@ -18,7 +18,7 @@ use super::client::Client;
 use super::{Configuration, RunError, Trial, Unready};
 
 /// How a configuration file names Symposium's hook command, by either spelling.
-const SYMPOSIUM_COMMANDS: [&str; 2] = ["cargo-agents", "cargo agents"];
+const SYMPOSIUM_COMMANDS: [&str; 2] = ["symposium hook", "cargo agents"];
 
 impl Trial {
     /// Checks that this trial is ready for `client` to launch with `env`.
@@ -63,7 +63,7 @@ impl Trial {
         env: &[(OsString, OsString)],
     ) -> Result<(), RunError> {
         for directory in path_entries(env) {
-            require_absent(&directory.join("cargo-agents"), Unready::CargoAgentsOnPath)?;
+            require_absent(&directory.join("symposium"), Unready::SymposiumOnPath)?;
         }
         require_absent(&self.home().join(".symposium"), Unready::SymposiumConfig)?;
         let home = client
@@ -262,16 +262,16 @@ mod tests {
     }
 
     #[test]
-    fn a_baseline_trial_finds_no_cargo_agents_on_path() {
+    fn a_baseline_trial_finds_no_symposium_on_path() {
         let setup = Setup::new(Configuration::Baseline);
         let elsewhere = setup.host.join("elsewhere/bin");
-        write(&elsewhere.join("cargo-agents"), "");
+        write(&elsewhere.join("symposium"), "");
         let path = std::env::join_paths([setup.trial.bin(), elsewhere]).unwrap();
         let env = [("PATH".into(), path)];
 
         assert_unready(
             &setup.check_with(Client::ClaudeCode, &env),
-            Unready::CargoAgentsOnPath,
+            Unready::SymposiumOnPath,
         );
     }
 
@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn a_baseline_clients_configuration_never_runs_cargo_agents() {
+    fn a_baseline_clients_configuration_never_runs_symposium() {
         for client in CLIENTS {
             let [project, home] = ROOTS;
             let files = (client.project_config().iter().map(|file| (project, file)))
@@ -292,7 +292,7 @@ mod tests {
             for (root, file) in files {
                 let setup = Setup::new(Configuration::Baseline);
                 let config = root(&setup.trial).join(file);
-                write(&config, r#"{"command": "cargo-agents hook"}"#);
+                write(&config, r#"{"command": "symposium hook"}"#);
 
                 assert_unready(&setup.check(client), Unready::SymposiumEntry);
             }
@@ -313,14 +313,14 @@ mod tests {
     /// for Claude Code, as a real run would.
     #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap installed, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap installed, and builds symposium"]
     fn trials_are_ready_after_a_real_setup() {
         use crate::run::stage::{Audience, Tool};
-        use crate::run::test_support::{RealSrt, api_key, built_cargo_agents};
+        use crate::run::test_support::{RealSrt, api_key, built_symposium};
 
         let mut real = RealSrt::new(api_key());
-        let tool = Tool::Executable(built_cargo_agents());
-        real.stage("cargo-agents", &tool, Audience::Symposium);
+        let tool = Tool::Executable(built_symposium());
+        real.stage("symposium", &tool, Audience::Symposium);
         let symposium = real.trial(1, Configuration::Symposium);
         let baseline = real.trial(2, Configuration::Baseline);
         real.set_up_symposium(&symposium, Client::ClaudeCode);
@@ -338,9 +338,9 @@ mod tests {
         let setup = Setup::new(Configuration::Symposium);
         write(&setup.trial.symposium_config(), "");
         let settings = setup.trial.home().join(".claude/settings.json");
-        write(&settings, r#"{"command": "cargo-agents hook claude"}"#);
+        write(&settings, r#"{"command": "symposium hook claude"}"#);
         let env = [("PATH".into(), setup.trial.bin().into_os_string())];
-        write(&setup.trial.bin().join("cargo-agents"), "");
+        write(&setup.trial.bin().join("symposium"), "");
 
         setup.check_with(Client::ClaudeCode, &env).unwrap();
     }

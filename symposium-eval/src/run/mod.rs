@@ -7,7 +7,7 @@
 //! ```text
 //! <eval-root>/<batch>/
 //!   tools/common/        staged clients, readable by every trial
-//!   tools/symposium/     staged cargo-agents, readable by Symposium trials only
+//!   tools/symposium/     staged symposium, readable by Symposium trials only
 //!   trial-<n>-<with|without>-symposium/
 //! ```
 //!
@@ -53,7 +53,7 @@ use crate::grade::process::Finished;
 use crate::task::{BatchName, Task};
 
 /// Whether a trial can reach Symposium. Nothing is installed or uninstalled between the
-/// two: a baseline trial simply cannot read the staged `cargo-agents`.
+/// two: a baseline trial simply cannot read the staged `symposium`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Configuration {
     Baseline,
@@ -145,7 +145,7 @@ impl Batch {
         self.root.join("tools").join("common")
     }
 
-    /// The `cargo-agents` under evaluation, readable by Symposium trials only.
+    /// The `symposium` under evaluation, readable by Symposium trials only.
     pub(crate) fn symposium_tools(&self) -> PathBuf {
         self.root.join("tools").join("symposium")
     }

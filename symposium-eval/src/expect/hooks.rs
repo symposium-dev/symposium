@@ -74,17 +74,17 @@ mod tests {
     /// Runs the real `Stop` hook, and with it the plugin's, under real `srt`.
     #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap installed, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap installed, and builds symposium"]
     fn the_format_on_stop_hook_leaves_a_record_this_reader_reads() {
         use crate::run::Configuration;
         use crate::run::client::Client;
         use crate::run::stage::{Audience, Tool};
-        use crate::run::test_support::{RealSrt, api_key, built_cargo_agents};
+        use crate::run::test_support::{RealSrt, api_key, built_symposium};
         use crate::task::TaskName;
 
         let mut real = RealSrt::new(api_key());
-        let tool = Tool::Executable(built_cargo_agents());
-        real.stage("cargo-agents", &tool, Audience::Symposium);
+        let tool = Tool::Executable(built_symposium());
+        real.stage("symposium", &tool, Audience::Symposium);
         let task = TaskName::new("formatting").unwrap();
         let trial = real.trial_of(&task, 1, Configuration::Symposium);
         real.set_up_symposium(&trial, Client::ClaudeCode);
