@@ -536,16 +536,13 @@ pub async fn sync(
 
     // The install directory names (plain and suffixed) of the skills a revoked
     // package would install. A revocation overrides the cleanup safety net
-    // below: these come off even when cleanup is otherwise skipped.
-    let revoked_dirs: BTreeSet<String> =
-        skills::collect_skills(sym, &revoked, &mut ctx, UpdateLevel::None)
-            .await
-            .into_iter()
-            .flat_map(|entry| {
-                let name = entry.skill.name().to_string();
-                [suffixed_skill_dir(&name, &entry.origin_hash), name]
-            })
-            .collect();
+    // below: these come off even when cleanup is otherwise skipped. The
+    // listing runs nothing from the revoked package: none of its predicates
+    // is evaluated, and a `source.git` group is read from the git cache only.
+    let revoked_dirs: BTreeSet<String> = skills::skills_on_disk(sym, &revoked)
+        .into_iter()
+        .flat_map(|(name, origin_hash)| [suffixed_skill_dir(&name, &origin_hash), name])
+        .collect();
 
     // Dedup by `(skill_name, origin_hash)`: two crate origins with the same
     // (name, version, skill-path-within-crate) collapse (the same skill bytes

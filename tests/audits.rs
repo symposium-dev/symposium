@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use symposium::audits::digest::payload_digest;
 use symposium::audits::{Answer, AuditIndex};
-use symposium::config::{Symposium, UseEntry};
+use symposium::config::{RegistryConfig, Symposium, UseEntry};
 use symposium::discovery::{DiscoveredPlugin, Discovery};
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
@@ -341,6 +341,91 @@ async fn a_revocation_removes_installed_skills_even_when_a_registry_is_unreadabl
                 break_registry,
                 "a revocation removes only its own skills while cleanup is skipped"
             );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+}
+
+/// Configure a path registry that cannot be listed (its root is itself an
+/// entry), so every sync skips the cleanup of installed skills.
+fn add_unreadable_registry(ctx: &mut TestContext) {
+    let dir = ctx.sym.config_dir().join("broken-registry");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Symposium.toml"), "").unwrap();
+    ctx.sym.config.registries.push(RegistryConfig {
+        name: "broken".into(),
+        git: None,
+        path: Some(dir.display().to_string()),
+        auto_update: true,
+    });
+}
+
+/// Retiring a revoked crate's skills runs nothing from it: its group and
+/// skill predicates are never evaluated (a `shell` predicate would run its
+/// command), on sync and on the hook path, and its skill still comes off,
+/// with or without a full cleanup.
+#[tokio::test]
+async fn retiring_a_revoked_crate_runs_none_of_its_predicates() {
+    for break_registry in [false, true] {
+        with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let skills = skill_dirs(&ctx);
+            let krate = crate_d(&ctx);
+            let group_ran = krate.with_file_name("group-predicate-ran");
+            let skill_ran = krate.with_file_name("skill-predicate-ran");
+            // TOML and `sh` both read a Windows path's `\` as an escape.
+            let in_shell = |path: &Path| path.display().to_string().replace('\\', "/");
+            std::fs::write(
+                krate.join("Symposium.toml"),
+                format!(
+                    "[defaults]\nskills = false\n\n[[skills]]\nsource.path = \"skills\"\n\
+                     predicates = [\"shell(touch {})\"]\n",
+                    in_shell(&group_ran)
+                ),
+            )?;
+            let skill_md = krate.join("skills/d-guidance/SKILL.md");
+            let text = std::fs::read_to_string(&skill_md)?;
+            std::fs::write(
+                &skill_md,
+                text.replacen(
+                    "---\n",
+                    &format!("---\npredicates: shell(touch {})\n", in_shell(&skill_ran)),
+                    1,
+                ),
+            )?;
+            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(installed(&skills, "d-guidance").len(), 1);
+            // The predicates do run while the crate is active: the markers
+            // below are not vacuous.
+            assert!(group_ran.exists() && skill_ran.exists());
+            std::fs::remove_file(&group_ran)?;
+            std::fs::remove_file(&skill_ran)?;
+
+            write_audits(
+                &mut ctx.sym,
+                "crate-d",
+                "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"remote-exec\"\n",
+            );
+            if break_registry {
+                add_unreadable_registry(&mut ctx);
+            }
+            ctx.symposium(&["sync"]).await?;
+            assert!(
+                installed(&skills, "d-guidance").is_empty(),
+                "broken registry: {break_registry}"
+            );
+            ctx.prompt_or_hook(
+                "hello",
+                &[HookStep::session_start()],
+                symposium::hook_schema::HookAgent::Claude,
+            )
+            .await?;
+            assert!(!group_ran.exists(), "broken registry: {break_registry}");
+            assert!(!skill_ran.exists(), "broken registry: {break_registry}");
             Ok(())
         })
         .await
