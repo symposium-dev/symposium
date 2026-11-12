@@ -405,8 +405,9 @@ async fn execute_hook_inner(
 /// defines as "block, with stderr as the reason". A tool call is denied
 /// through the canonical decision, so each agent receives the denial in the
 /// form it honors (Antigravity ignores exit codes, Copilot drops the reason
-/// on a non-zero exit). Every other event passes exit 2 and the reason
-/// through, for the agent to apply its own blocking semantics.
+/// on a non-zero exit). On every other event the agent's handler answers:
+/// exit 2 with the reason, for the agent to apply its own blocking semantics,
+/// except on Antigravity's `Stop`, which continues only through stdout.
 fn blocked_response(
     handler: &dyn crate::hook_schema::ErasedAgentHookEvent,
     event: HookEvent,
@@ -424,7 +425,7 @@ fn blocked_response(
         let deny = OutputEvent::PreToolUse(symposium::PreToolUseOutput::deny(reason));
         handler.respond(&handler.translate_output(&deny).to_hook_output())
     } else {
-        HookResponse::blocked(&reason)
+        handler.blocked(&reason)
     }
 }
 

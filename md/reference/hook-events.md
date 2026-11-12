@@ -224,12 +224,14 @@ Tool input is the agent's own: write `updatedInput` in the shape that agent's to
 |-------|------|-------------|
 | `additionalContext` | string or null | Text for the agent when the turn ends. Only Antigravity, Claude Code and Codex run `Stop` hooks, and none treats this as plain context: Claude Code and Codex ignore it, while Antigravity takes it as a reason to keep going and starts another turn. |
 
+To keep the agent going on all three, exit 2 with the reason on stderr (see [exit codes](#exit-codes)).
+
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success. Stdout is parsed as JSON and merged into the hook result. |
-| `2` | Block. The action is blocked and stderr is returned to the agent as the reason. On `PreToolUse` this is a `"deny"` decision, delivered to each agent as in the table above. On other events `cargo agents hook` exits 2 with the reason on stderr, and the agent applies its own semantics (Claude Code, for instance, erases a blocked prompt). |
+| `2` | Block. The action is blocked and stderr is returned to the agent as the reason. On `PreToolUse` this is a `"deny"` decision, delivered to each agent as in the table above. On `Stop` the agent continues the turn with the reason: Claude Code and Codex read it from exit 2, and Antigravity, which ignores exit codes, receives `decision: "continue"` on stdout. On other events `cargo agents hook` exits 2 with the reason on stderr, and the agent applies its own semantics (Claude Code, for instance, erases a blocked prompt). |
 | Other non-zero | Warning. The hook is considered to have succeeded for dispatch purposes; stdout is still parsed if possible. |
 | Timed out | Warning. A hook still running after 5 seconds, or once all plugin hooks of the event have run for 8 seconds together (preparing their commands included), is killed with the commands it started. Its output is ignored, the call is not blocked, and the next hook still runs. |
 

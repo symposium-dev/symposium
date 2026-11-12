@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use symposium::hook_schema::{HookAgent, agent_event};
+use symposium::hook_schema::{HookAgent, HookEvent, agent_event};
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
 async fn respond(ctx: &TestContext, cwd: &str, step: HookStep) -> Value {
@@ -124,6 +124,35 @@ async fn plugin_hooks_run_in_the_payload_workspace() {
             Ok(())
         },
     )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blocking_stop_hook_continues_the_turn() {
+    with_fixture(TestMode::SimulationOnly, &["stop-hook0"], async |ctx| {
+        let response = ctx
+            .invoke_hook(
+                HookAgent::Antigravity,
+                HookEvent::Stop,
+                &json!({
+                    "conversationId": "c",
+                    "workspacePaths": [ctx.tempdir.display().to_string()],
+                    "executionNum": 0,
+                    "terminationReason": "NO_TOOL_CALL",
+                    "error": "",
+                    "fullyIdle": true,
+                }),
+            )
+            .await?;
+        let stdout = String::from_utf8(response.stdout)?;
+        assert_eq!(response.exit_code, 0, "stdout: {stdout}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stdout)?,
+            json!({"decision": "continue", "reason": "stop-hook-ran: run the tests again"}),
+        );
+        Ok(())
+    })
     .await
     .unwrap();
 }
