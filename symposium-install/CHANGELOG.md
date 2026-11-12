@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/symposium-dev/symposium/compare/symposium-install-v0.1.1...symposium-install-v0.1.2) - 2026-11-12
+
+### Added
+
+- *(pm)* out-of-process package managers over newline-delimited JSON-RPC
+
+### Fixed
+
+- *(audits)* read the list from the git cache, not as a plugin registry
+- *(hooks)* keep installers in the caller's process group outside hook dispatch
+- *(hooks)* stop installer descendants and the git probe when acquisition is cancelled
+- *(hooks)* kill the cargo installer when hook setup hits its deadline
+- *(install)* create git cache dir before copying fetched source
+
 ## [0.1.1](https://github.com/symposium-dev/symposium/compare/symposium-install-v0.1.0...symposium-install-v0.1.1) - 2026-10-01
 
 ### Other

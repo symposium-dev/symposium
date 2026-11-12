@@ -11,7 +11,7 @@ name = "symposium_pm_cargo"
 path = "src/lib.rs"
 
 [dependencies]
-symposium-sdk = { path = "../symposium-sdk", version = "0.1.0" }
+symposium-sdk = { path = "../symposium-sdk", version = "0.2.0" }
 
 anyhow = "1"
 async-trait = "0.1"
