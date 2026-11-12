@@ -558,7 +558,7 @@ async fn try_reports_what_each_agent_lists() {
         fake_agent(
             &ctx,
             "codex",
-            r#"[{"content":[{"text":"<skills_instructions>\n### Available skills\n- kit-guidance: Guidance (file: r0/kit-guidance/SKILL.md)"}]}]"#,
+            r#"[{"content":[{"text":"<skills_instructions>\n### Available skills\n- dormant-kit:kit-guidance: Guidance (file: r1/dormant-kit/0.0.0/skills/kit-guidance/SKILL.md)"}]}]"#,
         );
         fake_agent(&ctx, "copilot", "[]");
         let kit = plugin_path(&ctx, "dormant-kit");

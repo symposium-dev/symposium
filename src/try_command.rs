@@ -76,7 +76,7 @@ pub async fn try_plugin(
     }
 
     if sync_here(sym, cwd, update).await? {
-        report_loaded(sym, cwd, &skill_names(&plugin)).await;
+        report_loaded(sym, cwd, &name, &skill_names(&plugin)).await;
     }
     Ok(())
 }
@@ -156,7 +156,7 @@ fn listing(agent: Agent) -> Option<(&'static str, &'static [&'static str])> {
     }
 }
 
-fn listed(agent: Agent, stdout: &str, skill: &str) -> bool {
+fn listed(agent: Agent, stdout: &str, plugin: &str, skill: &str) -> bool {
     let json_names = |items: Vec<serde_json::Value>| {
         items
             .iter()
@@ -167,13 +167,16 @@ fn listed(agent: Agent, stdout: &str, skill: &str) -> bool {
             .map(json_names)
             .unwrap_or(false),
         Agent::Codex => {
-            let entry = format!("- {skill}: ");
+            let entries = [format!("- {skill}: "), format!("- {plugin}:{skill}: ")];
             serde_json::from_str::<Vec<serde_json::Value>>(stdout)
                 .unwrap_or_default()
                 .iter()
                 .flat_map(|item| item["content"].as_array().cloned().unwrap_or_default())
                 .filter_map(|content| content["text"].as_str().map(str::to_string))
-                .any(|text| text.lines().any(|line| line.starts_with(&entry)))
+                .any(|text| {
+                    text.lines()
+                        .any(|line| entries.iter().any(|entry| line.starts_with(entry)))
+                })
         }
         Agent::Goose => stdout
             .lines()
@@ -198,10 +201,11 @@ async fn run_listing(
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"))?
 }
 
-async fn report_loaded(sym: &Symposium, cwd: &Path, skills: &[String]) {
+async fn report_loaded(sym: &Symposium, cwd: &Path, plugin: &str, skills: &[String]) {
     if skills.is_empty() {
         return;
     }
+    let installed_as = crate::compile::normalize_name(plugin).unwrap_or_default();
     for entry in &sym.config.agents {
         let Ok(agent) = Agent::from_config_name(&entry.name) else {
             continue;
@@ -231,7 +235,7 @@ async fn report_loaded(sym: &Symposium, cwd: &Path, skills: &[String]) {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let missing: Vec<&str> = skills
                     .iter()
-                    .filter(|skill| !listed(agent, &stdout, skill))
+                    .filter(|skill| !listed(agent, &stdout, &installed_as, skill))
                     .map(String::as_str)
                     .collect();
                 if missing.is_empty() {
@@ -359,7 +363,7 @@ mod tests {
 
     #[test]
     fn listed_reads_each_agent_listing() {
-        let codex = r#"[{"content":[{"text":"<skills_instructions>\n### Available skills\n- kit-guidance: Guidance (file: r0/kit-guidance/SKILL.md)\n- other: x"}]}]"#;
+        let codex = r#"[{"content":[{"text":"<skills_instructions>\n### Available skills\n- kit-guidance: Guidance (file: r0/kit-guidance/SKILL.md)\n- kit:kit-extras: Extras (file: r1/kit/0.0.0/skills/kit-extras/SKILL.md)\n- other-kit:foreign: x\n- other: x"}]}]"#;
         let copilot = r#"[{"name":"kit-guidance","source":"project","path":"/w/.agents/skills/kit-guidance"}]"#;
         let goose =
             "Name         | Description\nkit-guidance | Guidance...  \nweb-search   | Search";
@@ -367,7 +371,10 @@ mod tests {
             r#"[{"name":"kit-guidance","location":"/w/.agents/skills/kit-guidance/SKILL.md"}]"#;
         let cases = [
             (Agent::Codex, codex, "kit-guidance", true),
+            (Agent::Codex, codex, "kit-extras", true),
             (Agent::Codex, codex, "kit", false),
+            (Agent::Codex, codex, "extras", false),
+            (Agent::Codex, codex, "foreign", false),
             (Agent::Codex, "not json", "kit-guidance", false),
             (Agent::Copilot, copilot, "kit-guidance", true),
             (Agent::Copilot, copilot, "kit", false),
@@ -379,7 +386,11 @@ mod tests {
             (Agent::Claude, copilot, "kit-guidance", false),
         ];
         for (agent, stdout, skill, expected) in cases {
-            assert_eq!(listed(agent, stdout, skill), expected, "{agent:?} {skill}");
+            assert_eq!(
+                listed(agent, stdout, "kit", skill),
+                expected,
+                "{agent:?} {skill}"
+            );
         }
     }
 }
