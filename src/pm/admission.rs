@@ -36,6 +36,58 @@ pub(super) enum PackageAuthority {
     Remote,
 }
 
+/// Core-owned authority visible to the public-naming policy.
+///
+/// Constructing this value does not grant authority: the policy accepts it
+/// only as part of a [`PackageNamingView`] minted from an admitted package.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageNamingAuthority {
+    BuiltinCargo,
+    Recommendations,
+    Remote,
+}
+
+/// Borrowed package facts available to the public-naming policy.
+///
+/// The private constructor keeps supplier keys, handles, content roots, and
+/// raw source representations outside the policy boundary. The type has no
+/// diagnostic or serialization implementation because its admitted coordinate
+/// may still be private.
+#[derive(Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the public-naming policy slice consumes the admitted naming view"
+    )
+)]
+pub(crate) struct PackageNamingView<'a> {
+    id: &'a PackageId,
+    source: PackageSourceClaim,
+    authority: PackageNamingAuthority,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the public-naming policy slice consumes the admitted naming view"
+    )
+)]
+impl<'a> PackageNamingView<'a> {
+    pub(crate) fn id(self) -> &'a PackageId {
+        self.id
+    }
+
+    pub(crate) fn source(self) -> PackageSourceClaim {
+        self.source
+    }
+
+    pub(crate) fn authority(self) -> PackageNamingAuthority {
+        self.authority
+    }
+}
+
 /// The source-sensitive package fact core has admitted for this session.
 ///
 /// This type has no serialization and its deliberate `Debug` view omits the
@@ -79,22 +131,19 @@ impl ResolvedPackage {
         not(test),
         expect(
             dead_code,
-            reason = "the public-naming policy slice consumes the admitted source view"
+            reason = "the public-naming policy slice consumes the admitted naming view"
         )
     )]
-    pub(crate) fn source(&self) -> PackageSourceClaim {
-        self.source
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the public-naming policy slice consumes the admitted authority view"
-        )
-    )]
-    pub(super) fn authority(&self) -> PackageAuthority {
-        self.authority
+    pub(crate) fn naming_view(&self) -> PackageNamingView<'_> {
+        PackageNamingView {
+            id: &self.id,
+            source: self.source,
+            authority: match self.authority {
+                PackageAuthority::BuiltinCargo => PackageNamingAuthority::BuiltinCargo,
+                PackageAuthority::Recommendations => PackageNamingAuthority::Recommendations,
+                PackageAuthority::Remote => PackageNamingAuthority::Remote,
+            },
+        }
     }
 }
 
@@ -117,15 +166,33 @@ impl ResolvedDependency {
 
 /// Resolved package content after its wire key has been confined to the
 /// supplier ledger.
+#[derive(Clone)]
 pub struct ResolvedContent {
-    pub(crate) package: ResolvedPackage,
-    pub root: PathBuf,
+    package: ResolvedPackage,
+    root: PathBuf,
+}
+
+impl std::fmt::Debug for ResolvedContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedContent")
+            .field("package", &self.package)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ResolvedContent {
     /// The admitted package's exact coordinate.
     pub fn id(&self) -> &PackageId {
         self.package.id()
+    }
+
+    /// The canonical directory containing the resolved package.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn package(&self) -> &ResolvedPackage {
+        &self.package
     }
 }
 
@@ -298,7 +365,7 @@ impl PackageAdmission {
         root: &Path,
     ) -> Result<ResolvedContent, AdmissionError> {
         self.check_owner(&resolution)?;
-        let canonical_root = std::fs::canonicalize(root)
+        let canonical_root = dunce::canonicalize(root)
             .ok()
             .filter(|root| root.is_dir())
             .ok_or(AdmissionError::ContentRootUnavailable)?;
@@ -532,8 +599,8 @@ mod tests {
             .admit_content(package.clone(), first_root.path())
             .unwrap();
         assert_eq!(
-            admitted.root,
-            std::fs::canonicalize(first_root.path()).unwrap()
+            admitted.root(),
+            dunce::canonicalize(first_root.path()).unwrap()
         );
 
         assert_eq!(
@@ -555,10 +622,11 @@ mod tests {
             .unwrap();
         let package = content.package;
 
-        assert_eq!(package.source(), PackageSourceClaim::CratesIo);
+        let naming = package.naming_view();
+        assert_eq!(naming.source(), PackageSourceClaim::CratesIo);
         assert!(matches!(
-            package.authority(),
-            PackageAuthority::BuiltinCargo
+            naming.authority(),
+            PackageNamingAuthority::BuiltinCargo
         ));
         let diagnostic = format!("{package:?}");
         assert!(!diagnostic.contains("widget"));

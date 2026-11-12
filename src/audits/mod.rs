@@ -277,7 +277,7 @@ async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Result<Digest
             return None;
         }
     };
-    let digest = pms.payload_digests.digest(fetched.id(), &fetched.root);
+    let digest = pms.payload_digests.digest(fetched.id(), fetched.root());
     if let Err(why) = &digest {
         tracing::debug!(id = %id, %why, "no payload digest; digest entries cannot match");
     }

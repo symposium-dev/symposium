@@ -334,18 +334,26 @@ pub struct Plugin {
     /// `SKILL.md` path hash.
     pub canonical: crate::pm::PackageId,
 
-    /// The admitted package behind a package-manager plugin.
+    /// The admitted package content behind a package-manager plugin.
     ///
     /// Workspace plugins have no supplier session and leave this empty. This
-    /// field is private so its id cannot disagree with `canonical`.
-    pub(crate) resolved_package: Option<crate::pm::ResolvedPackage>,
+    /// field is private so its id cannot disagree with `canonical`, and its
+    /// canonical root cannot escape through derived diagnostics.
+    pub(crate) resolved_content: Option<crate::pm::ResolvedContent>,
 }
 
 impl Plugin {
     /// The admitted package behind this plugin, when it came from a package
     /// manager rather than the workspace loader.
     pub(crate) fn resolved_package(&self) -> Option<&crate::pm::ResolvedPackage> {
-        self.resolved_package.as_ref()
+        self.resolved_content
+            .as_ref()
+            .map(crate::pm::ResolvedContent::package)
+    }
+
+    /// The admitted package and canonical root behind this plugin.
+    pub(crate) fn resolved_content(&self) -> Option<&crate::pm::ResolvedContent> {
+        self.resolved_content.as_ref()
     }
 
     /// Evaluate the plugin-level predicate set, stamping this plugin's
@@ -1067,7 +1075,7 @@ fn package_agent_plugin_manifest(root: &Path, name: &str) -> Result<RawPluginMan
 /// cannot elect its own policy.
 pub(crate) fn validate_plugin(
     plugin: UnvalidatedPlugin,
-    resolved_package: Option<crate::pm::ResolvedPackage>,
+    resolved_content: Option<crate::pm::ResolvedContent>,
     kind: PluginKind,
 ) -> Result<Plugin> {
     let package_name = plugin.package.id().name.clone();
@@ -1097,7 +1105,7 @@ pub(crate) fn validate_plugin(
         .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
     Ok(Plugin {
         canonical: package.id().clone(),
-        resolved_package,
+        resolved_content,
         manifest: plugin,
         // Only the workspace-plugin loader stamps true; nothing a PM offers is
         // a workspace member.
@@ -1656,7 +1664,7 @@ fn workspace_plugin_for_dir(
 
     Ok(Some(Plugin {
         canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
-        resolved_package: None,
+        resolved_content: None,
         manifest: plugin,
         workspace_member: true,
         agent_plugin_root,
@@ -2012,7 +2020,7 @@ fn load_plugin_as(
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(Plugin {
         canonical: PackageId::new(source_name, &plugin.name, ANY_VERSION),
-        resolved_package: None,
+        resolved_content: None,
         manifest: plugin,
         // Registry sources are never workspace members; the workspace-plugin
         // loader is the only place that stamps true.
@@ -3696,7 +3704,7 @@ mod tests {
             agent_plugin_root: None,
             root: PathBuf::new(),
             canonical: PackageId::any_version("reg", "gate-less"),
-            resolved_package: None,
+            resolved_content: None,
         };
         assert!(plugin.manifest.requires_use);
 
@@ -3751,7 +3759,7 @@ mod tests {
             agent_plugin_root: None,
             root: PathBuf::new(),
             canonical: PackageId::new("test", "test", ANY_VERSION),
-            resolved_package: None,
+            resolved_content: None,
         };
         let deps: Vec<crate::pm::PackageId> = Vec::new();
         let mut c = ctx(&deps);
@@ -5510,7 +5518,7 @@ mod tests {
             agent_plugin_root: None,
             root: PathBuf::new(),
             canonical: PackageId::new("test", plugin_name, ANY_VERSION),
-            resolved_package: None,
+            resolved_content: None,
         }
     }
 

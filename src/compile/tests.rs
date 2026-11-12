@@ -46,16 +46,16 @@ fn global(name: &str) -> UseEntry {
 }
 
 fn skill(name: &str, origin: &str, skill_md: &Path, plugin_index: usize) -> SkillWithGroupContext {
-    SkillWithGroupContext {
-        skill: Skill {
+    SkillWithGroupContext::for_test(
+        Skill {
             frontmatter: BTreeMap::from([("name".to_string(), name.to_string())]),
             predicates: PredicateSet::default(),
             path: skill_md.to_path_buf(),
         },
-        origin_hash: origin.into(),
+        origin.into(),
         plugin_index,
-        agent_plugin_root: None,
-    }
+        None,
+    )
 }
 
 fn plugin(name: &str, skills: Vec<SkillWithGroupContext>) -> PluginSkills {
@@ -476,7 +476,7 @@ fn project_plugins_take_the_skills_no_global_plugin_carries() {
     let names: Vec<(&str, Vec<&str>)> = project
         .iter()
         .map(|p| {
-            let skills = p.skills.iter().map(|s| s.skill.name()).collect();
+            let skills = p.skills.iter().map(|s| s.skill().name()).collect();
             (p.name.as_str(), skills)
         })
         .collect();

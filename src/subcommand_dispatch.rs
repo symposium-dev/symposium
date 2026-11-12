@@ -210,7 +210,7 @@ mod tests {
     ) -> Plugin {
         Plugin {
             canonical: PackageId::new("test", name, ANY_VERSION),
-            resolved_package: None,
+            resolved_content: None,
             manifest: PluginManifest {
                 name: name.into(),
                 version: None,

@@ -5,6 +5,7 @@
 
 use crate::predicate::PredicateEval;
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -87,9 +88,13 @@ pub(crate) fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
 /// same file reached two ways hashes identically. Falls back to the given path
 /// when it can't be canonicalized.
 pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
-    let canonical = skill_md.canonicalize();
+    let canonical = dunce::canonicalize(skill_md);
     let path = canonical.as_deref().unwrap_or(skill_md);
-    hash_origin_key(&path.to_string_lossy())
+    canonical_skill_origin_hash(path)
+}
+
+fn canonical_skill_origin_hash(skill_md: &Path) -> String {
+    hash_origin_key(&skill_md.to_string_lossy())
 }
 
 /// An applicable skill paired with the origin it was discovered through.
@@ -98,12 +103,117 @@ pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
 /// collection; only skills whose every level holds end up here.
 #[derive(Clone)]
 pub struct SkillWithGroupContext {
-    pub skill: Skill,
+    skill: Skill,
     /// The hash of where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
-    pub origin_hash: String,
+    origin_hash: String,
     pub plugin_index: usize,
     pub agent_plugin_root: Option<PathBuf>,
+    /// Proof that this skill's canonical `SKILL.md` belonged to its admitted
+    /// package. Kept private so it cannot be paired with another skill.
+    package_content: Option<PackageContent>,
+}
+
+/// Proof that this record's canonical skill file belonged to one admitted
+/// package when discovery read it.
+///
+/// Construction and storage are both private to skill discovery. Cloning the
+/// containing record preserves the same skill/proof pairing; callers cannot
+/// project the proof without the skill name it was bound to.
+#[derive(Clone)]
+struct PackageContent {
+    package: crate::pm::ResolvedPackage,
+    canonical_file: PathBuf,
+}
+
+impl PackageContent {
+    fn naming_view(&self) -> crate::pm::PackageNamingView<'_> {
+        debug_assert!(
+            self.canonical_file.is_absolute(),
+            "BUG: package-content proofs retain a canonical file"
+        );
+        self.package.naming_view()
+    }
+}
+
+/// The public-naming facts bound to one discovered skill.
+///
+/// Callers cannot pair a package proof from one skill with another skill's
+/// name: both values are projected together from [`SkillWithGroupContext`].
+#[derive(Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the public-naming policy slice consumes resolved skill origins"
+    )
+)]
+pub(crate) struct SkillNamingView<'a> {
+    name: &'a str,
+    package: Option<crate::pm::PackageNamingView<'a>>,
+}
+
+impl SkillWithGroupContext {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        skill: Skill,
+        origin_hash: String,
+        plugin_index: usize,
+        agent_plugin_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            skill,
+            origin_hash,
+            plugin_index,
+            agent_plugin_root,
+            package_content: None,
+        }
+    }
+
+    /// The immutable skill bound to this resolution record.
+    pub(crate) fn skill(&self) -> &Skill {
+        &self.skill
+    }
+
+    /// The install-path disambiguator derived from this skill's canonical
+    /// `SKILL.md` destination.
+    pub(crate) fn origin_hash(&self) -> &str {
+        &self.origin_hash
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the public-naming policy slice consumes resolved skill origins"
+        )
+    )]
+    pub(crate) fn naming_view(&self) -> SkillNamingView<'_> {
+        SkillNamingView {
+            name: self.skill.name(),
+            package: self
+                .package_content
+                .as_ref()
+                .map(PackageContent::naming_view),
+        }
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the public-naming policy slice consumes resolved skill origins"
+    )
+)]
+impl<'a> SkillNamingView<'a> {
+    pub(crate) fn name(self) -> &'a str {
+        self.name
+    }
+
+    pub(crate) fn package(self) -> Option<crate::pm::PackageNamingView<'a>> {
+        self.package
+    }
 }
 
 /// Resolve all applicable skills from the registry.
@@ -163,12 +273,13 @@ pub(crate) async fn collect_skills(
         ctx.set_workspace_member(parsed.workspace_member);
         for group in &parsed.manifest.skills {
             let skills = load_skills_for_group(sym, parsed, group, ctx, update).await;
-            for (skill, origin_hash) in skills {
+            for (skill, origin_hash, package_content) in skills {
                 collect_skill_applicable_to(
                     skill,
                     origin_hash,
                     plugin_index,
                     parsed.agent_plugin_root.as_deref(),
+                    package_content,
                     &parsed.manifest.name,
                     ctx,
                     &mut results,
@@ -222,7 +333,7 @@ async fn load_skills_for_group(
     group: &SkillGroup,
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
-) -> Vec<(Skill, String)> {
+) -> Vec<(Skill, String, Option<PackageContent>)> {
     let plugin = &parsed.manifest;
 
     // Pre-fetch filtering: skip groups whose predicates don't hold (crate
@@ -274,25 +385,49 @@ async fn load_skills_for_group(
 /// already on disk; `Git` is fetched via the git cache. (A crate is not a group
 /// source — it becomes a plugin through a `[[plugins]]` chained reference; see
 /// [`crate::plugins::active_plugins`].)
-struct ResolvedSkillDir {
+struct ResolvedSkillDir<'a> {
     dir: PathBuf,
     /// `SkillSourceSearched` report `plugin` label.
     plugin_label: String,
     /// `SkillSourceSearched` report `source` label.
     source_label: String,
+    origin: SkillDirectoryOrigin<'a>,
+}
+
+/// Whether a skill directory may inherit an admitted package's authority.
+///
+/// A detached Git group stays detached even when its cache directory happens
+/// to sit beneath the plugin package's content root.
+#[derive(Clone, Copy)]
+enum SkillDirectoryOrigin<'a> {
+    Package(&'a crate::pm::ResolvedContent),
+    Detached,
+}
+
+fn skill_directory_origin<'a>(
+    content: Option<&'a crate::pm::ResolvedContent>,
+    source: &PluginSource,
+) -> SkillDirectoryOrigin<'a> {
+    match source {
+        PluginSource::Path(_) => content.map_or(
+            SkillDirectoryOrigin::Detached,
+            SkillDirectoryOrigin::Package,
+        ),
+        PluginSource::Git(_) => SkillDirectoryOrigin::Detached,
+    }
 }
 
 /// Resolve a group's `source` to the base directories to scan. Both variants
 /// land on a directory to walk; the only difference is whether the base is local
 /// (`Path`) or fetched (`Git` via a git cache). Skill identity is not decided
 /// here — every discovered skill's origin is the hash of its on-disk `SKILL.md`
-/// path (see the module-level note above `skill_origin_hash`).
-async fn resolve_group_dirs(
+/// path (see the module-level note above the origin-hash helpers).
+async fn resolve_group_dirs<'a>(
     sym: &Symposium,
-    parsed: &Plugin,
+    parsed: &'a Plugin,
     group: &SkillGroup,
     update: UpdateLevel,
-) -> Vec<ResolvedSkillDir> {
+) -> Vec<ResolvedSkillDir<'a>> {
     let plugin = &parsed.manifest;
 
     match &group.source {
@@ -303,6 +438,7 @@ async fn resolve_group_dirs(
                 dir: dir.clone(),
                 plugin_label: plugin.name.clone(),
                 source_label: group_source_label(group),
+                origin: skill_directory_origin(parsed.resolved_content(), &group.source),
             }]
         }
         PluginSource::Git(url) => {
@@ -315,6 +451,7 @@ async fn resolve_group_dirs(
                 dir: cache_dir,
                 plugin_label: source.repo_id(),
                 source_label: format!("git:{url}"),
+                origin: skill_directory_origin(parsed.resolved_content(), &group.source),
             }]
         }
     }
@@ -324,12 +461,17 @@ async fn resolve_group_dirs(
 /// path all group sources funnel through, replacing the former per-source
 /// `load_*_skills` functions.
 fn collect_skills_from_dirs(
-    resolved: Vec<ResolvedSkillDir>,
+    resolved: Vec<ResolvedSkillDir<'_>>,
     group: &SkillGroup,
-) -> Vec<(Skill, String)> {
+) -> Vec<(Skill, String, Option<PackageContent>)> {
     let mut skills = Vec::new();
     for entry in resolved {
-        let discovered = discover_skills(&entry.dir, group.workspace_member, &group.predicates);
+        let discovered = discover_skills_with_origin(
+            &entry.dir,
+            group.workspace_member,
+            &group.predicates,
+            entry.origin,
+        );
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillSourceSearched {
                 plugin: entry.plugin_label.clone(),
@@ -340,9 +482,12 @@ fn collect_skills_from_dirs(
         );
         for result in discovered {
             match result {
-                Ok(skill) => {
-                    let origin_hash = skill_origin_hash(&skill.path);
-                    skills.push((skill, origin_hash));
+                Ok(discovered) => {
+                    skills.push((
+                        discovered.skill,
+                        discovered.origin_hash,
+                        discovered.package_content,
+                    ));
                 }
                 Err(e) => tracing::info!(
                     report = %crate::report::ReportEvent::Warning {
@@ -391,6 +536,72 @@ pub(crate) fn discover_skills(
     workspace_member: bool,
     group_predicates: &PredicateSet,
 ) -> Vec<Result<Skill>> {
+    discover_skills_with_origin(
+        skills_dir,
+        workspace_member,
+        group_predicates,
+        SkillDirectoryOrigin::Detached,
+    )
+    .into_iter()
+    .map(|result| result.map(|discovered| discovered.skill))
+    .collect()
+}
+
+struct DiscoveredSkill {
+    skill: Skill,
+    origin_hash: String,
+    package_content: Option<PackageContent>,
+}
+
+struct ResolvedSkillFile {
+    canonical_file: PathBuf,
+    package_content: Option<PackageContent>,
+}
+
+impl ResolvedSkillFile {
+    fn path(&self) -> &Path {
+        &self.canonical_file
+    }
+
+    fn into_package_content(self) -> Option<PackageContent> {
+        self.package_content
+    }
+}
+
+fn resolve_skill_file(
+    skill_md: &Path,
+    origin: SkillDirectoryOrigin<'_>,
+) -> io::Result<ResolvedSkillFile> {
+    let canonical_file = dunce::canonicalize(skill_md)?;
+    if !canonical_file.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resolved skill content is not a file",
+        ));
+    }
+
+    let package_content = match origin {
+        SkillDirectoryOrigin::Package(content) if canonical_file.starts_with(content.root()) => {
+            Some(PackageContent {
+                package: content.package().clone(),
+                canonical_file: canonical_file.clone(),
+            })
+        }
+        SkillDirectoryOrigin::Package(_) | SkillDirectoryOrigin::Detached => None,
+    };
+
+    Ok(ResolvedSkillFile {
+        canonical_file,
+        package_content,
+    })
+}
+
+fn discover_skills_with_origin(
+    skills_dir: &Path,
+    workspace_member: bool,
+    group_predicates: &PredicateSet,
+    origin: SkillDirectoryOrigin<'_>,
+) -> Vec<Result<DiscoveredSkill>> {
     if !skills_dir.is_dir() {
         return Vec::new();
     }
@@ -403,8 +614,22 @@ pub(crate) fn discover_skills(
     skill_files
         .into_iter()
         .map(|skill_md| {
-            load_skill(&skill_md, workspace_member, group_predicates)
-                .with_context(|| display_path(&skill_md))
+            (|| -> Result<DiscoveredSkill> {
+                let resolved_file = resolve_skill_file(&skill_md, origin)?;
+                let origin_hash = canonical_skill_origin_hash(resolved_file.path());
+                let skill = load_skill_from(
+                    resolved_file.path(),
+                    &skill_md,
+                    workspace_member,
+                    group_predicates,
+                )?;
+                Ok(DiscoveredSkill {
+                    skill,
+                    origin_hash,
+                    package_content: resolved_file.into_package_content(),
+                })
+            })()
+            .with_context(|| display_path(&skill_md))
         })
         .collect()
 }
@@ -514,12 +739,29 @@ pub(crate) fn standalone_skill_meta(skill_md: &Path) -> Result<(Option<String>, 
 /// and `description` fields) is optional — `name` falls back to the skill
 /// directory's name. Workspace skills are the maintainers' own informal
 /// notes; the agentskills.io contract applies to published skills.
+#[cfg(test)]
 fn load_skill(
     skill_md_path: &Path,
     workspace_member: bool,
     group_predicates: &PredicateSet,
 ) -> Result<Skill> {
-    let content = std::fs::read_to_string(skill_md_path).context("failed to read")?;
+    load_skill_from(
+        skill_md_path,
+        skill_md_path,
+        workspace_member,
+        group_predicates,
+    )
+}
+
+/// Read the canonical file while retaining the discovered bundle path used by
+/// installation. These paths differ when `SKILL.md` itself is a symlink.
+fn load_skill_from(
+    canonical_skill_md: &Path,
+    bundle_skill_md: &Path,
+    workspace_member: bool,
+    group_predicates: &PredicateSet,
+) -> Result<Skill> {
+    let content = std::fs::read_to_string(canonical_skill_md).context("failed to read")?;
 
     let fm = if workspace_member && !content.trim_start().starts_with("---") {
         RawFrontmatter {
@@ -542,7 +784,7 @@ fn load_skill(
 
     if workspace_member
         && !frontmatter.contains_key("name")
-        && let Some(dir_name) = skill_md_path
+        && let Some(dir_name) = bundle_skill_md
             .parent()
             .and_then(|dir| dir.file_name())
             .and_then(|name| name.to_str())
@@ -594,9 +836,9 @@ fn load_skill(
     let skill = Skill {
         frontmatter,
         predicates,
-        path: skill_md_path.to_path_buf(),
+        path: bundle_skill_md.to_path_buf(),
     };
-    tracing::debug!(name = %skill.name(), path = %skill_md_path.display(), "skill loaded");
+    tracing::debug!(name = %skill.name(), path = %bundle_skill_md.display(), "skill loaded");
     Ok(skill)
 }
 
@@ -615,6 +857,7 @@ fn collect_skill_applicable_to(
     origin_hash: String,
     plugin_index: usize,
     agent_plugin_root: Option<&Path>,
+    package_content: Option<PackageContent>,
     plugin_name: &str,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
@@ -644,6 +887,7 @@ fn collect_skill_applicable_to(
         origin_hash,
         plugin_index,
         agent_plugin_root: agent_plugin_root.map(Path::to_path_buf),
+        package_content,
     });
 }
 
@@ -777,6 +1021,163 @@ mod tests {
             skill_origin_hash(&via_link),
             "same file reached through a symlink must hash to one origin"
         );
+    }
+
+    fn write_test_skill(path: &Path, name: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path,
+            format!(
+                "---\nname: {name}\ndescription: package-content test\ndepends-on: serde\n---\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn contained_package_proof_stays_bound_to_its_discovered_skill() {
+        let root = tempfile::tempdir().unwrap();
+        let skill_md = root.path().join("skills/contained/SKILL.md");
+        write_test_skill(&skill_md, "contained");
+        let content = crate::pm::resolved_content_for_test(root.path());
+
+        let mut discovered = discover_skills_with_origin(
+            &root.path().join("skills"),
+            false,
+            &PredicateSet::default(),
+            SkillDirectoryOrigin::Package(&content),
+        );
+        let discovered = discovered.pop().unwrap().unwrap();
+        let resolved = SkillWithGroupContext {
+            origin_hash: discovered.origin_hash,
+            skill: discovered.skill,
+            plugin_index: 0,
+            agent_plugin_root: None,
+            package_content: discovered.package_content,
+        };
+        let naming = resolved.naming_view();
+
+        assert_eq!(resolved.skill.path, skill_md);
+        assert_eq!(naming.name(), "contained");
+        assert_eq!(naming.package().unwrap().id().name, "test-package");
+    }
+
+    #[test]
+    fn parent_segments_cannot_grant_package_content_authority() {
+        let container = tempfile::tempdir().unwrap();
+        let package = container.path().join("package");
+        let outside = container.path().join("outside/SKILL.md");
+        fs::create_dir_all(&package).unwrap();
+        write_test_skill(&outside, "outside");
+        let content = crate::pm::resolved_content_for_test(&package);
+
+        let resolved = resolve_skill_file(
+            &package.join("../outside/SKILL.md"),
+            SkillDirectoryOrigin::Package(&content),
+        )
+        .unwrap();
+
+        assert!(resolved.into_package_content().is_none());
+    }
+
+    #[test]
+    fn unavailable_files_cannot_mint_package_content_proofs() {
+        let root = tempfile::tempdir().unwrap();
+        let content = crate::pm::resolved_content_for_test(root.path());
+
+        let result = resolve_skill_file(
+            &root.path().join("missing/SKILL.md"),
+            SkillDirectoryOrigin::Package(&content),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn git_skill_inside_a_package_cache_remains_detached() {
+        let root = tempfile::tempdir().unwrap();
+        let git_cache = root.path().join("nested-git-cache");
+        let skill_md = git_cache.join("detached/SKILL.md");
+        write_test_skill(&skill_md, "detached");
+        let content = crate::pm::resolved_content_for_test(root.path());
+        let source = PluginSource::Git(format!("file://{}", git_cache.display()));
+        let origin = skill_directory_origin(Some(&content), &source);
+
+        let mut discovered =
+            discover_skills_with_origin(&git_cache, false, &PredicateSet::default(), origin);
+        let discovered = discovered.pop().unwrap().unwrap();
+        let resolved = SkillWithGroupContext {
+            origin_hash: discovered.origin_hash,
+            skill: discovered.skill,
+            plugin_index: 0,
+            agent_plugin_root: None,
+            package_content: discovered.package_content,
+        };
+
+        assert!(resolved.naming_view().package().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_symlinks_outside_the_package_remain_detached() {
+        use std::os::unix::fs::symlink;
+
+        let container = tempfile::tempdir().unwrap();
+        let package = container.path().join("package");
+        let outside = container.path().join("outside/example/SKILL.md");
+        fs::create_dir_all(&package).unwrap();
+        write_test_skill(&outside, "outside");
+        symlink(
+            outside.parent().unwrap().parent().unwrap(),
+            package.join("linked"),
+        )
+        .unwrap();
+        let content = crate::pm::resolved_content_for_test(&package);
+
+        let resolved = resolve_skill_file(
+            &package.join("linked/example/SKILL.md"),
+            SkillDirectoryOrigin::Package(&content),
+        )
+        .unwrap();
+
+        assert!(resolved.into_package_content().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_skill_file_keeps_its_discovered_bundle_directory() {
+        use std::os::unix::fs::symlink;
+
+        let container = tempfile::tempdir().unwrap();
+        let package = container.path().join("package");
+        let bundle = package.join("skills/bundle");
+        let shared = container.path().join("shared/instructions.md");
+        write_test_skill(&shared, "linked-skill");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("asset.txt"), "bundle asset").unwrap();
+        symlink(&shared, bundle.join("SKILL.md")).unwrap();
+        let content = crate::pm::resolved_content_for_test(&package);
+
+        let mut discovered = discover_skills_with_origin(
+            &package.join("skills"),
+            false,
+            &PredicateSet::default(),
+            SkillDirectoryOrigin::Package(&content),
+        );
+        let discovered = discovered.pop().unwrap().unwrap();
+        let resolved = SkillWithGroupContext {
+            origin_hash: discovered.origin_hash,
+            skill: discovered.skill,
+            package_content: discovered.package_content,
+        };
+
+        assert_eq!(resolved.skill().path, bundle.join("SKILL.md"));
+        assert_eq!(resolved.skill().path.parent(), Some(bundle.as_path()));
+        assert_eq!(
+            resolved.origin_hash(),
+            canonical_skill_origin_hash(&dunce::canonicalize(shared).unwrap())
+        );
+        assert!(resolved.naming_view().package().is_none());
     }
 
     fn ctx(deps: &[crate::pm::PackageId]) -> PredicateContext<'_> {
@@ -1238,7 +1639,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
-                resolved_package: None,
+                resolved_content: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1303,7 +1704,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
-                resolved_package: None,
+                resolved_content: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1386,7 +1787,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
-                resolved_package: None,
+                resolved_content: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1474,7 +1875,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
-                resolved_package: None,
+                resolved_content: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1563,7 +1964,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
-                resolved_package: None,
+                resolved_content: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1697,7 +2098,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: crate::pm::PackageId::any_version("recs", "my-skill"),
-                resolved_package: None,
+                resolved_content: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,

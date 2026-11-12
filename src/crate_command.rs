@@ -77,6 +77,6 @@ pub async fn resolve_crate(
     Ok(ResolvedCrate {
         name: fetched.id().name.clone(),
         version: fetched.id().version.clone(),
-        root: fetched.root,
+        root: fetched.root().to_path_buf(),
     })
 }

@@ -104,11 +104,11 @@ pub(crate) fn project_plugins(
     let global_origins: BTreeSet<&str> = global
         .iter()
         .flat_map(|plugin| &plugin.skills)
-        .map(|skill| skill.origin_hash.as_str())
+        .map(|skill| skill.origin_hash())
         .collect();
     let skills = applicable
         .iter()
-        .filter(|skill| !global_origins.contains(skill.origin_hash.as_str()))
+        .filter(|skill| !global_origins.contains(skill.origin_hash()))
         .cloned()
         .collect();
     group_skills(active.to_vec(), skills)
@@ -124,7 +124,10 @@ fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec
         .collect();
     let mut seen = BTreeSet::new();
     for skill in skills {
-        if seen.insert((skill.skill.name().to_string(), skill.origin_hash.clone())) {
+        if seen.insert((
+            skill.skill().name().to_string(),
+            skill.origin_hash().to_string(),
+        )) {
             grouped[skill.plugin_index].skills.push(skill);
         }
     }
@@ -167,7 +170,7 @@ pub(crate) fn compile(
         let dir = root.join(&name);
         match write_plugin(&dir, &name, &skill_dirs(plugin), debounce, warned) {
             Ok(updated) => {
-                let origins = plugin.skills.iter().map(|s| s.origin_hash.clone());
+                let origins = plugin.skills.iter().map(|s| s.origin_hash().to_string());
                 compiled
                     .skill_origins
                     .insert(name.clone(), origins.collect());
@@ -257,11 +260,7 @@ fn plugin_dir_names(plugins: &[PluginSkills]) -> Vec<Option<String>> {
             if counts[name] == 1 {
                 return Some(name.to_string());
             }
-            let mut origins: Vec<&str> = plugin
-                .skills
-                .iter()
-                .map(|s| s.origin_hash.as_str())
-                .collect();
+            let mut origins: Vec<&str> = plugin.skills.iter().map(|s| s.origin_hash()).collect();
             origins.sort();
             Some(suffixed(name, &crate::skills::hash_origin_key(&origins)))
         })
@@ -276,15 +275,15 @@ fn suffixed(name: &str, hash: &str) -> String {
 fn skill_dirs(plugin: &PluginSkills) -> Vec<(String, &SkillWithGroupContext)> {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for skill in &plugin.skills {
-        *counts.entry(skill.skill.name()).or_default() += 1;
+        *counts.entry(skill.skill().name()).or_default() += 1;
     }
     plugin
         .skills
         .iter()
         .map(|skill| {
-            let name = skill.skill.name();
+            let name = skill.skill().name();
             let dir = if counts[name] > 1 {
-                format!("{name}-{}", skill.origin_hash)
+                format!("{name}-{}", skill.origin_hash())
             } else {
                 name.to_string()
             };
@@ -336,7 +335,7 @@ fn plugin_contents(
     let mut skipped = Vec::new();
     for (dir, skill) in skills {
         let source = skill
-            .skill
+            .skill()
             .path
             .parent()
             .with_context(|| format!("skill {dir} has no source directory"))?;
