@@ -1321,12 +1321,17 @@ async fn disable_naming_an_unknown_pm_does_not_leave_the_plugin_on() {
             ctx.sym.save_config()?;
             ctx.sym = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
 
-            let synced = ctx.symposium(&["sync"]).await;
+            let error = ctx
+                .symposium(&["sync"])
+                .await
+                .expect_err("unknown disable PM must be reported");
             assert!(
-                synced.is_err() || find_installed_skills(&skills_dir, "advice").is_empty(),
-                "a `disable` entry whose `pm` names no package manager or registry \
-                 left `advice` installed without an error"
+                error
+                    .to_string()
+                    .contains("unknown package manager or registry `user-plugin`"),
+                "{error:#}"
             );
+
             Ok(())
         },
     )

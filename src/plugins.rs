@@ -1345,6 +1345,14 @@ pub async fn resolve_active_plugins(
 ) -> ActivePlugins {
     let mut active = Vec::new();
     let mut revoked = Vec::new();
+    if let Err(error) = sym.config.plugins.validate_disable_managers(pms) {
+        tracing::warn!(
+            report = %crate::report::ReportEvent::Warning {
+                message: format!("not activating plugins: {error}"),
+            },
+        );
+        return ActivePlugins { active, revoked };
+    }
     // Crate identities already loaded through the set, keyed on `(pm, name)` so
     // a crate reached through two chains — or a chain and dependency enablement —
     // loads once (its hooks don't double-fire, its subcommands aren't a false

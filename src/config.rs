@@ -159,6 +159,24 @@ impl PluginsConfig {
         *self == Self::default()
     }
 
+    /// A misspelled or removed PM must not silently discard a disable decision.
+    /// Validate against the effective instances without starting their processes.
+    pub fn validate_disable_managers(&self, pms: &crate::pm::PmRegistry) -> anyhow::Result<()> {
+        for entry in &self.disable {
+            if let Some(pm) = &entry.pm
+                && pm != "local"
+                && !pms.instances().any(|instance| instance.name == *pm)
+            {
+                anyhow::bail!(
+                    "unknown package manager or registry `{pm}` in `[plugins] disable` for `{}`; \
+                     correct the PM name or restore its configuration",
+                    entry.name
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The plugins `use` entries enable while working in `workspace_root`.
     pub fn used_in(&self, workspace_root: &Path) -> Vec<&PluginRef> {
         self.used

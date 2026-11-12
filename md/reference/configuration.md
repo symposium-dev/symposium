@@ -174,6 +174,11 @@ A bare name that could mean more than one plugin is resolved by what the list is
 - In `auto-enable`, a bare name is consent for the dependency of that name, and for nothing while dependencies from two package managers share it, so consent to one ecosystem's package never silently covers another's.
 - In `disable`, a bare name turns off every plugin of that name, since turning off too much is the safe way to be wrong.
 
+A PM-qualified `disable` entry must name an active package manager or registry
+(`local` names workspace plugins). If that PM is unknown, sync reports an error
+and plugins do not activate until the reference is corrected. This also catches
+disable entries left behind when a registry is renamed.
+
 Naming the package manager is how to say which one, and how to turn off one plugin from a registry while leaving a crate of the same name alone:
 
 ```toml

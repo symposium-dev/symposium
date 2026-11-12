@@ -476,6 +476,7 @@ pub async fn sync(
             display_path(&sym.config_dir().join("config.toml")),
         );
     }
+    sym.config.plugins.validate_disable_managers(ws.pms())?;
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();

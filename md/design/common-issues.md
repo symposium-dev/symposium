@@ -131,3 +131,14 @@ The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so tha
 A test that asserts on `ReportEvent`s installs a `ReportLayer` with `tracing::subscriber::set_default`, which is thread-local. tracing caches callsite interest and the global max level process-wide, recomputing both from whichever dispatchers are alive the first time a callsite is reached. Tests run in parallel, so a thread with no subscriber can reach a reporting callsite first and pin it to `Interest::never()` for every thread; the capturing test then drains zero events, which looks like the command reporting nothing. The failure is timing-dependent, so it shows up as a platform-specific flake rather than a reproducible failure.
 
 `install_tracing_baseline` (in `symposium-testlib`) installs a permissive global default subscriber once per test process to keep that cache open, and a thread-local `set_default` still takes precedence over it. `setup_fixture` calls it, and so must any helper that installs its own report layer.
+
+## Invalid disable PMs and offline revocation
+
+A qualified `disable` entry naming no effective PM or registry is an error, not
+an empty match. Sync validates it before writing agent files; shared plugin
+activation also stops so hooks and subcommands cannot ignore a typo or renamed
+registry. Workspace plugins use the `local` identity.
+
+Removing an exact stored `use` entry must not depend on its PM being available.
+Check the stored name and optional PM before resolving aliases. A bare entry with
+an explicit `--pm` still needs resolution to establish which grant is being removed.
