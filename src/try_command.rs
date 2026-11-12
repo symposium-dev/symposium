@@ -62,20 +62,20 @@ pub async fn try_plugin(
     }
 
     let entry = UseEntry::Global(name.clone());
-    if plugin.manifest.requires_use && !sym.config.plugins.used.contains(&entry) {
+    let mut global = sym.config.plugins.used.contains(&entry);
+    if plugin.manifest.requires_use && !global {
         sym.config.plugins.used.push(entry);
         sym.save_config().context("failed to write user config")?;
         crate::state::record_trial_use(sym.config_dir(), &name);
+        global = true;
     }
 
     tracing::info!(
-        report = %ReportEvent::PluginTried { name: name.clone() },
+        report = %ReportEvent::PluginTried { name: name.clone(), global },
     );
-    if !plugin.manifest.requires_use {
-        report_gate(sym, cwd, &plugin).await;
-    }
+    let applies_here = global || report_gate(sym, cwd, &plugin).await;
 
-    if sync_here(sym, cwd, update).await? {
+    if sync_here(sym, cwd, update).await? && applies_here {
         report_loaded(sym, cwd, &name, &skill_names(&plugin)).await;
     }
     Ok(())
@@ -266,7 +266,7 @@ fn load_plugin_dir(dir: &Path) -> Result<Plugin> {
         .with_context(|| format!("run `cargo agents plugin validate` on `{}`", dir.display()))
 }
 
-async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) {
+async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) -> bool {
     let name = &plugin.manifest.name;
     let mut deps = std::collections::BTreeSet::new();
     plugin.manifest.predicates.collect_dep_names(&mut deps);
@@ -284,14 +284,16 @@ async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) {
 
     let workspace = sym.workspace(cwd);
     if workspace.root().await.is_none() {
-        return;
+        return false;
     }
     let mut ctx = crate::predicate::PredicateContext::new(workspace.dep_ids().await);
-    if !plugin.applies(&mut ctx) {
+    let applies = plugin.applies(&mut ctx);
+    if !applies {
         warn(format!(
             "`{name}` does not apply in this workspace, so nothing is installed here"
         ));
     }
+    applies
 }
 
 fn user_plugins_dir(sym: &Symposium) -> PathBuf {

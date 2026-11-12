@@ -209,19 +209,67 @@ async fn try_leaves_a_gated_plugin_to_its_gate() {
         &["plugin-try0"],
         async |mut ctx| {
             init(&mut ctx).await?;
+            fake_agent(&ctx, "codex", "[]");
+            fake_agent(&ctx, "copilot", "[]");
 
             let kit = plugin_path(&ctx, "gated-kit");
-            let messages = report_messages(&mut ctx, &["plugin", "try", &kit]).await;
+            let events = report_events(&mut ctx, &["plugin", "try", &kit]).await;
+            let messages = messages(&events);
 
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "plugin_tried" && e["global"] == false),
+                "{events:#?}"
+            );
             for expected in [
                 "`gated-kit` activates only in workspaces that depend on `serde`, as it does for its users",
                 "`gated-kit` does not apply in this workspace, so nothing is installed here",
             ] {
                 assert!(messages.iter().any(|m| m == expected), "{messages:#?}");
             }
+            assert!(!messages.iter().any(|m| m.contains("list")), "{messages:#?}");
             assert!(user_plugins(&ctx).join("gated-kit").is_dir());
             assert!(!config(&ctx).contains("gated-kit"), "{}", config(&ctx));
             assert!(!installed_anywhere(&ctx, &workspace(&ctx), "gated-guidance"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn try_checks_a_gated_plugin_the_user_enabled_everywhere() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            init(&mut ctx).await?;
+            let own = symposium::config::UseEntry::Global("gated-kit".into());
+            ctx.sym.config.plugins.used.push(own);
+            ctx.sym.save_config()?;
+            fake_agent(&ctx, "codex", "[]");
+
+            let kit = plugin_path(&ctx, "gated-kit");
+            let events = report_events(&mut ctx, &["plugin", "try", &kit]).await;
+            let messages = messages(&events);
+
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "plugin_tried" && e["global"] == true),
+                "{events:#?}"
+            );
+            assert!(
+                messages.iter().any(|m| m
+                    == "Codex CLI does not list gated-guidance (checked with `codex debug prompt-input hi`)"),
+                "{messages:#?}"
+            );
+            assert!(
+                !messages.iter().any(|m| m.contains("does not apply")),
+                "{messages:#?}"
+            );
             Ok(())
         },
     )
@@ -535,7 +583,7 @@ fn fake_agent(ctx: &TestContext, program: &str, stdout: &str) {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-async fn report_messages(ctx: &mut TestContext, args: &[&str]) -> Vec<String> {
+async fn report_events(ctx: &mut TestContext, args: &[&str]) -> Vec<serde_json::Value> {
     use symposium::report::{ReportLayer, ReportMode};
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -544,11 +592,18 @@ async fn report_messages(ctx: &mut TestContext, args: &[&str]) -> Vec<String> {
     let guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
     ctx.symposium(args).await.unwrap();
     drop(guard);
-    handle
-        .drain()
+    handle.drain()
+}
+
+fn messages(events: &[serde_json::Value]) -> Vec<String> {
+    events
         .iter()
         .filter_map(|event| event["message"].as_str().map(str::to_string))
         .collect()
+}
+
+async fn report_messages(ctx: &mut TestContext, args: &[&str]) -> Vec<String> {
+    messages(&report_events(ctx, args).await)
 }
 
 #[tokio::test]

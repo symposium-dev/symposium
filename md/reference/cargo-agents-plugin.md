@@ -121,7 +121,7 @@ Install a plugin you are writing in your agents, the way a user would have it, s
 
 The plugin is linked into `~/.symposium/plugins/` under its name, then the current workspace is synced. A plugin that names no dependency is also enabled in every workspace, as [`cargo agents use --global`](./cargo-agents-use.md) would. Symposium reads your directory in place, so an edit reaches your agents on the next sync: `cargo agents sync`, or the automatic one when an agent starts a session. Most agents then need a new session (Claude Code also takes `/reload-plugins`, Copilot CLI `/restart`).
 
-A plugin with its own `depends-on` or predicates is left to them, as it is for its users: it is active only in workspaces where they hold. `try` names the dependency and warns when the current workspace does not have it.
+A plugin with its own `depends-on` or predicates is left to them, as it is for its users: it is active only in workspaces where they hold. `try` names the dependency and, when the current workspace does not have it, warns and skips the check below.
 
 After syncing, `try` asks each configured agent what it loaded, using the agent's own listing command (none of them calls a model), and reports the plugin's skills it does not list:
 
