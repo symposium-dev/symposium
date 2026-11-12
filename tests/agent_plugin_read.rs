@@ -388,11 +388,11 @@ async fn plugin_validate_reports_packages_and_fails_only_on_errors() {
                 exit: 1
                 ⚠️  $CONFIG_DIR/plugins/pdf-tools: unknown field `commands` ignored
                 ⚠️  $CONFIG_DIR/plugins/pdf-tools: MCP server `pdf-socket` skipped: unsupported transport `websocket`
-                  ✅ gated-tools (agent plugin)
+                  ⚠️  gated-tools (agent plugin): `plugin.json` sets no `version`; agents that cache plugins by version, such as Codex, can keep an outdated copy
                   ✅ serde-tables (skill)
                   ⚠️  pdf-tools (agent plugin): plugin `pdf-tools` references no dependency; it stays dormant until enabled with `cargo agents use pdf-tools`
                   ✅ extract-tables (skill)
-                  ✗ <unknown> (plugin): loading agent plugin from `$CONFIG_DIR/plugins/rejected/plugin.json`: invalid `name` `Rejected_Tools`: use 1 to 64 lowercase letters, digits, `-` and `.`, starting and ending with a letter or digit, with no `--` or `..`
+                  ✗ rejected (plugin): loading agent plugin from `$CONFIG_DIR/plugins/rejected/plugin.json`: invalid `name` `Rejected_Tools`: use 1 to 64 lowercase letters, digits, `-` and `.`, starting and ending with a letter or digit, with no `--` or `..`
             "#]].assert_eq(&validate(&ctx, &plugins));
             expect![[r#"
                 exit: 0

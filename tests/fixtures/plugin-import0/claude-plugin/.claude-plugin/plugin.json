@@ -1,0 +1,9 @@
+{
+  "name": "Demo_Tools",
+  "version": "1.2.0",
+  "description": "Demo tools for import tests",
+  "author": { "name": "Demo", "url": "https://example.com", "phone": "1" },
+  "license": "MIT",
+  "keywords": ["demo"],
+  "userConfig": {}
+}

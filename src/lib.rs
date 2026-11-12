@@ -9,6 +9,7 @@ pub mod hook;
 pub mod hook_schema;
 pub(crate) mod installation;
 pub mod output;
+pub mod plugin_import;
 pub mod plugins;
 pub mod pm;
 pub mod report;
@@ -18,6 +19,7 @@ pub mod state;
 pub mod status_command;
 pub mod subcommand_dispatch;
 pub mod telemetry;
+pub mod try_command;
 pub mod use_command;
 pub mod workspace_state;
 

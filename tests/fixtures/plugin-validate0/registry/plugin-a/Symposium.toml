@@ -1,0 +1,5 @@
+name = "plugin-a"
+depends-on = ["serde"]
+
+[[skills]]
+source.path = "skills"

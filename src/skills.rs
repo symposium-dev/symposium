@@ -369,6 +369,7 @@ pub(crate) fn discover_skills(
     let mut skill_files = Vec::new();
     find_skill_files_recursive(skills_dir, &mut skill_files);
     prune_nested_skills(&mut skill_files);
+    skill_files.sort();
 
     skill_files
         .into_iter()
@@ -1211,6 +1212,7 @@ mod tests {
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
+                root: PathBuf::new(),
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1274,6 +1276,7 @@ mod tests {
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
+                root: PathBuf::new(),
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1355,6 +1358,7 @@ mod tests {
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
+                root: PathBuf::new(),
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1441,6 +1445,7 @@ mod tests {
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
+                root: PathBuf::new(),
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1528,6 +1533,7 @@ mod tests {
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
+                root: PathBuf::new(),
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1660,6 +1666,7 @@ mod tests {
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
+                root: PathBuf::new(),
             }],
             warnings: vec![],
             unreadable_registries: vec![],
