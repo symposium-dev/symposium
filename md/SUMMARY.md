@@ -93,6 +93,9 @@
   - [Draft: Evaluating agent tasks with and without Symposium](./rfds/skill-evaluation/README.md)
     - [Reference: evaluating agent tasks](./rfds/skill-evaluation/reference.md)
   - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
+    - [Draft: Plugin discovery, marketplaces, and trust](./rfds/plugin-discovery-marketplaces-trust/README.md)
+      - [Proposed: Discovering and enabling plugins](./rfds/plugin-discovery-marketplaces-trust/proposed-reference.md)
+      - [Appendix: Claude Code and Codex marketplaces](./rfds/plugin-discovery-marketplaces-trust/host-integration.md)
     - [MCP meta-server](./rfds/mcp-meta-server/README.md)
     - [Registry-centric plugin distribution](./rfds/registry-centric-plugins/README.md)
       - [Plugin model](./rfds/registry-centric-plugins/plugin-model/README.md)

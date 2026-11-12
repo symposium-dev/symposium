@@ -20,6 +20,8 @@ The key code paths are in `symposium-pm-cargo` (`CargoPm::load_plugin`, `plugin_
 
 ## Dependency enablement
 
+The flow below describes current behavior. The draft [plugin discovery, marketplaces, and trust RFD](../rfds/plugin-discovery-marketplaces-trust/README.md) proposes separating marketplace availability from enablement, moving predicates to discovery, and replacing implicit registry trust with explicit vouches. It is not implemented by this documentation change.
+
 A dependency's own plugin content — a `Symposium.toml`, `[package.metadata.symposium]`, or a `skills/` directory — is reachable without any manifest pointing at it, but only with the user's consent: dependencies are not a trust root.
 
 1. `discovery::discover` asks the **untrusted** cargo transport for its `active_plugins(dep_ids)`: the plugins embedded in the workspace's dependencies. `CargoPm::active_plugins` inspects each dependency in the source `cargo metadata` already extracted (`WorkspaceCrate::source_dir`), with no probe or network, so registry-dep embedded plugins are discoverable too. The trusted registries (including the recommendations repo) are skipped, because their plugins are trust roots and never need consent. Each candidate is classified against `[plugins]` on its crate name — enabled by `use`, auto-enabled, declined, or an undecided candidate. Nothing is prompted or written.
