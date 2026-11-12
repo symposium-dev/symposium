@@ -1,10 +1,18 @@
 //! Audits: what the community list says about a package's plugin payload.
 //!
-//! The list is the builtin `symposium-audits` git registry, read from its
+//! The list is the builtin `symposium-audits` git repository, read from its
 //! cache directory ([`Symposium::audits_dir`]): one file per package at
 //! `audits/<pm>/<name>.toml`, in the format [`symposium_sdk::audits`]
 //! defines. It is the only place audits are read from. This module is their
-//! only reader: the package managers stay ignorant of audits.
+//! only reader and fetches the list ([`refresh_audits`]): the package
+//! managers stay ignorant of audits.
+//!
+//! The list is **not a registry**. It is no package manager instance and no
+//! trust root: nothing in it loads as a plugin, and a list that was never
+//! fetched, or failed to fetch, is simply no list. Every lookup then answers
+//! "not audited", and nothing else changes: it never counts as an unreadable
+//! source, so it never holds back the cleanup of installed skills or MCP
+//! servers.
 //!
 //! The lookup ([`AuditIndex::lookup`]) gives exactly one [`Answer`]:
 //!
@@ -22,7 +30,7 @@
 //!
 //! Looking up a package reads only its own `audits/<pm>/<name>.toml`, so a
 //! package nobody audited costs one failed `stat`. Reading is cache-only: the
-//! registry is refreshed where every registry is, never here. The payload
+//! list is refreshed where the registries are, never by a lookup. The payload
 //! digest ([`digest`]) is computed only when the file needs it.
 //!
 //! **The client is lenient** where the list's own CI is strict: unknown keys
@@ -40,11 +48,13 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+
 use symposium_install::UpdateLevel;
 use symposium_sdk::audits::{AUDITS_DIR, Digest, FORMAT, RawRevoked, RevokeReason};
 use symposium_sdk::pm::{CARGO_PM, PackageId};
 
-use crate::config::{BUILTIN_AUDITS_REGISTRY, Symposium};
+use crate::config::{BUILTIN_AUDITS_LIST, BUILTIN_AUDITS_URL, REGISTRY_CACHE_SUBDIR, Symposium};
 use crate::pm::PmRegistry;
 
 pub mod digest;
@@ -55,10 +65,10 @@ pub mod digest_command;
 /// oversized file loses its revocations too.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
-/// The audits list, read on demand from the root of the registry holding it.
+/// The audits list, read on demand from the root of the repository holding it.
 #[derive(Debug, Clone, Default)]
 pub struct AuditIndex {
-    /// The registry root; audits live in `<dir>/audits/`. `None` when there
+    /// The list's root; audits live in `<dir>/audits/`. `None` when there
     /// is no list, so every answer is "not audited".
     dir: Option<PathBuf>,
 }
@@ -86,22 +96,22 @@ impl std::fmt::Display for Revocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "revoked by registry `{BUILTIN_AUDITS_REGISTRY}`: it {}",
+            "revoked by the `{BUILTIN_AUDITS_LIST}` list: it {}",
             self.reason.sentence()
         )
     }
 }
 
 impl AuditIndex {
-    /// The list kept in the registry rooted at `dir`.
+    /// The list kept in the repository rooted at `dir`.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: Some(dir.into()),
         }
     }
 
-    /// The configured list: the builtin `symposium-audits` registry's cache,
-    /// or no list while that registry is off.
+    /// The configured list: the builtin `symposium-audits` list's cache, or
+    /// no list while it is off.
     pub fn configured(sym: &Symposium) -> Self {
         Self {
             dir: sym.audits_dir(),
@@ -221,6 +231,63 @@ fn exact_release(id: &PackageId) -> PackageId {
         Ok(version) => PackageId::new(&id.pm, &id.name, format!("={version}")),
         Err(_) => id.clone(),
     }
+}
+
+/// Fetch or refresh the builtin list into its cache at `update`, as a git
+/// registry is refreshed: `None` checks for changes at most once a minute,
+/// `Check` always checks, `Fetch` downloads again. `Ok(false)` while the list
+/// is off, or while a failed first fetch is waiting out its retry interval.
+///
+/// A failure leaves the cache as it was, so a list fetched before keeps
+/// answering, and one never fetched answers "not audited". The git cache
+/// debounces a list it holds; one it does not hold has nothing to debounce
+/// on, so a failed first fetch is recorded beside the cache and, under
+/// `None`, retried at most once per [`DEBOUNCE_DURATION`]: offline, every hook
+/// event would otherwise try the network again.
+///
+/// [`DEBOUNCE_DURATION`]: symposium_install::git::DEBOUNCE_DURATION
+pub async fn refresh_audits(sym: &Symposium, update: UpdateLevel) -> Result<bool> {
+    let Some(dir) = sym.audits_dir() else {
+        return Ok(false);
+    };
+    let failed_marker = failed_fetch_marker(&dir);
+    if matches!(update, UpdateLevel::None) && !dir.exists() && failed_recently(&failed_marker) {
+        tracing::debug!("audits list: a recent fetch failed, not retrying yet");
+        return Ok(false);
+    }
+    let fetched =
+        symposium_install::git::GitCacheManager::new(&sym.install_context(), REGISTRY_CACHE_SUBDIR)
+            .fetch_url(BUILTIN_AUDITS_URL, update)
+            .await;
+    match fetched {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&failed_marker);
+            Ok(true)
+        }
+        Err(e) => {
+            if !dir.exists() {
+                let _ = std::fs::write(&failed_marker, "");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// The file recording that fetching the list into `dir` failed: a sibling of
+/// the cache directory, so the cache itself is never half there.
+fn failed_fetch_marker(dir: &Path) -> PathBuf {
+    let mut name = dir.file_name().unwrap_or_default().to_os_string();
+    name.push(".fetch-failed");
+    dir.with_file_name(name)
+}
+
+/// Whether the marker was written within the git cache's debounce interval.
+fn failed_recently(marker: &Path) -> bool {
+    std::fs::metadata(marker)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|at| at.elapsed().ok())
+        .is_some_and(|age| age < symposium_install::git::DEBOUNCE_DURATION)
 }
 
 /// What the list says about one package.

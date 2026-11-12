@@ -105,12 +105,12 @@ enabled = true
 
 ## `[defaults]`
 
-Controls the three built-in registries. All are enabled by default except `symposium-audits`.
+Controls the built-in sources: two registries and the audits list. All are enabled by default except `symposium-audits`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
-| `symposium-audits` | bool | `false` | Fetch the community [audits](./audits.md) list from the [symposium-dev/audits](https://github.com/symposium-dev/audits) repository: which dependency plugin payloads were audited, and which releases are revoked and never load. It offers no plugins, and is fetched, refreshed and reported on like the recommendations registry, including when it cannot be reached. Off until the community list exists; set it to `true` to turn it on. |
+| `symposium-audits` | bool | `false` | Fetch the community [audits](./audits.md) list from the [symposium-dev/audits](https://github.com/symposium-dev/audits) repository: which dependency plugin payloads were audited, and which releases are revoked and never load. It is not a registry: nothing in it loads as a plugin. It is refreshed alongside the git registries, and a list that cannot be fetched only means every lookup answers "not audited"; it never holds back cleanup the way an unreachable registry does. Off until the community list exists; set it to `true` to turn it on. |
 | `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
 
 ## `[[registry]]`

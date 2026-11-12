@@ -376,8 +376,10 @@ impl RawConfig {
         if self.defaults.symposium_recommendations {
             builtin_registries.push("symposium-recommendations");
         }
+        // Not a registry, but its name is in the revocation reports, so a
+        // package manager of that name would read as the list's issuer.
         if self.defaults.symposium_audits {
-            builtin_registries.push(BUILTIN_AUDITS_REGISTRY);
+            builtin_registries.push(BUILTIN_AUDITS_LIST);
         }
         if self.defaults.user_plugins {
             builtin_registries.push("user-plugins");
@@ -499,11 +501,12 @@ pub const INSTALLED_PLUGINS_SUBDIR: &str = "installed";
 
 const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
 
-const BUILTIN_AUDITS_URL: &str = "https://github.com/symposium-dev/audits";
+pub(crate) const BUILTIN_AUDITS_URL: &str = "https://github.com/symposium-dev/audits";
 
-/// The builtin registry that holds the community audits list, the only place
-/// [audits](crate::audits) are read from.
-pub const BUILTIN_AUDITS_REGISTRY: &str = "symposium-audits";
+/// The name of the builtin community audits list, the only place
+/// [audits](crate::audits) are read from. It is a git repository read from
+/// its cache, not a registry: see [`Symposium::audits_dir`].
+pub const BUILTIN_AUDITS_LIST: &str = "symposium-audits";
 
 /// Full application context: parsed config + resolved directory paths.
 ///
@@ -791,13 +794,14 @@ impl Symposium {
     }
 
     /// The registry package-manager instances, in effect order: the builtin
-    /// recommendations repo, the builtin audits repo, the builtin
-    /// `user-plugins` directory, then the configured `[[registry]]` entries.
-    /// Each is a trust root — a git entry is a [`GitPm`](crate::pm::GitPm), a
-    /// path entry a [`PathPm`](crate::pm::PathPm) — so refreshing (pulling git
-    /// content) is the PM's own concern rather than a separate step. A registry
-    /// whose source can't be resolved (a malformed git URL, or an entry naming
-    /// neither `git` nor `path`) is skipped with a warning.
+    /// recommendations repo, the builtin `user-plugins` directory, then the
+    /// configured `[[registry]]` entries. Each is a trust root — a git entry is
+    /// a [`GitPm`](crate::pm::GitPm), a path entry a [`PathPm`](crate::pm::PathPm)
+    /// — so refreshing (pulling git content) is the PM's own concern rather than
+    /// a separate step. A registry whose source can't be resolved (a malformed
+    /// git URL, or an entry naming neither `git` nor `path`) is skipped with a
+    /// warning. The builtin audits list is not among them: it is no trust root
+    /// and offers no plugins (see [`Symposium::audits_dir`]).
     pub fn registry_instances(&self) -> Vec<crate::pm::PmInstance> {
         let mut configs: Vec<RegistryConfig> = Vec::new();
 
@@ -805,18 +809,6 @@ impl Symposium {
             configs.push(RegistryConfig {
                 name: "symposium-recommendations".to_string(),
                 git: Some(BUILTIN_RECOMMENDATIONS_URL.to_string()),
-                path: None,
-                auto_update: true,
-            });
-        }
-
-        // An ordinary git registry whose only content is `audits/`: it offers
-        // no plugins, and is fetched, refreshed and reported on exactly like
-        // the recommendations repo, unreachable included.
-        if self.config.defaults.symposium_audits {
-            configs.push(RegistryConfig {
-                name: BUILTIN_AUDITS_REGISTRY.to_string(),
-                git: Some(BUILTIN_AUDITS_URL.to_string()),
                 path: None,
                 auto_update: true,
             });
@@ -876,9 +868,13 @@ impl Symposium {
         Some(instance)
     }
 
-    /// Where the builtin `symposium-audits` registry is cached, whether or not
-    /// it has been fetched: the one directory [audits](crate::audits) are read
-    /// from. `None` while that registry is off.
+    /// Where the builtin `symposium-audits` list is cached, whether or not it
+    /// has been fetched: the one directory [audits](crate::audits) are read
+    /// from. `None` while the list is off. The list shares the git registries'
+    /// cache, but it is no registry: nothing in it loads as a plugin, and a
+    /// list that was never fetched is no list (every lookup answers "not
+    /// audited"), not an unreadable source. [`crate::audits::refresh_audits`]
+    /// fetches it.
     pub fn audits_dir(&self) -> Option<PathBuf> {
         if !self.config.defaults.symposium_audits {
             return None;
@@ -1014,11 +1010,11 @@ mod tests {
         assert!(config.defaults.user_plugins);
     }
 
-    /// The audits repo is a builtin git registry beside the recommendations
-    /// one, and the one place audits are read from. It is off until the
-    /// community list exists, and turns on by name.
+    /// The audits list is the one place audits are read from. It is off until
+    /// the community list exists, and turns on by name; on or off, it is no
+    /// registry instance.
     #[test]
-    fn builtin_audits_registry_follows_its_default() {
+    fn builtin_audits_list_follows_its_default_and_is_no_registry() {
         let sym = |config: &str| {
             let tmp = tempfile::tempdir().unwrap();
             std::fs::write(tmp.path().join("config.toml"), config).unwrap();
@@ -1034,10 +1030,7 @@ mod tests {
         assert_eq!(names(&off), ["symposium-recommendations"]);
         assert_eq!(off.audits_dir(), None);
         let (on, _tmp) = sym("[defaults]\nsymposium-audits = true\n");
-        assert_eq!(
-            names(&on),
-            ["symposium-recommendations", BUILTIN_AUDITS_REGISTRY]
-        );
+        assert_eq!(names(&on), ["symposium-recommendations"]);
         assert!(on.audits_dir().unwrap().starts_with(on.cache_dir()));
     }
 

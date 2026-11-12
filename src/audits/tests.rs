@@ -398,3 +398,41 @@ async fn answer_skips_the_digest_when_nothing_could_match_it() {
         Answer::Revoked(_)
     ));
 }
+
+/// A failed first fetch of the list is not retried under `UpdateLevel::None`
+/// within the git cache's debounce interval: the marker it leaves makes the
+/// refresh return at once, without the network. An older marker, or a list
+/// that is off, does not.
+#[tokio::test]
+async fn a_failed_first_fetch_is_retried_at_most_once_a_minute() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("config.toml"), "").unwrap();
+    let off = Symposium::from_dir(tmp.path());
+    assert!(!refresh_audits(&off, UpdateLevel::None).await.unwrap());
+
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        "[defaults]\nsymposium-audits = true\n",
+    )
+    .unwrap();
+    let sym = Symposium::from_dir(tmp.path());
+    let dir = sym.audits_dir().unwrap();
+    let marker = failed_fetch_marker(&dir);
+    assert_eq!(marker.parent(), dir.parent());
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, "").unwrap();
+    assert!(failed_recently(&marker));
+    assert!(!refresh_audits(&sym, UpdateLevel::None).await.unwrap());
+    assert!(!dir.exists());
+
+    let stale = std::time::SystemTime::now()
+        - symposium_install::git::DEBOUNCE_DURATION
+        - std::time::Duration::from_secs(1);
+    std::fs::File::options()
+        .write(true)
+        .open(&marker)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+    assert!(!failed_recently(&marker));
+}

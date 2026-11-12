@@ -16,7 +16,7 @@ cargo agents plugin <SUBCOMMAND>
 cargo agents plugin sync [PROVIDER]
 ```
 
-Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`.
+Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`. The [audits list](./audits.md#where-audits-come-from), when it is on, is synced with them, or alone as `symposium-audits`.
 
 ### `cargo agents plugin list`
 

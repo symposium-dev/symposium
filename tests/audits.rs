@@ -131,7 +131,7 @@ async fn assert_revoked_under_every_grant(audits: impl Fn(&str) -> String) {
                     .unwrap_or_else(|| panic!("{grant_name}: no reason in {events:?}"));
                 assert_eq!(
                     reason,
-                    "revoked by registry `symposium-audits`: it tells the agent to fetch and run remote code",
+                    "revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code",
                 );
             }
 
@@ -320,10 +320,7 @@ async fn a_revocation_removes_installed_skills_even_when_a_registry_is_unreadabl
                 "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"remote-exec\"\n",
             );
             if break_registry {
-                // A manifest at the audits registry's root: its entries
-                // cannot be listed, so the sync skips cleanup. Its audits
-                // still count.
-                std::fs::write(ctx.sym.audits_dir().unwrap().join("Symposium.toml"), "")?;
+                add_unreadable_registry(&mut ctx);
             }
             // A managed skill nothing installs this run, as if its registry
             // were the unreadable one: only a full cleanup may remove it.
@@ -489,16 +486,17 @@ async fn a_revocation_unregisters_the_crates_mcp_servers_at_user_scope() {
     }
 }
 
-/// The builtin `symposium-audits` registry, never fetched (offline, or the
-/// repository unreachable), degrades exactly like the builtin recommendations
-/// registry: the same warning and the same unreadable mark, nothing more, and
-/// every lookup is "not audited".
+/// The builtin `symposium-audits` list, never fetched (offline, or the
+/// repository unreachable), is no list: every lookup is "not audited", and it
+/// is neither a registry nor an unreadable source, so loading reports
+/// nothing and a sync still cleans up.
 #[tokio::test]
-async fn an_unfetched_audits_registry_degrades_like_the_recommendations_one() {
+async fn an_unfetched_list_answers_not_audited_and_does_not_hold_back_cleanup() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("config.toml"),
-        "[defaults]\nuser-plugins = false\nsymposium-audits = true\n",
+        "[defaults]\nuser-plugins = false\nsymposium-recommendations = false\n\
+         symposium-audits = true\n",
     )
     .unwrap();
     let sym = Symposium::from_dir(tmp.path());
@@ -510,21 +508,8 @@ async fn an_unfetched_audits_registry_degrades_like_the_recommendations_one() {
     .await;
     let registry = registry.unwrap();
     assert!(registry.plugins.is_empty());
-    assert_eq!(
-        registry.unreadable_registries,
-        ["symposium-recommendations", "symposium-audits"]
-    );
-    let warnings: Vec<String> = events
-        .iter()
-        .filter(|e| e["kind"] == "warning")
-        .map(|e| e["message"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(warnings.len(), 2, "{events:?}");
-    assert_eq!(
-        warnings[1],
-        warnings[0].replace("symposium-recommendations", "symposium-audits"),
-        "the same report for both"
-    );
+    assert!(registry.unreadable_registries.is_empty());
+    assert!(!events.iter().any(|e| e["kind"] == "warning"), "{events:?}");
 
     let digest = "sha256:".to_string() + &"a".repeat(64);
     assert_eq!(
@@ -536,6 +521,64 @@ async fn an_unfetched_audits_registry_degrades_like_the_recommendations_one() {
         ),
         Answer::NotAudited
     );
+
+    // `audits0` turns the list on and never fetches it: a sync still removes
+    // a managed skill nothing installs.
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+        assert!(!ctx.sym.audits_dir().unwrap().exists());
+        let stale = ctx
+            .workspace_root
+            .clone()
+            .unwrap()
+            .join(".claude/skills/stale");
+        std::fs::create_dir_all(&stale)?;
+        std::fs::write(stale.join(".symposium"), "")?;
+        std::fs::write(stale.join("SKILL.md"), "---\nname: stale\n---\n")?;
+        ctx.symposium(&["sync"]).await?;
+        assert!(!stale.exists());
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// Content in the list is never loaded as a plugin: a manifest or a skill in
+/// the repository is not an entry of any registry, does not make anything
+/// unreadable, and installs nothing. Its audits still count.
+#[tokio::test]
+async fn content_in_the_list_is_never_loaded_as_a_plugin() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+        let skills = skill_dirs(&ctx);
+        ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+        write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"remote-exec\"\n",
+        );
+        let list = ctx.sym.audits_dir().unwrap();
+        std::fs::write(
+            list.join("Symposium.toml"),
+            "name = \"stray\"\ndepends-on = [\"*\"]\n",
+        )?;
+        let stray = list.join("skills/stray-skill");
+        std::fs::create_dir_all(&stray)?;
+        std::fs::write(
+            stray.join("SKILL.md"),
+            "---\nname: stray-skill\ndescription: stray\ndepends-on: \"*\"\n---\n",
+        )?;
+
+        let registry = symposium::plugins::load_registry(&ctx.sym).await;
+        assert!(registry.plugins.is_empty(), "{:?}", registry.plugins);
+        assert!(registry.unreadable_registries.is_empty());
+        ctx.symposium(&["sync"]).await?;
+        assert!(installed(&skills, "stray-skill").is_empty());
+        assert!(installed(&skills, "d-guidance").is_empty());
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
 
 /// `plugin digest` prints the library's digest for a directory, a crate name

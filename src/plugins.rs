@@ -851,6 +851,10 @@ pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
             tracing::warn!(registry = %inst.name, error = %e, "failed to refresh registry");
         }
     }
+    // The audits list is no registry, but it is refreshed alongside them.
+    if let Err(e) = crate::audits::refresh_audits(sym, update).await {
+        tracing::warn!(error = %e, "failed to refresh the audits list");
+    }
 }
 
 /// Refresh registry content.
@@ -880,6 +884,20 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
             }
             Ok(false) => {}
             Err(e) => tracing::warn!(registry = %inst.name, error = %e, "failed to sync"),
+        }
+    }
+
+    // The audits list is no registry, but `plugin sync` refreshes it too, by
+    // its name or with everything else.
+    let audits = crate::config::BUILTIN_AUDITS_LIST;
+    if provider.is_none_or(|name| name == audits) {
+        match crate::audits::refresh_audits(sym, UpdateLevel::Fetch).await {
+            Ok(true) => {
+                tracing::info!(list = audits, "synced");
+                synced.push(audits.to_string());
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(list = audits, error = %e, "failed to sync"),
         }
     }
 
