@@ -42,6 +42,14 @@ Symposium converts the hook's output back to the current agent's wire format bef
 - Native format matching the host agent: pass through directly. A native Claude `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as Claude Code does.
 - Symposium format → convert to host agent's wire format.
 
+## Time limits and cancellation
+
+A hook runs inside the single `cargo agents hook` call the agent is waiting for, so every plugin hook of one event shares an 8-second budget, and each one gets at most 5 seconds of it (see [the hook flow](./hook-flow.md)). The budget covers preparing the hook's command too: acquiring its source and running its `install_commands`. A `cargo binstall` or `cargo install` that acquisition started, and the `git ls-remote` that checks a git source, is killed with everything it started when acquisition stops at the deadline, so no installer keeps running, or keeps symposium from exiting, after the hook is skipped.
+
+Stopping a hook has to stop everything it started, or a timed-out hook keeps changing the workspace after the agent has moved on, and a child holding symposium's stderr keeps the agent waiting. So on Unix each hook, and each `install_commands` entry run during dispatch, gets its own process group, and a timeout kills the whole group; on Windows, `taskkill /T` kills the process tree. `symposium_install::process_tree` holds both. Outside hook dispatch (subcommands, `sync`, the `SessionStart` prewarm), `install_commands` and the installers acquisition starts stay in symposium's group (`InstallContext::in_foreground`), so Ctrl-C and terminal prompts still reach them. The `git ls-remote` probe never prompts (`GIT_TERMINAL_PROMPT=0`), since a prompt from a group of its own would stop it instead.
+
+A hook that exits on its own is done: background jobs it leaves running are not killed or waited for.
+
 ## Alternatives considered
 
 ### Registering agent-specific hooks directly

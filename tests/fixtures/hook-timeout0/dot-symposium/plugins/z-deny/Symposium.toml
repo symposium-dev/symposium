@@ -1,0 +1,9 @@
+name = "z-deny"
+depends-on = ["*"]
+
+[[hooks]]
+name = "deny"
+event = "PreToolUse"
+matcher = "^DenyProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/z-deny/scripts/deny.sh" }

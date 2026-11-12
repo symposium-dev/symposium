@@ -29,3 +29,10 @@ name = "block-prompt"
 event = "UserPromptSubmit"
 format = "symposium"
 command = { script = "$TEST_DIR/dot-symposium/plugins/decisions/scripts/block.sh" }
+
+[[hooks]]
+name = "deny-then-fail"
+event = "PreToolUse"
+matcher = "^DenyExitOneProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/decisions/scripts/deny-exit-1.sh" }
