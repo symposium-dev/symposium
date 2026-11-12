@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use crate::config::Symposium;
 use crate::crate_command::{self, DispatchResult};
@@ -26,8 +26,7 @@ use crate::use_command;
 /// Parsed CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
-    name = "cargo-agents",
-    bin_name = "cargo agents",
+    name = "symposium",
     version,
     about = "AI the Rust Way",
     allow_external_subcommands = true,
@@ -160,6 +159,34 @@ pub enum TelemetryCommand {
         #[arg(long, default_value_t = 50)]
         count: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binary {
+    Symposium,
+    CargoAgents,
+}
+
+impl Binary {
+    pub fn name(self) -> &'static str {
+        match self {
+            Binary::Symposium => "symposium",
+            Binary::CargoAgents => "cargo agents",
+        }
+    }
+
+    pub fn command(self) -> clap::Command {
+        Cli::command().bin_name(self.name())
+    }
+
+    pub fn parse<I, T>(self, args: I) -> Result<Cli, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let mut matches = self.command().try_get_matches_from(args)?;
+        Cli::from_arg_matches_mut(&mut matches).map_err(|err| err.format(&mut self.command()))
+    }
 }
 
 /// Audience section a built-in subcommand belongs to in `--help`.

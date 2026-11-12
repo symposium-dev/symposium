@@ -1,0 +1,352 @@
+use std::env;
+use std::ffi::OsString;
+use std::process::ExitCode;
+
+use crate::cli::{Binary, Commands, PluginCommand};
+use crate::config;
+use crate::help_render;
+use crate::hook;
+use crate::output::Output;
+use crate::plugins;
+use crate::report;
+use crate::self_update;
+use crate::state;
+use crate::subcommand_dispatch::dispatch_external;
+
+pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
+    let mut sym = config::Symposium::from_environment();
+
+    let cwd = env::current_dir().expect("failed to get current directory");
+
+    // Parse without exiting on error: a help request on a built-in with required args
+    // (`crate-info --help`, `plugin --help`) surfaces a parse error that `help_text` recovers.
+    // `args_str` feeds the subcommand-name walk.
+    let args_str = args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let parse = binary.parse(args);
+
+    // `--help` / `-h` / `help` / no subcommand -> audience-grouped top-level help (or clap's
+    // per-command help for `<built-in> --help`).
+    // Plugin `<name> --help` returns `None` here and is forwarded to the child by dispatch below.
+    if let Some(text) = help_render::help_text(binary, parse.as_ref(), &args_str, &sym, &cwd).await
+    {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+
+    let cli = match parse {
+        Ok(cli) => cli,
+        Err(err) => err.exit(),
+    };
+
+    let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
+
+    // Install the report layer. Mode determines output format:
+    // --json -> accumulate JSON array; -v -> stderr trace; default -> stdout.
+    let (mode, level) = if cli.json {
+        let level = if cli.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        };
+        (report::ReportMode::Json, level)
+    } else if cli.verbose {
+        (report::ReportMode::Verbose, tracing::Level::DEBUG)
+    } else {
+        (report::ReportMode::Normal, tracing::Level::INFO)
+    };
+    let (report_layer, report_handle) = report::ReportLayer::new(mode, level);
+    // A hook's stdout is the agent's protocol: any report line ahead of the
+    // JSON makes the agent discard the whole output. The events still reach
+    // the log file; `-v` prints them to stderr when debugging a hook by hand.
+    let report_layer = (!is_hook || cli.verbose).then_some(report_layer);
+    sym.init_logging(report_layer);
+
+    // Log the command being invoked
+    match &cli.command {
+        Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
+        Some(Commands::Sync) => tracing::info!("cargo agents sync"),
+        Some(Commands::Search { query }) => tracing::info!(%query, "cargo agents search"),
+        Some(Commands::Use {
+            name,
+            global,
+            remove,
+        }) => tracing::info!(%name, global, remove, "cargo agents use"),
+        Some(Commands::Status) => tracing::info!("cargo agents status"),
+        Some(Commands::Plugin { command }) => {
+            tracing::info!(subcommand = ?command, "cargo agents plugin");
+        }
+        Some(Commands::Hook { agent, event }) => {
+            tracing::debug!(?agent, ?event, "cargo agents hook");
+        }
+        Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
+        Some(Commands::CrateInfo { name, version }) => {
+            tracing::debug!(%name, version = ?version, "cargo agents crate-info");
+        }
+        Some(Commands::Telemetry { command }) => {
+            tracing::info!(subcommand = ?command, "cargo agents telemetry");
+        }
+        Some(Commands::External(argv)) => {
+            tracing::info!(argv = ?argv, "cargo agents <external>");
+        }
+        None => {}
+    }
+
+    // Stamp state.toml with the running binary version (silently updates on mismatch).
+    state::ensure_current(sym.config_dir());
+
+    // Hook commands are quiet by default (they're invoked by the agent, not the user).
+    // JSON mode also suppresses human output (only JSON goes to stdout).
+    let out = if cli.quiet || is_hook || cli.json {
+        Output::quiet()
+    } else {
+        Output::normal()
+    };
+
+    // Ensure git-based plugin sources are up to date (non-blocking on failure).
+    // SessionStart runs once per session, so we force a real freshness check
+    // there; other invocations use the `--update` level (debounced by default).
+    let source_update = match &cli.command {
+        Some(Commands::Hook { event, .. }) if *event == hook::HookEvent::SessionStart => {
+            symposium_install::UpdateLevel::Check
+        }
+        _ => cli.update,
+    };
+    plugins::ensure_registries(&sym, source_update).await;
+
+    // Auto-update = "on": check for updates and re-exec if a new binary was
+    // installed.  Skipped for self-update (which always checks explicitly)
+    // and for hooks (session-start injects the warn nudge into hook output;
+    // the "on" re-exec for hooks is handled here).
+    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook {
+        if self_update::maybe_check_for_update(&sym, &out).await {
+            self_update::re_exec();
+        }
+    } else if is_hook
+        && sym.config.auto_update == config::AutoUpdate::On
+        && self_update::maybe_check_for_update(&sym, &Output::quiet()).await
+    {
+        self_update::re_exec();
+    }
+
+    match cli.command {
+        // Commands that need direct I/O (stdin/stdout) stay in the binary
+        Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
+
+        Some(Commands::Plugin { command }) => {
+            let code = handle_plugin_command(&sym, command).await;
+            let events = report_handle.drain();
+            if !events.is_empty() {
+                println!("{}", serde_json::to_string_pretty(&events).unwrap());
+            }
+            code
+        }
+
+        Some(Commands::External(argv)) => match dispatch_external(&sym, &cwd, argv).await {
+            Ok(result) => {
+                use std::io::Write;
+                std::io::stdout().write_all(&result.stdout).ok();
+                std::io::stderr().write_all(&result.stderr).ok();
+                ExitCode::from(result.exit_code)
+            }
+            Err(err) => {
+                eprintln!("Error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        // No-subcommand and the `help` keyword are handled by the help branch
+        // right after parsing, above.
+        None => unreachable!("no-subcommand routes to the help renderer above"),
+
+        // Everything else delegates to the library
+        Some(cmd) => match crate::cli::run(&mut sym, cmd, &cwd, &out, cli.update).await {
+            Ok(()) => {
+                let events = report_handle.drain();
+                if !events.is_empty() {
+                    println!("{}", serde_json::to_string_pretty(&events).unwrap());
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("Error: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) -> ExitCode {
+    match command {
+        PluginCommand::Sync { provider } => {
+            match plugins::sync_registries(sym, provider.as_deref()).await {
+                Ok(synced) => {
+                    if synced.is_empty() {
+                        if let Some(ref p) = provider {
+                            println!("No git source found for provider: {p}");
+                        } else {
+                            println!("No git sources to sync.");
+                        }
+                    } else {
+                        for name in &synced {
+                            println!("Synced: {name}");
+                        }
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Sync failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        PluginCommand::List => {
+            let providers = plugins::list_plugins(sym).await;
+            for provider in &providers {
+                tracing::info!(
+                    report = %report::ReportEvent::ProviderListed {
+                        name: provider.name.clone(),
+                        source_type: provider.source_type.to_string(),
+                        url: provider.git_url.clone(),
+                        path: provider.path.clone(),
+                        plugins: provider.plugins.iter().map(|p| p.name.clone()).collect(),
+                    },
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        PluginCommand::Validate {
+            path,
+            no_check_crates,
+        } => {
+            if path.is_dir() {
+                let mut errors = 0;
+
+                match plugins::validate_source_dir(&path) {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            eprintln!("No plugins or skills found in {}", path.display());
+                            return ExitCode::FAILURE;
+                        }
+                        for r in &results {
+                            errors += emit_validation_results(r);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("✗ {}: {e}", path.display());
+                        return ExitCode::FAILURE;
+                    }
+                }
+
+                if !no_check_crates {
+                    match plugins::collect_crate_names_in_source_dir(&path) {
+                        Ok(crate_names) => {
+                            for name in &crate_names {
+                                let exists = plugins::check_crate_exists(name).await;
+                                tracing::info!(
+                                    report = %report::ReportEvent::Validated {
+                                        path: name.clone(),
+                                        item_kind: "crate".into(),
+                                        valid: exists,
+                                        error: if exists { None } else { Some("not found on crates.io".into()) },
+                                        warning: None,
+                                    },
+                                );
+                                if !exists {
+                                    errors += 1;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::info!(
+                                report = %report::ReportEvent::Validated {
+                                    path: path.display().to_string(),
+                                    item_kind: "crate-check".into(),
+                                    valid: false,
+                                    error: Some(format!("failed to collect crate names: {e}")),
+                                    warning: None,
+                                },
+                            );
+                            errors += 1;
+                        }
+                    }
+                }
+
+                if errors > 0 {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                }
+            } else {
+                let parent = path.parent().unwrap_or(&path);
+                match plugins::load_plugin(&path, "", parent) {
+                    Ok(_) => {
+                        // `path` is the manifest file being validated.
+                        println!("{}", tokio::fs::read_to_string(&path).await.unwrap());
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("{}: {e:#}", path.display());
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+        }
+        PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin).await {
+            // A plugin is identified by its id; render its effective (resolved)
+            // configuration rather than re-reading a manifest file.
+            Some(p) => {
+                println!("# {}", p.canonical);
+                match toml::to_string_pretty(&p.manifest) {
+                    Ok(rendered) => {
+                        println!();
+                        print!("{rendered}");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("cannot render `{}`: {e}", p.canonical);
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+            None => {
+                eprintln!("Plugin not found: {plugin}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+fn emit_validation_results(r: &plugins::ValidationResult) -> usize {
+    let mut errors = 0;
+    match &r.result {
+        Ok(()) => {
+            tracing::info!(
+                report = %report::ReportEvent::Validated {
+                    path: r.id.clone(),
+                    item_kind: r.kind.to_string(),
+                    valid: true,
+                    error: None,
+                    warning: r.warning.clone(),
+                },
+            );
+        }
+        Err(e) => {
+            tracing::info!(
+                report = %report::ReportEvent::Validated {
+                    path: r.id.clone(),
+                    item_kind: r.kind.to_string(),
+                    valid: false,
+                    error: Some(format!("{e:#}")),
+                    warning: None,
+                },
+            );
+            errors += 1;
+        }
+    }
+    for child in &r.children {
+        errors += emit_validation_results(child);
+    }
+    errors
+}
