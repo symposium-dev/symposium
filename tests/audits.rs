@@ -433,6 +433,62 @@ async fn retiring_a_revoked_crate_runs_none_of_its_predicates() {
     }
 }
 
+/// A revoked crate's MCP server comes off at user scope (the default hook
+/// scope), from the agent's file and from the ledger, with or without a full
+/// cleanup, and an entry the user wrote is left alone.
+#[tokio::test]
+async fn a_revocation_unregisters_the_crates_mcp_servers_at_user_scope() {
+    for break_registry in [false, true] {
+        with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude", "--hook-scope", "global"])
+                .await?;
+            std::fs::write(
+                crate_d(&ctx).join("Symposium.toml"),
+                "[[mcp_servers]]\nname = \"d-server\"\ncommand = \"/usr/bin/true\"\n\
+                 args = []\nenv = []\n",
+            )?;
+            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            ctx.symposium(&["sync"]).await?;
+
+            let file = ctx.sym.home_dir().join(".claude.json");
+            let read = |file: &Path| -> serde_json::Value {
+                serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
+            };
+            let ledger = |sym: &Symposium| {
+                symposium::state::mcp_registrations(sym.config_dir())
+                    .into_iter()
+                    .filter(|r| r.name == "d-server")
+                    .count()
+            };
+            let mut config = read(&file);
+            assert!(config["mcpServers"]["d-server"].is_object(), "{config}");
+            assert_eq!(ledger(&ctx.sym), 1);
+            config["mcpServers"]["mine"] = serde_json::json!({ "command": "/home/me/mine" });
+            std::fs::write(&file, config.to_string())?;
+
+            write_audits(
+                &mut ctx.sym,
+                "crate-d",
+                "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"remote-exec\"\n",
+            );
+            if break_registry {
+                add_unreadable_registry(&mut ctx);
+            }
+            ctx.symposium(&["sync"]).await?;
+            let config = read(&file);
+            assert!(
+                config["mcpServers"].get("d-server").is_none(),
+                "broken registry: {break_registry}: {config}"
+            );
+            assert!(config["mcpServers"]["mine"].is_object(), "{config}");
+            assert_eq!(ledger(&ctx.sym), 0, "broken registry: {break_registry}");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+}
+
 /// The builtin `symposium-audits` registry, never fetched (offline, or the
 /// repository unreachable), degrades exactly like the builtin recommendations
 /// registry: the same warning and the same unreadable mark, nothing more, and

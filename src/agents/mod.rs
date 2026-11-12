@@ -9,6 +9,8 @@ mod plugin_registration;
 
 pub(crate) use plugin_registration::sync_marketplace_index;
 
+pub(crate) use mcp_server_registration::server_name as mcp_server_name;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

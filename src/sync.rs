@@ -842,6 +842,30 @@ pub async fn sync(
         }
     }
 
+    // A revoked package's MCP servers come off wherever Symposium registered
+    // them: every agent, every file in the ledger (user scope included, the
+    // default), even while the cleanup below is held back. The names come
+    // from its manifest, with no predicate evaluated; a name an active plugin
+    // still declares stays, since the entry may now be that plugin's.
+    let still_declared: BTreeSet<&str> = active
+        .iter()
+        .flat_map(|p| p.manifest.mcp_servers.iter())
+        .map(|s| crate::agents::mcp_server_name(&s.server))
+        .collect();
+    let revoked_mcp: BTreeSet<&str> = revoked
+        .iter()
+        .flat_map(|p| p.manifest.mcp_servers.iter())
+        .map(|s| crate::agents::mcp_server_name(&s.server))
+        .filter(|name| !still_declared.contains(name))
+        .collect();
+    if !revoked_mcp.is_empty() {
+        unregister_recorded_mcp_servers(
+            sym,
+            |_, registration| revoked_mcp.contains(registration.name.as_str()),
+            out,
+        );
+    }
+
     // Stale-skill cleanup: scan every agent's skills parent directory (across
     // all known agents, so we also clean up after agents removed from config)
     // and remove subdirs containing the marker that we didn't just install.

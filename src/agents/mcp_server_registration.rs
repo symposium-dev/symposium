@@ -24,7 +24,7 @@ use super::{load_json_or_empty, save_json};
 // ---------------------------------------------------------------------------
 
 /// Extract the name from any McpServer variant.
-fn server_name(server: &McpServer) -> &str {
+pub(crate) fn server_name(server: &McpServer) -> &str {
     match server {
         McpServer::Stdio(s) => &s.name,
         McpServer::Http(s) => &s.name,
