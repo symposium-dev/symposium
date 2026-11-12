@@ -40,7 +40,8 @@
 //! A payload that cannot be pinned gets [`Ineligible`], not a digest, and the
 //! caller falls back to asking: a `source.git` skill group (what it fetches
 //! can change under the same crate release), a skill path that leaves the
-//! crate, a broken symlink, a directory loop or an unreadable directory
+//! crate or any skill file reached through a link that leaves it, a broken
+//! symlink, a directory loop or an unreadable directory
 //! anywhere under a skill group directory (not only inside a skill directory:
 //! the whole group is walked to find its skills, and any of these could hide
 //! one), an entry in a skill directory that is neither file nor directory, or
@@ -86,7 +87,8 @@ pub enum Ineligible {
     /// A `source.git` skill group: it fetches content the crate release does
     /// not pin.
     GitSkillSource(String),
-    /// A skill path (as written in the manifest) resolves outside the crate.
+    /// A skill path (as written in the manifest) resolves outside the crate,
+    /// or a file in a skill directory is a link to a file outside it.
     EscapesCrate(String),
     /// A symlink anywhere under a skill group directory (or where a manifest
     /// or group directory should be) that points nowhere.
@@ -114,7 +116,7 @@ impl fmt::Display for Ineligible {
                 "a skill group fetches `source.git = \"{url}\"`, which a crate release does not pin"
             ),
             Self::EscapesCrate(path) => {
-                write!(f, "skill path `{path}` leaves the crate directory")
+                write!(f, "`{path}` leaves the crate directory")
             }
             Self::BrokenLink(path) => write!(f, "`{path}` is a broken symlink"),
             Self::LinkLoop(path) => write!(f, "`{path}` is a symlink loop"),
@@ -210,7 +212,7 @@ fn payload_entries(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Ineligible>
             return Err(Ineligible::EscapesCrate(rel.display().to_string()));
         }
         if group_dir.is_dir() {
-            payload.add_group(&group_dir, &prefix)?;
+            payload.add_group(&group_dir, &prefix, &canonical_root)?;
         }
     }
     Ok(payload.entries)
@@ -294,8 +296,15 @@ impl Payload {
     /// `dir`, whose entry names start with `prefix`. The whole group is walked
     /// to find its skill directories, so a broken link or a loop anywhere in it
     /// is refused: either could hide a skill. An installed copy (carrying
-    /// symposium's marker) is never a source, so its subtree is ignored.
-    fn add_group(&mut self, dir: &Path, prefix: &Path) -> Result<(), Ineligible> {
+    /// symposium's marker) is never a source, so its subtree is ignored. A
+    /// file whose resolved path is outside `crate_root` (canonical) leaves the
+    /// crate through a link and is refused.
+    fn add_group(
+        &mut self,
+        dir: &Path,
+        prefix: &Path,
+        crate_root: &Path,
+    ) -> Result<(), Ineligible> {
         let tree = crate::dir_walk::walk(dir).map_err(|e| Ineligible::Unreadable(e.to_string()))?;
         let has_file = |dir: &Path, name: &str| {
             tree.entries.iter().any(|(p, kind)| {
@@ -351,7 +360,14 @@ impl Payload {
             // Reached through another group already: same name, same file, so
             // it is neither read nor counted twice.
             if !self.entries.contains_key(&name) {
-                let bytes = self.read(&dir.join(rel))?;
+                let path = dir.join(rel);
+                let resolved = path
+                    .canonicalize()
+                    .map_err(|e| Ineligible::Unreadable(format!("{}: {e}", path.display())))?;
+                if !resolved.starts_with(crate_root) {
+                    return Err(Ineligible::EscapesCrate(name));
+                }
+                let bytes = self.read(&path)?;
                 self.put(name, bytes);
             }
         }

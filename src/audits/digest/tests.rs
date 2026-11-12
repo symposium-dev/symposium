@@ -372,6 +372,12 @@ fn ineligible_payloads() {
         let broken_beside: Setup =
             |root| symlink("nowhere", root.join("skills/maybe-skills")).unwrap();
         let looped: Setup = |root| symlink("..", root.join("skills/two/back")).unwrap();
+        // Read and hashed before, though the published crate need not hold
+        // the same bytes.
+        let outside: Setup = |root| {
+            write(&root.join(".."), "outside.txt", b"not in the crate\n");
+            symlink("../../../outside.txt", root.join("skills/two/linked.txt")).unwrap();
+        };
         cases.extend([
             (
                 "a special file",
@@ -392,6 +398,11 @@ fn ineligible_payloads() {
                 "a directory loop",
                 looped,
                 Ineligible::LinkLoop("skills/two/back".into()),
+            ),
+            (
+                "a link leaving the crate",
+                outside,
+                Ineligible::EscapesCrate("skills/two/linked.txt".into()),
             ),
         ]);
     }
