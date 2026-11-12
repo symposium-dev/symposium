@@ -23,7 +23,9 @@
 //!    default `skills/` group unless `[defaults] skills = false`. A skill
 //!    directory is one that holds a `SKILL.md`, and its whole tree counts. A
 //!    file reachable twice is hashed once. Names are paths relative to the
-//!    crate root with `/` separators.
+//!    crate root with `/` separators, a group's entries named from its
+//!    `source.path` as written (lexically normalized), never from where a
+//!    link resolves.
 //!
 //! The input is the domain-separation prefix `symposium-payload-v1\0`, then
 //! per entry `u64` big-endian name length, the name, `u64` big-endian content
@@ -189,6 +191,13 @@ fn payload_entries(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Ineligible>
             PluginSource::Git(url) => return Err(Ineligible::GitSkillSource(url.clone())),
             PluginSource::Path(rel) => rel,
         };
+        // Entries are named by the group's own path, as the manifest writes
+        // it, never by where a link resolves: the published crate holds the
+        // linked content as real files under that path, so a checkout and
+        // its release digest alike.
+        let Some(prefix) = crate_relative(rel) else {
+            return Err(Ineligible::EscapesCrate(rel.display().to_string()));
+        };
         // A group directory that does not exist contributes nothing.
         let joined = root.join(rel);
         if present(&joined, &rel.display().to_string())?.is_none() {
@@ -201,13 +210,25 @@ fn payload_entries(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Ineligible>
             return Err(Ineligible::EscapesCrate(rel.display().to_string()));
         }
         if group_dir.is_dir() {
-            let prefix = group_dir
-                .strip_prefix(&canonical_root)
-                .unwrap_or(Path::new(""));
-            payload.add_group(&group_dir, prefix)?;
+            payload.add_group(&group_dir, &prefix)?;
         }
     }
     Ok(payload.entries)
+}
+
+/// A group path as the manifest writes it, normalized lexically (`.`
+/// dropped). `None` when it cannot name a directory inside the crate on its
+/// own: it has a `..`, or is absolute.
+fn crate_relative(rel: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in rel.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => out.push(part),
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// What is at `path` (`name` in errors), links followed: `None` only when

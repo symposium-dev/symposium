@@ -255,6 +255,35 @@ fn a_file_reached_through_two_groups_counts_once() {
     assert_eq!(entries.len(), 2, "{:?}", entries.keys().collect::<Vec<_>>());
 }
 
+/// Entries are named by the group's path as the manifest writes it, not by
+/// where a link resolves: a group directory that is a link digests like the
+/// directory it would be in the published crate, where `cargo package` has
+/// replaced the link with real files.
+#[cfg(unix)]
+#[test]
+fn a_linked_group_digests_like_the_materialized_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("crate");
+    fixture(&root);
+    std::fs::rename(root.join("extra"), root.join("assets")).unwrap();
+    std::os::unix::fs::symlink("assets", root.join("extra")).unwrap();
+    assert_eq!(payload_digest(&root).unwrap().to_string(), GOLDEN);
+    let entries = payload_entries(&root).unwrap();
+    assert!(entries.contains_key("extra/one/SKILL.md"), "{entries:?}");
+    assert!(!entries.keys().any(|k| k.starts_with("assets/")));
+
+    // `./extra` names the same group.
+    let dotted = tmp.path().join("dotted");
+    fixture(&dotted);
+    write(
+        &dotted,
+        "Symposium.toml",
+        b"name = \"golden\"\r\n[[skills]]\r\nsource.path = \"./extra\"\r\n",
+    );
+    let entries = payload_entries(&dotted).unwrap();
+    assert!(entries.contains_key("extra/one/SKILL.md"), "{entries:?}");
+}
+
 /// Every payload that cannot be pinned is refused with the reason, never
 /// digested: what it fetches or reaches could change, or hide skill content,
 /// under the same crate release.

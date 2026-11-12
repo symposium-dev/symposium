@@ -88,7 +88,7 @@ The payload is these entries:
 2. `[package.metadata.symposium]` from `Cargo.toml`, when there is one, as canonical compact JSON (see below), under the entry name `Cargo.toml#package.metadata.symposium`. That name is a label, not a file path: no file is read from it, and a file with that exact name inside a skill directory makes the payload ineligible so it cannot collide. Nothing else in `Cargo.toml` is part of the payload.
 3. Every file, of any type, in each *skill directory* the manifest names inside the crate. The manifest names them with its `[[skills]]` groups that set `source.path`, plus the default `skills/` group unless `[defaults] skills = false`. A skill directory is one that contains a `SKILL.md`, and everything beneath it counts, so a `SKILL.md` that points at a file in `resources/` is covered together with that file. A file reachable through two groups counts once. Group `predicates` are not consulted, so the digest does not depend on the workspace it is computed in.
 
-Entries are named by their path relative to the crate root, with `/` separators, and sorted bytewise (by the UTF-8 bytes of the name). The digest is SHA-256 over the prefix `symposium-payload-v1\0` followed, for each entry, by the name length as 8 bytes big-endian, the name, the content length as 8 bytes big-endian, and the content. Bytes are hashed as published: line endings are not normalized. Symlinks are followed, and the entry is named by the link's path.
+Entries are named by their path relative to the crate root, with `/` separators, and sorted bytewise (by the UTF-8 bytes of the name). The digest is SHA-256 over the prefix `symposium-payload-v1\0` followed, for each entry, by the name length as 8 bytes big-endian, the name, the content length as 8 bytes big-endian, and the content. Bytes are hashed as published: line endings are not normalized. Symlinks are followed, and the entry is named by the link's path: a skill group's entries are named from its `source.path` as the manifest writes it (with `.` components dropped), even when that directory is a link, since the published crate holds the linked content as real files under that path.
 
 ### Canonical JSON for the metadata entry
 
@@ -108,7 +108,7 @@ The digest tests carry two golden vectors, one with a manifest, skills and CRLF 
 Some payloads cannot be pinned, so they have no digest and are never audited:
 
 - a `[[skills]]` group with `source.git` (what it fetches can change under the same crate release);
-- a skill path that leaves the crate directory;
+- a skill path that leaves the crate directory, contains `..`, or is absolute;
 - a broken symlink, a directory symlink that loops back, or a directory that cannot be read, anywhere under a skill group directory: the whole group directory is walked to find its skill directories, so this applies outside skill directories too (a dangling link in `skills/scratch/` with no `SKILL.md` counts), since any of these could hide a skill;
 - a skill group directory that is a dangling link, or any file in the payload that cannot be read (a permission or I/O error is never read as "not there");
 - an entry in a skill directory that is neither a file nor a directory, or a path that is not UTF-8;
