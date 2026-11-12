@@ -205,9 +205,9 @@ The return subject is the sole cross-agent exception: it deduplicates Q1 but can
 
 ### Public package and extension identity
 
-Each package manager must return typed provenance with the resolved coordinate: registry URL, git, path, workspace, or unknown. Core, rather than the package manager, maps allowlisted public registries to stable ecosystem labels.
+Each package manager returns a `PackageResolution`: the exact admitted coordinate, a payload-free source claim (`crates_io`, registry, git, path, workspace, or unknown), and an opaque key scoped to that supplier's current resolution session. The key may embed private Cargo source representations, so core confines it to the supplier admission ledger and returns it only to the same supplier for exact inspection. Enabled dependencies carry the resulting opaque handle into activation rather than being reduced back to coordinates. Core also binds the first content-bearing answer for a key to its canonical package root. The key is never a naming input, diagnostic, durable identity, or event field.
 
-Raw URLs and provenance never enter an event. Sources outside the allowlist are private and unnamed by default.
+The claim carries classification, not authority. Core attaches authority from how it constructed the `PmInstance`: only core's built-in Cargo instance can authorize the crates.io package label, and only core's exact built-in recommendations Git source can authorize the recommendations extension label. A configured package manager named `cargo`, registry display names, and returned claims cannot grant themselves authority. Sources outside these conjunctions are private and unnamed by default.
 
 A named package requires allowlisted provenance, a valid public name, and an exact resolved version. Other inputs increment `unnamed_packages` and exactly one reason: `private_registry`, `git`, `path`, `workspace`, `unknown_source`, or `invalid_coordinate`.
 
@@ -219,7 +219,7 @@ Source reasons take precedence. `invalid_coordinate` applies only to an otherwis
 - `unnamed_only`: extension content matched, but none was safe to name;
 - `none`: no resolved extension matched.
 
-Plugin, skill, and command names follow the same public-by-allowlist rule. This requires extending the current PM representation, which loses source provenance after loading metadata.
+Plugin, skill, and command names follow the same public-by-allowlist rule. The admitted package now survives plugin validation as a private `ResolvedPackage`; the public-identity policy consumes a narrow semantic view rather than the supplier key, URL, or path.
 
 ### Complete safe resolution paths
 
@@ -523,7 +523,7 @@ Verify:
 
 ### Step 3: PM provenance and public-identity policy
 
-Extend every package-manager result with typed provenance and exact coordinates. Add core-owned public allowlists and coordinate validation. If an out-of-process package-manager protocol lands first, carry provenance through it as part of this step.
+Extend every package-manager result with an exact coordinate, payload-free source claim, and supplier-session key. Admit those answers through their supplying instance, attach core-owned authority, and keep raw keys out of downstream code. Add the public naming projection and coordinate validation on top of the admitted semantic view. The out-of-process protocol carries the same resolution shape but no authority.
 
 All supported package managers must provide provenance before events are wired. This step emits no telemetry.
 
