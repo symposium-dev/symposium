@@ -1427,13 +1427,31 @@ fn workspace_plugin_for_dir(
     let agent_plugin_path = dir.join(crate::pm::layout::AGENT_PLUGIN_FILE);
     let bare_convention = dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir()
         || (agents_skills && dir.join(AGENTS_SKILLS_PATH).is_dir());
-    let agent_plugin = !manifest_path.is_file() && agent_plugin_path.is_file();
+    let agent_plugin = if !manifest_path.is_file() && agent_plugin_path.is_file() {
+        match agent_plugin_manifest(dir) {
+            Ok(raw) => Some(raw),
+            Err(e) if bare_convention => {
+                tracing::warn!(report = %crate::report::ReportEvent::Warning {
+                    message: format!(
+                        "ignoring `{}`: {e:#}",
+                        crate::output::display_path(&agent_plugin_path)
+                    ),
+                });
+                None
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        None
+    };
+    let agent_plugin_root = agent_plugin
+        .is_some()
+        .then(|| fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()));
     let raw: RawPluginManifest = if manifest_path.is_file() {
         let mut raw: RawPluginManifest = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
         fill_from_agent_plugin(&mut raw, dir);
         raw
-    } else if agent_plugin {
-        let mut raw = agent_plugin_manifest(dir)?;
+    } else if let Some(mut raw) = agent_plugin {
         raw.defaults = Some(RawDefaults { skills: false });
         if agents_skills {
             raw.skills.push(agents_skills_group());
@@ -1466,8 +1484,7 @@ fn workspace_plugin_for_dir(
         canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
         manifest: plugin,
         workspace_member: true,
-        agent_plugin_root: agent_plugin
-            .then(|| fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())),
+        agent_plugin_root,
     }))
 }
 

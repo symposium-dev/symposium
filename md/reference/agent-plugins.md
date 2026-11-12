@@ -142,6 +142,8 @@ Problems are contained to the smallest part affected. Each one is reported as a 
 | `mcp.json` is not valid JSON, misses `$schema` or `mcpServers`, has another top-level field, or names another version than `plugin.json` | No MCP servers load from that package. Its skills still load. |
 | One MCP server does not follow the [rules above](#mcp-servers), or has a `type` symposium does not know | That server is skipped. |
 
+A workspace member's `plugin.json` may belong to another tool. When it is rejected and the member also has a `skills` or `.agents/skills` folder, the file is ignored with a warning and those folders load as they would without it.
+
 ## Security
 
 Symposium reads a package's manifest, skills and MCP servers only from inside the package folder. A `plugin.json`, a `skills` folder, an `mcp.json`, a skill's `SKILL.md` or a server's `./` command that resolves outside it, for instance through a link, is refused at the smallest level that applies: the whole package, its skills, its MCP servers, that one skill or that one server.

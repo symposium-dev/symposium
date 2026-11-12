@@ -235,6 +235,33 @@ async fn a_workspace_member_package_installs_without_use() {
 }
 
 #[tokio::test]
+async fn a_workspace_member_with_a_foreign_plugin_json_keeps_its_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["agent-plugin-member0"],
+        async |mut ctx| {
+            let member = ctx.workspace_root.clone().unwrap().join("tools");
+            std::fs::write(
+                member.join("plugin.json"),
+                r#"{ "name": "member-tools", "main": "index.js" }"#,
+            )?;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+            assert_eq!(installed_skills(&ctx), ["maintainer-notes", "member-guide"]);
+            assert_warned(&events, &["plugin.json`: missing required field `$schema`"]);
+
+            ctx.sym.config.sync_debounce_secs = 0;
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(installed_skills(&ctx), ["maintainer-notes", "member-guide"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
     with_fixture(
         TestMode::SimulationOnly,
