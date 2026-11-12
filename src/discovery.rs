@@ -91,9 +91,10 @@ pub struct DiscoveredPlugin {
     pub enablement: Enablement,
     pub format: Option<&'static str>,
     /// What the audits list says about this release and payload, looked up
-    /// once, cache-only. `None` exactly when the list revokes it: the
-    /// revocation is the `enablement` of a revoked offer, and a declined one
-    /// stays declined.
+    /// once, cache-only. `None` when the list revokes it (the revocation is
+    /// the `enablement` of a revoked offer, and a declined one stays
+    /// declined), and when no list was read
+    /// ([`AuditIndex::is_read`](crate::audits::AuditIndex::is_read)).
     pub audit: Option<Verdict>,
 }
 
@@ -163,9 +164,11 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
                 ),
                 None => describe_plugin(&plugin.manifest),
             });
+            // A verdict is shown only when a list was read: without one,
+            // "not audited" would claim a check that never happened.
             let (revocation, audit) = match audits.answer(pms, &plugin.canonical).await {
                 Answer::Revoked(revocation) => (Some(revocation), None),
-                Answer::Verdict(verdict) => (None, Some(verdict)),
+                Answer::Verdict(verdict) => (None, audits.is_read().then_some(verdict)),
             };
             let enablement = decide(sym, pms, revocation, &used, &plugin.canonical).await;
             let discovered = DiscoveredPlugin {

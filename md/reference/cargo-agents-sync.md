@@ -67,15 +67,18 @@ agent context, so these stay off until you say otherwise. Three answers:
 Only explicit answers are recorded, so hitting Enter through the prompt never
 permanently declines anything. Escape leaves the remaining questions undecided.
 
-Each question also says what the registries' [audits](./audits.md) say about
-the plugin: audited by a named registry, or not audited. When a registry has
-audited the crate but this release's payload cannot be checked against an
-audit, it says why in a few words:
+Each question also says what the [audits list](./audits.md) says about the
+plugin: audited by the `symposium-audits` list, or not audited. When the list
+audits the crate but this release's payload cannot be checked against an
+audit, it says why in a few words. When no list was read (it is off, the
+default, or has never been fetched), the question has no audit part at all,
+since nothing was checked:
 
 ```text
 Dependency `tidy-crate` provides 1 skill group — audited by the `symposium-audits` list. Enable it?
 Dependency `widget-lib` provides 1 skill group, 1 hook — not audited. Enable it?
 Dependency `remote-skills` provides 1 skill group — not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`. Enable it?
+Dependency `widget-lib` provides 1 skill group, 1 hook. Enable it?   # no list read
 ```
 
 An audit is information for your decision, not a decision: an audited plugin
@@ -85,7 +88,7 @@ is asked about like any other, and the answers record the same thing. A
 The prompt only runs in a real terminal session. The automatic sync below —
 and anything else an agent triggers — never prompts. Instead, your agent is told
 so it can point you here: pending candidates are named when a session starts,
-each with the same audit answer, and when your dependencies change mid-session the agent hears that there may be
+each with the same audit answer (or none, when no list was read), and when your dependencies change mid-session the agent hears that there may be
 new ones. [`cargo agents status`](./cargo-agents-status.md) lists them as
 `candidate`.
 

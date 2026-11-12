@@ -589,3 +589,17 @@ async fn one_invocation_digests_a_payload_once() {
     let next = package_at(Some(&krate));
     assert!(index.revocation(&next, &id).await.is_none());
 }
+
+/// A list is read only when it is configured and its `audits/` directory
+/// exists: a list that is off, or was never fetched, reads as no list.
+#[test]
+fn a_list_is_read_only_when_its_audits_directory_exists() {
+    assert!(!AuditIndex::default().is_read());
+    let tmp = tempfile::tempdir().unwrap();
+    let index = AuditIndex::new(tmp.path().join("list"));
+    assert!(!index.is_read());
+    std::fs::create_dir_all(tmp.path().join("list")).unwrap();
+    assert!(!index.is_read());
+    write_audits(&tmp.path().join("list"), "other", "format = 1\n");
+    assert!(index.is_read());
+}

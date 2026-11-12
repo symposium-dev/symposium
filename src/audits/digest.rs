@@ -141,7 +141,7 @@ impl Ineligible {
             Self::NotADirectory(_) => "has no source directory",
             Self::Manifest(_) => "has a plugin manifest that does not parse",
             Self::GitSkillSource(_) => "fetches skills with `source.git`",
-            Self::EscapesCrate(_) => "names a skill path outside the crate",
+            Self::EscapesCrate(_) => "reaches outside the crate",
             Self::BrokenLink(_) => "contains a broken symlink",
             Self::LinkLoop(_) => "contains a symlink loop",
             Self::Unsupported(_) => "contains an entry that is not a file or directory",

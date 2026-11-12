@@ -791,9 +791,15 @@ async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> 
             None => c.name().to_string(),
         })
         .collect();
+    // Only when a list was read do the names carry an answer to qualify.
+    let audited_or_not = if pending.iter().any(|c| c.audit.is_some()) {
+        ", audited or not"
+    } else {
+        ""
+    };
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
-         They stay off until the user consents, audited or not — tell the user \
+         They stay off until the user consents{audited_or_not} — tell the user \
          to run `cargo agents sync` (which asks about each one) or \
          `cargo agents use <name>`. Do not enable them yourself.",
         named.join(", ")

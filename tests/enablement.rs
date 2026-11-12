@@ -825,9 +825,13 @@ async fn session_start_hints_pending_candidates() {
                 .next()
                 .expect("session-start should produce additionalContext");
 
-            // Each candidate is named with its audit answer; nothing here
-            // audits `crate-a`.
-            assert!(context.contains("crate-a (not audited)"), "{context}");
+            // No audits list is read here, so the candidate is named with no
+            // audit answer at all.
+            assert!(
+                context
+                    .contains("not enabled yet: crate-a. They stay off until the user consents —"),
+                "{context}"
+            );
             assert!(context.contains("cargo agents use"), "{context}");
             assert!(context.contains("Do not enable them yourself"), "{context}");
             Ok(())

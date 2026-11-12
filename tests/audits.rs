@@ -247,11 +247,15 @@ async fn disable_outranks_a_revocation() {
 }
 
 /// `status` says an active crate's payload is audited; an audit changes
-/// nothing else.
+/// nothing else. With no list read it says nothing about audits at all.
 #[tokio::test]
 async fn status_says_an_active_payload_is_audited() {
     with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
         ctx.sym.config.plugins.auto_enable = vec!["crate-d".into()];
+        let entry = status(&ctx).await;
+        assert_eq!(entry.audit, None, "the list was never fetched: {entry:?}");
+
+        write_audits(&mut ctx.sym, "another-crate", "format = 1\n");
         let entry = status(&ctx).await;
         assert_eq!(entry.audit, Some(Verdict::NotAudited), "{entry:?}");
 
@@ -274,10 +278,16 @@ async fn status_says_an_active_payload_is_audited() {
 
 /// A candidate awaiting consent shows its audit answer in `status`, in the
 /// consent prompt's words (the human form renders the same `audit` string);
-/// an audit leaves it a candidate.
+/// an audit leaves it a candidate. With no list read the line has no audit
+/// part: "not audited" would claim a check that never happened.
 #[tokio::test]
 async fn a_candidate_awaiting_consent_shows_its_audit_answer() {
     with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        let line = status_line(&mut ctx).await;
+        assert_eq!(line["state"], "candidate");
+        assert!(line.get("audit").is_none(), "{line}");
+
+        write_audits(&mut ctx.sym, "another-crate", "format = 1\n");
         let line = status_line(&mut ctx).await;
         assert_eq!(line["state"], "candidate");
         assert_eq!(line["audit"], "not audited");

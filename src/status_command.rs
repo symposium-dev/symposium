@@ -80,11 +80,11 @@ pub struct StatusEntry {
     pub root: String,
     pub state: StatusState,
     pub format: Option<&'static str>,
-    /// What the audits list says about a dependency plugin; `None` when it
-    /// is revoked (a revoked line's root says so, a declined one stays
-    /// declined) or not looked up: a trust root's plugin, a `use`d crate that
-    /// is not cached yet or a dependency that offers no plugin, and a
-    /// declined name discovery never saw.
+    /// What the audits list says about a dependency plugin; `None` when no
+    /// list was read, when it is revoked (a revoked line's root says so, a
+    /// declined one stays declined) or not looked up: a trust root's plugin,
+    /// a `use`d crate that is not cached yet or a dependency that offers no
+    /// plugin, and a declined name discovery never saw.
     pub audit: Option<Verdict>,
 }
 
@@ -201,7 +201,8 @@ pub async fn workspace_status(
         // apply to it like to any other dependency plugin.
         let mut audit = None;
         if !dependency && let Ok(fetched) = pms.fetch(&id, UpdateLevel::None).await {
-            match AuditIndex::configured(sym).answer(pms, &fetched.id).await {
+            let audits = AuditIndex::configured(sym);
+            match audits.answer(pms, &fetched.id).await {
                 Answer::Revoked(revocation) => {
                     entries.push(StatusEntry {
                         name: id.name,
@@ -213,7 +214,8 @@ pub async fn workspace_status(
                     });
                     continue;
                 }
-                Answer::Verdict(verdict) => audit = Some(verdict),
+                // As for discovered plugins: no verdict without a list read.
+                Answer::Verdict(verdict) => audit = audits.is_read().then_some(verdict),
             }
         }
         entries.push(StatusEntry {

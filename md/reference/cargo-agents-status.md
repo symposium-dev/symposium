@@ -33,7 +33,9 @@ without being a dependency, ends with what the
 [consent prompt](./cargo-agents-sync.md#consent-prompt) uses:
 ``audited by the `symposium-audits` list``, `not audited`, or, when the list
 audits the crate but this payload cannot be checked against an audit,
-`not audited: ...` with the reason. A revoked line has no audit part, since
+`not audited: ...` with the reason. When no list was read (the list is off,
+the default, or has never been fetched), no line has an audit part, since
+nothing was checked. A revoked line has no audit part, since
 its root already says who revoked it and why, and neither has a declined
 crate that is also revoked. Nor do lines that are not looked up: plugins from
 a registry or the workspace (trust roots), a `use`d crate that is not cached

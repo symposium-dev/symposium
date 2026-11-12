@@ -164,6 +164,15 @@ impl AuditIndex {
         }
     }
 
+    /// Whether there is a list to read: it is on and its `audits/` directory
+    /// exists. Without one every verdict is "not audited" though nothing was
+    /// read, so the surfaces that show verdicts show none.
+    pub fn is_read(&self) -> bool {
+        self.dir
+            .as_ref()
+            .is_some_and(|dir| dir.join(AUDITS_DIR).is_dir())
+    }
+
     /// Everything the list says about the package `name` of package manager
     /// `pm`: reads `audits/<pm>/<name>.toml`.
     pub fn for_package(&self, pm: &str, name: &str) -> PackageAudits {
