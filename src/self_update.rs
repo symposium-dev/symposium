@@ -78,6 +78,21 @@ pub fn maybe_warn_for_update(sym: &Symposium, out: &Output) {
     }
 }
 
+/// Whether the startup update check runs before `command`. Not before
+/// `self-update`, which always checks, nor before `plugin digest`: tooling
+/// reads its stdout, so it must neither get the auto-update lines there nor
+/// have the binary replaced and re-executed under it mid-run.
+pub fn checks_before(command: &crate::cli::Commands) -> bool {
+    use crate::cli::{Commands, PluginCommand};
+    !matches!(
+        command,
+        Commands::SelfUpdate
+            | Commands::Plugin {
+                command: PluginCommand::Digest { .. }
+            }
+    )
+}
+
 /// Full update check for the binary startup path.
 ///
 /// Respects config and the 24-hour throttle.  For `warn`, prints a
@@ -189,6 +204,21 @@ pub fn re_exec() -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_update_check_skips_self_update_and_plugin_digest() {
+        use crate::cli::{Commands, PluginCommand};
+        assert!(checks_before(&Commands::Sync));
+        assert!(checks_before(&Commands::Plugin {
+            command: PluginCommand::List
+        }));
+        assert!(!checks_before(&Commands::SelfUpdate));
+        assert!(!checks_before(&Commands::Plugin {
+            command: PluginCommand::Digest {
+                target: "serde".into()
+            }
+        }));
+    }
 
     #[test]
     fn parse_search_output_typical() {

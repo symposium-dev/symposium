@@ -246,11 +246,11 @@ pub async fn run(
     out: &Output,
     update: symposium_install::UpdateLevel,
 ) -> Result<()> {
-    // Periodic update check (skipped for self-update, which always checks).
-    // In the binary, re-exec happens if auto-update = "on" succeeds.
-    // Here in the library we just run the warn check; the binary wraps
-    // this with re-exec logic.
-    if !matches!(cmd, Commands::SelfUpdate) {
+    // Periodic update check (skipped for self-update, which always checks,
+    // and for `plugin digest`, whose stdout is its result). In the binary,
+    // re-exec happens if auto-update = "on" succeeds. Here in the library we
+    // just run the warn check; the binary wraps this with re-exec logic.
+    if self_update::checks_before(&cmd) {
         self_update::maybe_warn_for_update(sym, out);
     }
 
