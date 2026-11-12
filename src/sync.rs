@@ -544,6 +544,7 @@ pub async fn sync(
     let mut ctx =
         crate::predicate::PredicateContext::with_custom_predicates(&dep_ids, custom_entries)
             .with_used(&used)
+            .with_cwd(ws.start())
             .with_disk_cache(&predicate_cache_path);
 
     // The active plugin set: registry plugins plus the crate-sourced plugins

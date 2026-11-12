@@ -113,6 +113,8 @@ All keys are camelCase (protojson).
 `workspacePaths` is populated once the workspace is adopted, in print mode too.
 A hook's working directory is always the directory
 holding its own `hooks.json`, never the user's project.
+Symposium therefore runs plugin hooks, and evaluates their `shell(...)` and
+relative `path_exists(...)` predicates, in `workspacePaths[0]`.
 
 ### PreToolUse / PostToolUse additions
 

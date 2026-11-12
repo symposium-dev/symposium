@@ -187,7 +187,7 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | XDG | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_STATE_HOME/symposium/logs/` |
 | Default | `~/.symposium/` | `~/.symposium/cache/` | `~/.symposium/logs/` |
 
-`SYMPOSIUM_HOME` takes precedence over XDG variables. An empty variable counts as unset, and so does a relative `XDG_*` value.
+`SYMPOSIUM_HOME` takes precedence over XDG variables. An empty variable counts as unset, and so does a relative `XDG_*` value. A relative `SYMPOSIUM_HOME` is resolved once, against the directory `cargo agents` started in.
 
 ## File locations
 

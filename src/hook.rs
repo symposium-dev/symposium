@@ -214,6 +214,7 @@ async fn build_spawn_spec(
 
 fn spawn_from_spec(
     spec: SpawnSpec,
+    dir: Option<&Path>,
     stdout: &File,
     stderr: &File,
 ) -> std::io::Result<std::process::Child> {
@@ -221,6 +222,9 @@ fn spawn_from_spec(
         SpawnSpec::Script { path, args, env } => {
             let mut cmd = Command::new("sh");
             cmd.arg(path).args(args);
+            if let Some(dir) = dir {
+                cmd.current_dir(dir);
+            }
             for (k, v) in env {
                 cmd.env(k, v);
             }
@@ -233,6 +237,9 @@ fn spawn_from_spec(
         SpawnSpec::Exec { path, args, env } => {
             let mut cmd = Command::new(path);
             cmd.args(args);
+            if let Some(dir) = dir {
+                cmd.current_dir(dir);
+            }
             for (k, v) in env {
                 cmd.env(k, v);
             }
@@ -252,12 +259,13 @@ const PLUGIN_HOOKS_BUDGET: Duration = Duration::from_secs(8);
 /// not pipes, so neither a full pipe nor a background job can hold dispatch.
 fn run_with_deadline(
     spec: SpawnSpec,
+    dir: Option<&Path>,
     input: Vec<u8>,
     deadline: Instant,
 ) -> std::io::Result<Option<Output>> {
     let stdout = tempfile::tempfile()?;
     let stderr = tempfile::tempfile()?;
-    let mut child = spawn_from_spec(spec, &stdout, &stderr)?;
+    let mut child = spawn_from_spec(spec, dir, &stdout, &stderr)?;
     if let Some(mut stdin) = child.stdin.take() {
         std::thread::spawn(move || {
             let _ = stdin.write_all(&input);
@@ -619,7 +627,9 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
         None => Vec::new(),
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(deps.start());
     let plugins = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -740,7 +750,9 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
         Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
         None => Vec::new(),
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(deps.start());
     let active = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -869,7 +881,10 @@ pub async fn dispatch_plugin_hooks(
         Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
         None => Vec::new(),
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let dir = deps.start().filter(|dir| dir.is_dir());
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(dir);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.
     let plugins = crate::plugins::active_plugins(
@@ -924,7 +939,7 @@ pub async fn dispatch_plugin_hooks(
         let run_res = match build_spawn_spec(sym, &hook, dispatch_deadline).await {
             Ok(spec) => {
                 let deadline = dispatch_deadline.min(Instant::now() + PLUGIN_HOOK_TIMEOUT);
-                run_with_deadline(spec, stdin_str.into_bytes(), deadline)
+                run_with_deadline(spec, dir, stdin_str.into_bytes(), deadline)
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to prepare hook command");
@@ -992,7 +1007,7 @@ pub async fn dispatch_plugin_hooks(
                             }
                         };
 
-                        merge(&mut output, host_json);
+                        host_h.merge_output(&mut output, host_json);
                         if denies(&hook_output) {
                             tracing::info!(
                                 plugin = %hook.plugin_name,
@@ -1056,8 +1071,7 @@ impl JoinedContext {
     }
 
     /// Add `hook_output`'s context and write the joined text back into
-    /// `output`, whose context the hook's own output has just replaced (or,
-    /// for Antigravity's `injectSteps` list, emptied).
+    /// `output`, whose context the hook's own output has just replaced.
     fn add(
         &mut self,
         hook_output: &symposium::OutputEvent,
@@ -1078,7 +1092,7 @@ impl JoinedContext {
         }
         if let Some(text) = &self.text {
             let joined = OutputEvent::with_context(self.event, text.clone());
-            merge(output, handler.translate_output(&joined).to_hook_output());
+            handler.merge_output(output, handler.translate_output(&joined).to_hook_output());
         }
     }
 }
@@ -1418,7 +1432,8 @@ mod tests {
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(run_with_deadline(spec, input, Instant::now() + timeout).unwrap());
+            let _ =
+                tx.send(run_with_deadline(spec, None, input, Instant::now() + timeout).unwrap());
         });
         rx.recv_timeout(timeout + Duration::from_secs(5))
             .expect("the hook returns by its deadline")

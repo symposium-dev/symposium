@@ -3,8 +3,9 @@
 //! Three things here differ from every other agent and are load-bearing:
 //!
 //! 1. **A `PreToolUse` hook that writes `{}` denies the tool call.** Exit codes
-//!    are ignored entirely; only stdout decides. So [`AntigravityPreToolUseOutput`]
-//!    always serializes `decision`, and its default is `allow`.
+//!    are ignored entirely; only stdout decides. So a hook's object without a
+//!    `decision` is read as the denial it is, and [`AntigravityPreToolUseEvent`]
+//!    sends `"decision": "allow"` when the final answer has none.
 //! 2. **The workspace comes from the payload, not the process.** A hook's working
 //!    directory is the directory holding its own `hooks.json`, which for a global
 //!    registration is `~/.gemini/config`. `workspacePaths[0]` is the only way to
@@ -17,9 +18,11 @@
 //! `additionalContext` field. All keys are camelCase (protojson).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::hook_schema::{
-    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, erase_agent_hook_event, symposium,
+    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, HookResponse, erase_agent_hook_event,
+    symposium,
 };
 
 pub struct Antigravity;
@@ -54,26 +57,66 @@ macro_rules! antigravity_event {
     };
 }
 
-antigravity_event!(
-    AntigravityPreToolUseEvent,
-    AntigravityPreToolUseInput,
-    AntigravityPreToolUseOutput
-);
+pub struct AntigravityPreToolUseEvent;
+impl AgentHookEvent for AntigravityPreToolUseEvent {
+    type Input = AntigravityPreToolUseInput;
+    type Output = AntigravityPreToolUseOutput;
+
+    fn respond(&self, output: &Value) -> HookResponse {
+        let mut output = output.clone();
+        if let Some(object) = output.as_object_mut() {
+            object.entry("decision").or_insert_with(|| "allow".into());
+        }
+        HookResponse::success(self.serialize_output(&output))
+    }
+}
+
 antigravity_event!(
     AntigravityPostToolUseEvent,
     AntigravityPostToolUseInput,
     AntigravityPostToolUseOutput
 );
-antigravity_event!(
-    AntigravityUserPromptSubmitEvent,
-    AntigravityInvocationInput,
-    AntigravityInjectStepsOutput
-);
-antigravity_event!(
-    AntigravitySessionStartEvent,
-    AntigravitySessionStartInput,
-    AntigravityInjectStepsOutput
-);
+
+pub struct AntigravityUserPromptSubmitEvent;
+impl AgentHookEvent for AntigravityUserPromptSubmitEvent {
+    type Input = AntigravityInvocationInput;
+    type Output = AntigravityInjectStepsOutput;
+
+    fn merge_output(&self, acc: &mut Value, next: Value) {
+        merge_inject_steps(acc, next);
+    }
+}
+
+pub struct AntigravitySessionStartEvent;
+impl AgentHookEvent for AntigravitySessionStartEvent {
+    type Input = AntigravitySessionStartInput;
+    type Output = AntigravityInjectStepsOutput;
+
+    fn merge_output(&self, acc: &mut Value, next: Value) {
+        merge_inject_steps(acc, next);
+    }
+}
+
+fn merge_inject_steps(acc: &mut Value, mut next: Value) {
+    let next_steps = next
+        .as_object_mut()
+        .and_then(|next| next.shift_remove("injectSteps"));
+    crate::hook::merge(acc, next);
+    let Some(Value::Array(next_steps)) = next_steps else {
+        return;
+    };
+    let mut steps: Vec<Value> = acc
+        .get("injectSteps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|step| step.get("ephemeralMessage").is_none())
+        .cloned()
+        .collect();
+    steps.extend(next_steps);
+    crate::hook::merge(acc, serde_json::json!({ "injectSteps": steps }));
+}
+
 antigravity_event!(
     AntigravityStopEvent,
     AntigravityStopInput,
@@ -171,26 +214,15 @@ pub struct AntigravityPreToolUseInput {
     pub common: AntigravityCommon,
 }
 
-/// `decision` is deliberately **not** optional and never skipped: an object
-/// without it — `{}` included — is treated by Antigravity as a denial.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AntigravityPreToolUseOutput {
-    pub decision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Shallow-merged into the tool call's arguments before it runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overwrite: Option<serde_json::Value>,
-}
-
-impl Default for AntigravityPreToolUseOutput {
-    fn default() -> Self {
-        Self {
-            decision: "allow".into(),
-            reason: None,
-            overwrite: None,
-        }
-    }
 }
 
 impl AgentHookInput for AntigravityPreToolUseInput {
@@ -231,7 +263,11 @@ impl AgentHookOutput for AntigravityPreToolUseOutput {
         if output.is_empty() {
             return Ok(Self::default());
         }
-        Ok(serde_json::from_slice(output)?)
+        let mut parsed: Self = serde_json::from_slice(output)?;
+        if parsed.decision.as_deref().is_none_or(str::is_empty) {
+            parsed.decision = Some("deny".into());
+        }
+        Ok(parsed)
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
         let symposium::OutputEvent::PreToolUse(o) = event else {
@@ -239,20 +275,14 @@ impl AgentHookOutput for AntigravityPreToolUseOutput {
         };
         let denied = matches!(o.decision, symposium_sdk::hook::Decision::Deny);
         Self {
-            decision: if denied {
-                "deny".into()
-            } else {
-                "allow".into()
-            },
-            // Sent with either decision, but Antigravity shows the model the
-            // reason only for a denial: on an allowed call, context goes unread.
-            reason: o.additional_context.clone(),
+            decision: denied.then(|| "deny".into()),
+            reason: o.additional_context.clone().filter(|_| denied),
             overwrite: o.updated_input.clone(),
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        let decision = match self.decision.as_str() {
-            "deny" | "deny_unless_prior_grant" => symposium_sdk::hook::Decision::Deny,
+        let decision = match self.decision.as_deref() {
+            Some("deny" | "deny_unless_prior_grant") => symposium_sdk::hook::Decision::Deny,
             _ => symposium_sdk::hook::Decision::Allow,
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
@@ -577,28 +607,76 @@ impl AgentHookOutput for AntigravityStopOutput {
 mod tests {
     use super::*;
 
-    /// The whole point of the type: symposium contributes nothing on most tool
-    /// calls, and an object without `decision` — `{}` included — is a denial.
-    #[test]
-    fn a_default_pre_tool_use_output_allows_rather_than_denying() {
-        let json = AntigravityPreToolUseOutput::default().to_hook_output();
-        assert_eq!(json["decision"], "allow");
-        assert_ne!(json.to_string(), "{}");
+    use serde_json::json;
+
+    fn responded(output: Value) -> Value {
+        let response = AntigravityPreToolUseEvent.respond(&output);
+        serde_json::from_slice(&response.stdout).unwrap()
     }
 
     #[test]
-    fn a_no_op_symposium_output_still_serializes_an_allow() {
-        let sym = symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::default());
+    fn an_answer_without_a_decision_is_sent_as_an_allow() {
+        assert_eq!(responded(json!({})), json!({"decision": "allow"}));
+        assert_eq!(
+            responded(json!({"overwrite": {"CommandLine": "ls"}})),
+            json!({"decision": "allow", "overwrite": {"CommandLine": "ls"}})
+        );
+    }
+
+    #[test]
+    fn an_answer_with_a_decision_is_sent_unchanged() {
+        let ask = json!({"decision": "ask", "reason": "confirm deletion"});
+        assert_eq!(responded(ask.clone()), ask);
+    }
+
+    #[test]
+    fn a_context_only_symposium_output_sets_no_decision() {
+        let sym = symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::context("fyi"));
         let out = AntigravityPreToolUseOutput::from_symposium(&sym);
-        assert_eq!(out.to_hook_output()["decision"], "allow");
+        assert_eq!(out.to_hook_output(), json!({}));
+    }
+
+    #[test]
+    fn a_native_object_without_a_valid_decision_denies() {
+        for stdout in [&br#"{}"#[..], br#"{"decision":""}"#, br#"{"reason":"x"}"#] {
+            let out = AntigravityPreToolUseOutput::parse_output(stdout).unwrap();
+            let symposium::OutputEvent::PreToolUse(o) = out.to_symposium() else {
+                panic!()
+            };
+            assert_eq!(
+                o.decision,
+                symposium_sdk::hook::Decision::Deny,
+                "{}",
+                String::from_utf8_lossy(stdout)
+            );
+        }
     }
 
     #[test]
     fn a_denial_carries_its_reason() {
         let sym = symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::deny("nope"));
         let out = AntigravityPreToolUseOutput::from_symposium(&sym);
-        assert_eq!(out.decision, "deny");
+        assert_eq!(out.decision.as_deref(), Some("deny"));
         assert_eq!(out.reason.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn merged_context_keeps_the_other_injected_steps() {
+        let mut acc = json!({"injectSteps": [
+            {"userMessage": "please also run the tests"},
+            {"ephemeralMessage": "old context"},
+        ]});
+        AntigravityUserPromptSubmitEvent.merge_output(
+            &mut acc,
+            json!({"injectSteps": [{"ephemeralMessage": "joined context"}]}),
+        );
+        assert_eq!(
+            acc,
+            json!({"injectSteps": [
+                {"userMessage": "please also run the tests"},
+                {"ephemeralMessage": "joined context"},
+            ]})
+        );
     }
 
     /// The hook's process cwd is wherever `hooks.json` lives, so the workspace

@@ -12,7 +12,7 @@
 //! method, since the types are now foreign. A predicate is purely a boolean
 //! gate.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use std::sync::Arc;
@@ -47,8 +47,8 @@ impl PredicateEval for Predicate {
                 .iter()
                 .any(|dep| dep_matches(dep, name, version_req.as_ref())),
             Predicate::DependsOnWildcard => true,
-            Predicate::Shell(cmd) => run_shell(cmd),
-            Predicate::PathExists(arg) => path_exists(arg),
+            Predicate::Shell(cmd) => run_shell(cmd, ctx.cwd.as_deref()),
+            Predicate::PathExists(arg) => path_exists(arg, ctx.cwd.as_deref()),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
             Predicate::WorkspaceMember => ctx.workspace_member,
             Predicate::Not(inner) => !inner.evaluate(ctx),
@@ -87,6 +87,7 @@ pub struct PredicateContext<'a> {
     /// ([`PluginManifest::requires_use`](crate::plugins::PluginManifest::requires_use)) is
     /// dormant unless it is listed here.
     used: std::collections::HashSet<PackageId>,
+    cwd: Option<PathBuf>,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
     /// The current (possibly mutated) view of the on-disk cache.
@@ -104,6 +105,7 @@ impl<'a> PredicateContext<'a> {
             workspace_member: false,
             conditions_met: false,
             used: std::collections::HashSet::new(),
+            cwd: None,
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
             disk_cache: None,
@@ -125,6 +127,11 @@ impl<'a> PredicateContext<'a> {
     /// canonical id.
     pub fn with_used(mut self, plugins: &[PackageId]) -> Self {
         self.used.extend(plugins.iter().cloned());
+        self
+    }
+
+    pub fn with_cwd(mut self, dir: Option<&Path>) -> Self {
+        self.cwd = dir.filter(|dir| dir.is_dir()).map(Path::to_path_buf);
         self
     }
 
@@ -246,8 +253,13 @@ fn env_matches(name: &str, expected: Option<&str>) -> bool {
     }
 }
 
-fn run_shell(command: &str) -> bool {
-    match Command::new("sh").arg("-c").arg(command).output() {
+fn run_shell(command: &str, cwd: Option<&Path>) -> bool {
+    let mut sh = Command::new("sh");
+    sh.arg("-c").arg(command);
+    if let Some(dir) = cwd {
+        sh.current_dir(dir);
+    }
+    match sh.output() {
         Ok(out) if out.status.success() => {
             tracing::trace!(command = %command, "shell predicate passed");
             true
@@ -278,11 +290,14 @@ fn run_shell(command: &str) -> bool {
     }
 }
 
-fn path_exists(arg: &str) -> bool {
+fn path_exists(arg: &str, cwd: Option<&Path>) -> bool {
     if arg.is_empty() {
         return false;
     }
-    if Path::new(arg).exists() {
+    if cwd
+        .map_or_else(|| PathBuf::from(arg), |dir| dir.join(arg))
+        .exists()
+    {
         return true;
     }
     if arg.contains('/') || arg.contains(std::path::MAIN_SEPARATOR) {
@@ -585,6 +600,22 @@ mod tests {
     fn path_exists_empty_is_false() {
         // `path_exists()` must not resolve to a `$PATH` dir via `dir.join("")`.
         assert!(!Predicate::PathExists(String::new()).evaluate(&mut ctx(&[])));
+    }
+
+    #[test]
+    fn shell_and_path_exists_run_in_the_context_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("symposium-cwd-marker"), "").unwrap();
+        let path_exists = Predicate::PathExists("symposium-cwd-marker".into());
+        let shell = Predicate::Shell("test -f symposium-cwd-marker".into());
+
+        let mut in_dir = ctx(&[]).with_cwd(Some(dir.path()));
+        assert!(path_exists.evaluate(&mut in_dir));
+        assert!(shell.evaluate(&mut in_dir));
+
+        let mut elsewhere = ctx(&[]);
+        assert!(!path_exists.evaluate(&mut elsewhere));
+        assert!(!shell.evaluate(&mut elsewhere));
     }
 
     // --- introspection ---

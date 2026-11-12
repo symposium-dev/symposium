@@ -195,3 +195,7 @@ Notes that cost real debugging time:
   and replaced the link with a regular file, so `save_json` resolves the link
   and uses the target’s Unix permissions from the moment the temp file is created.
   New configs retain the normal `0666` creation mode filtered by the process umask.
+- A user can switch one of symposium's entries off without removing it, and
+  sync, which also runs on hook events, keeps that choice while it brings the
+  rest of the entry up to date: `enabled: false` on an OpenCode or Goose MCP
+  entry, and on Antigravity's named `symposium` hook.

@@ -1,0 +1,22 @@
+name = "a-native"
+depends-on = ["*"]
+
+[[hooks]]
+name = "ask"
+event = "PreToolUse"
+matcher = "^AskProbe$"
+format = "antigravity"
+command = { script = "$TEST_DIR/dot-symposium/plugins/a-native/scripts/ask.sh" }
+
+[[hooks]]
+name = "empty"
+event = "PreToolUse"
+matcher = "^EmptyProbe$"
+format = "antigravity"
+command = { script = "$TEST_DIR/dot-symposium/plugins/a-native/scripts/empty.sh" }
+
+[[hooks]]
+name = "steps"
+event = "UserPromptSubmit"
+format = "antigravity"
+command = { script = "$TEST_DIR/dot-symposium/plugins/a-native/scripts/steps.sh" }

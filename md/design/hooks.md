@@ -52,6 +52,8 @@ Stopping a hook has to stop everything it started, or a timed-out hook keeps cha
 
 A hook that exits on its own is done: background jobs it leaves running are not killed or waited for.
 
+On Antigravity, a native `PreToolUse` object with no `decision` (or an empty one) is read as the denial Antigravity takes it to be, and injected steps other than context (`userMessage`, `toolCall`) accumulate across hooks.
+
 ## Alternatives considered
 
 ### Registering agent-specific hooks directly
