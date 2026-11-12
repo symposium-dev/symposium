@@ -201,7 +201,7 @@ pub async fn init(
 
     // Resolve each setting: CLI flag > interactive prompt > keep existing.
     let first_run = sym.config.agents.is_empty();
-    let detected = Agent::detect_installed(sym.home_dir(), |name| std::env::var_os(name));
+    let detected = Agent::detect_installed(sym);
     let state = crate::state::load(sym.config_dir()).unwrap_or_default();
     let explicit = state.explicit_agents.clone().unwrap_or_else(|| {
         sym.config

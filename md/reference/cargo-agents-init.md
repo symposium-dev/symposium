@@ -12,15 +12,15 @@ cargo agents init [OPTIONS]
 
 Asks which agents you use and where to install hooks, writes `~/.symposium/config.toml`, and registers hooks for each selected agent.
 
-The agents installed on your machine come preselected, so confirming is usually a single Enter. An agent counts as installed when its user config directory exists:
+The agents installed on your machine come preselected, so confirming is usually a single Enter. An agent counts as installed when its user config directory exists, looked up where Symposium writes that agent's configuration:
 
 | Agent | Config directory |
 |-------|------------------|
 | Antigravity CLI | `~/.gemini/antigravity-cli/` |
 | Claude Code | `~/.claude/` (or `$CLAUDE_CONFIG_DIR`) |
-| Codex CLI | `~/.codex/` |
-| GitHub Copilot | `~/.copilot/` |
-| Goose | `$XDG_CONFIG_HOME/goose/` (default `~/.config/goose/`) |
+| Codex CLI | `~/.codex/` (or `$CODEX_HOME`) |
+| GitHub Copilot | `~/.copilot/` (or `$COPILOT_HOME`) |
+| Goose | `$GOOSE_PATH_ROOT/config/` when set, else `$XDG_CONFIG_HOME/goose/` (default `~/.config/goose/`) |
 | Kiro | `~/.kiro/` |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`) |
 
