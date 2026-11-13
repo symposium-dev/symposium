@@ -138,12 +138,14 @@ fn opencode_server_to_json(server: &McpServer) -> serde_json::Value {
     }
 }
 
-/// Render a table as it would appear in a file, sub-tables included, unlike
-/// `Table::to_string()` which renders only the table's own values.
-fn render_toml_entry(table: &toml_edit::Table) -> String {
+fn toml_entry_values(entry: &toml_edit::Item) -> Option<toml::Table> {
     let mut doc = toml_edit::DocumentMut::new();
-    doc["entry"] = toml_edit::Item::Table(table.clone());
-    doc.to_string()
+    doc["entry"] = entry.clone();
+    doc.to_string().parse().ok()
+}
+
+fn yaml_values(text: &str) -> Option<serde_yaml_ng::Value> {
+    serde_yaml_ng::from_str(text).ok()
 }
 
 /// Result of upserting an MCP server entry.
@@ -411,18 +413,17 @@ pub(super) fn register_codex_mcp_servers(
         }
 
         registered.push(name.to_string());
-        let rendered = render_toml_entry(&server_table);
-        let already_correct = doc["mcp_servers"]
-            .get(name)
-            .and_then(|existing| existing.as_table())
-            .is_some_and(|existing| render_toml_entry(existing) == rendered);
+        let entry = toml_edit::Item::Table(server_table);
+        let wanted = toml_entry_values(&entry);
+        let already_correct =
+            wanted.is_some() && doc["mcp_servers"].get(name).and_then(toml_entry_values) == wanted;
         if already_correct {
             out.already_ok(format!("{display}: {name} MCP server already configured"));
             continue;
         }
 
         let is_new = doc["mcp_servers"].get(name).is_none();
-        doc["mcp_servers"][name] = toml_edit::Item::Table(server_table);
+        doc["mcp_servers"][name] = entry;
         let verb = if is_new { "added" } else { "updated" };
         out.done(format!("{display}: {verb} {name} MCP server"));
         changed = true;
@@ -648,9 +649,6 @@ pub(super) fn register_goose_mcp_servers(
         let already_exists = content.contains(&needle);
 
         if already_exists {
-            // Check if the existing entry matches — parse out the section
-            // and compare command/args. If it matches, skip; otherwise
-            // remove the old section so we can re-insert below.
             let lines: Vec<&str> = content.lines().collect();
             let mut new_lines = Vec::new();
             let mut in_section = false;
@@ -662,7 +660,7 @@ pub(super) fn register_goose_mcp_servers(
                 if !in_section && !trimmed.is_empty() && trimmed.starts_with(&needle) {
                     section_indent = line.len() - trimmed.len();
                     in_section = true;
-                    old_section.push_str(trimmed);
+                    old_section.push_str(line);
                     old_section.push('\n');
                     continue;
                 }
@@ -673,21 +671,19 @@ pub(super) fn register_goose_mcp_servers(
                     }
                 }
                 if in_section {
-                    old_section.push_str(trimmed);
+                    old_section.push_str(line);
                     old_section.push('\n');
                 } else {
                     new_lines.push(*line);
                 }
             }
 
-            // Rebuild expected snippet for comparison (trimmed, no leading indent)
-            let expected_trimmed = snippet.trim();
-            if old_section.trim() == expected_trimmed {
+            let wanted = yaml_values(&snippet);
+            if wanted.is_some() && yaml_values(&old_section) == wanted {
                 out.already_ok(format!("{display}: {name} MCP server already configured"));
                 continue;
             }
 
-            // Stale — remove old section, fall through to insert
             content = new_lines.join("\n");
         }
 
@@ -970,29 +966,109 @@ mod tests {
         assert!(!codex_content.contains("streamy"), "got: {codex_content}");
     }
 
-    /// Registering the same Goose entry twice must leave the file byte-identical:
-    /// hook auto-sync runs this per event, and the update path rewrites the
-    /// user's whole config.yaml.
+    fn agent_plugin_servers() -> Vec<McpServer> {
+        use sacp::schema::{EnvVariable, McpServerHttp};
+        vec![
+            McpServer::Stdio(
+                McpServerStdio::new("local", "/bin/sh")
+                    .args(vec![
+                        "-c".into(),
+                        "cd \"$0\" && exec \"$@\"".into(),
+                        "/plugins/demo".into(),
+                        "demo-server".into(),
+                    ])
+                    .env(vec![
+                        EnvVariable::new("PLUGIN_ROOT", "/plugins/demo"),
+                        EnvVariable::new("PLUGIN_DATA", "/data/demo"),
+                        EnvVariable::new("MODE", "test"),
+                    ]),
+            ),
+            McpServer::Http(McpServerHttp::new("remote", "http://localhost:8080/mcp")),
+        ]
+    }
+
+    fn backdate(path: &Path) -> std::time::SystemTime {
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+        fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    fn assert_second_registration_writes_nothing(
+        path: &Path,
+        register: impl Fn(&Path, &[McpServer], &Output) -> Result<Vec<String>>,
+    ) {
+        let servers = agent_plugin_servers();
+        register(path, &servers, &Output::quiet()).unwrap();
+        let content = fs::read_to_string(path).unwrap();
+        let modified = backdate(path);
+
+        let out = Output::capturing();
+        register(path, &servers, &out).unwrap();
+        let reported = out.captured();
+        assert_eq!(
+            fs::metadata(path).unwrap().modified().unwrap(),
+            modified,
+            "the file was written again: {reported:?}"
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), content);
+        assert_eq!(reported.len(), servers.len(), "got: {reported:?}");
+        assert!(
+            reported
+                .iter()
+                .all(|line| line.contains("already configured")),
+            "got: {reported:?}"
+        );
+    }
+
     #[test]
     fn goose_registration_leaves_the_file_untouched_when_unchanged() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.yaml");
-        register_goose_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
-        let first = fs::read_to_string(&path).unwrap();
-        register_goose_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
-        assert_eq!(first, fs::read_to_string(&path).unwrap());
+        fs::write(
+            &path,
+            "GOOSE_MODEL: gpt-6\nextensions:\n  developer:\n    name: developer\n    type: builtin\n    enabled: true\n",
+        )
+        .unwrap();
+        assert_second_registration_writes_nothing(&path, register_goose_mcp_servers);
     }
 
-    /// Re-registering an unchanged entry must not rewrite the file, including
-    /// for the fields the comparison used to ignore.
     #[test]
-    fn codex_registration_is_idempotent_for_env_and_url() {
+    fn codex_registration_leaves_the_file_untouched_when_unchanged() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
-        register_codex_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap();
-        let first = fs::read_to_string(&path).unwrap();
-        register_codex_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap();
-        assert_eq!(first, fs::read_to_string(&path).unwrap());
+        fs::write(
+            &path,
+            "model = \"gpt-6\"\n\n[mcp_servers.mine]\ncommand = \"mine\"\n\n[features]\nhooks = true\n",
+        )
+        .unwrap();
+        assert_second_registration_writes_nothing(&path, register_codex_mcp_servers);
+    }
+
+    #[test]
+    fn an_entry_the_agent_reformatted_is_left_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let servers = env_and_remote_servers();
+
+        let codex = tmp.path().join("config.toml");
+        let codex_content = "# mine\n[mcp_servers]\nremote = { url = \"http://localhost:8080/mcp\" }\n\n[mcp_servers.withenv]\nenv = { TOKEN = \"abc\" }\nargs = []\ncommand = '/bin/server'\n";
+        fs::write(&codex, codex_content).unwrap();
+        let modified = backdate(&codex);
+        register_codex_mcp_servers(&codex, &servers, &Output::quiet()).unwrap();
+        assert_eq!(fs::read_to_string(&codex).unwrap(), codex_content);
+        assert_eq!(fs::metadata(&codex).unwrap().modified().unwrap(), modified);
+
+        let goose = tmp.path().join("config.yaml");
+        let goose_content = "extensions:\n    withenv:\n        enabled: true\n        type: stdio\n        name: withenv\n        cmd: /bin/server\n        args: []\n        envs:\n            TOKEN: abc\n    remote:\n        name: remote\n        type: streamable_http\n        uri: http://localhost:8080/mcp\n        # mine\n        enabled: true\n        headers:\n            Authorization: Bearer t\n";
+        fs::write(&goose, goose_content).unwrap();
+        let modified = backdate(&goose);
+        register_goose_mcp_servers(&goose, &servers, &Output::quiet()).unwrap();
+        assert_eq!(fs::read_to_string(&goose).unwrap(), goose_content);
+        assert_eq!(fs::metadata(&goose).unwrap().modified().unwrap(), modified);
     }
 
     // -- Claude MCP (also covers Antigravity and Kiro via delegation) --
