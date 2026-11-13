@@ -1,0 +1,13 @@
+name = "predicate-kit"
+predicates = ["ready(yes)"]
+
+[[installations]]
+name = "ready-check"
+script = "$TEST_DIR/ready-check.sh"
+
+[[predicate]]
+name = "ready"
+command = "ready-check"
+
+[[skills]]
+source.path = "skills"
