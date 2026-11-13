@@ -19,7 +19,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use self::version::Version;
-use super::{ClientRunner, HookEvidence, HookRuns, InstalledSkill, Reading};
+use super::{ClientRunner, HookEvidence, HookRuns, InstalledSkill, Reading, Usage};
 use crate::grade::process::Invocation;
 use crate::run::client::Client;
 use crate::run::{Machine, RunError, Trial};
@@ -112,6 +112,10 @@ impl ClientRunner for Claude {
 
     fn unread_hooks(&self) -> HookEvidence {
         HookEvidence::Reported(HookRuns::unread(hooks::OBSERVED))
+    }
+
+    fn unread_usage(&self) -> Usage {
+        Usage::Unknown
     }
 
     fn read(&self, trial: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading {

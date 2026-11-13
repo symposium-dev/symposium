@@ -13,15 +13,13 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use super::{Verdict, file};
+use crate::skill_md::{self, MAX_SKILL_MD};
 use crate::task::{SkillExpectations, SkillName};
 
 /// The marker sync leaves in every directory it installs.
 const MARKER: &str = ".symposium";
 /// The files sync adds, which are not skill content.
 const MANAGED: [&str; 2] = [MARKER, ".gitignore"];
-
-/// Larger than any `SKILL.md` a hashed copy is identified by.
-const MAX_SKILL_MD: u64 = 8 * 1024 * 1024;
 
 /// Which of the two install assertions a skill is under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,26 +247,11 @@ fn identity(dir: &Path, skill: &SkillName) -> io::Result<Identity> {
     };
     let text = String::from_utf8(bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    Ok(match frontmatter_name(&text) {
+    Ok(match skill_md::name(&text) {
         Some(name) if name == skill.as_str() => Identity::Expected,
         Some(_) => Identity::Other,
         None => Identity::Unknown,
     })
-}
-
-/// The `name` of a `SKILL.md`, read as Symposium reads it: the YAML between the
-/// opening `---` and the next line starting `---`, with surrounding double quotes
-/// removed. `None` when there is no such name.
-fn frontmatter_name(text: &str) -> Option<String> {
-    let body = text.trim_start().strip_prefix("---")?;
-    let body = body.strip_prefix('\n').unwrap_or(body);
-    let yaml = &body[..body.find("\n---")?];
-    let frontmatter: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).ok()?;
-    let name = frontmatter.get("name")?.as_str()?;
-    let unquoted = name
-        .strip_prefix('"')
-        .and_then(|name| name.strip_suffix('"'));
-    Some(unquoted.unwrap_or(name).to_owned())
 }
 
 /// A directory or a file, the only entries sync reads.
@@ -640,33 +623,6 @@ mod tests {
                 (InstallEvidence::Present, Verdict::Fail)
             ]
         );
-    }
-
-    #[test]
-    fn a_frontmatter_name_is_read_as_yaml() {
-        for text in [
-            "---\nname: x\n---\n",
-            "---\nname: \"x\"\n---\n",
-            "---\nname: 'x'\n---\n",
-            "---\nname: x # explanatory comment\n---\n",
-            "---\ndescription: |\n  two\n  lines\nname: >-\n  x\n---\n",
-            "\n---\r\nname: x\r\n---\r\n",
-        ] {
-            assert_eq!(frontmatter_name(text).as_deref(), Some("x"), "{text:?}");
-        }
-    }
-
-    #[test]
-    fn a_frontmatter_without_a_name_names_nothing() {
-        for text in [
-            "name: x\n",
-            "---\nname: x\n",
-            "---\nname: [x\n---\n",
-            "---\nname: [x]\n---\n",
-            "---\ndescription: d\n---\n",
-        ] {
-            assert_eq!(frontmatter_name(text), None, "{text:?}");
-        }
     }
 
     #[test]
