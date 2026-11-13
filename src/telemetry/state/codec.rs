@@ -14,6 +14,33 @@ use super::{
     },
 };
 
+/// A content-free violation of a runtime private-state invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::telemetry) enum StateInvariantError {
+    Aggregate(AggregateStateInvariantError),
+    MaintenanceAfterHighWater,
+}
+
+impl fmt::Display for StateInvariantError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Aggregate(error) => error.fmt(formatter),
+            Self::MaintenanceAfterHighWater => {
+                formatter.write_str("maintenance attempt day is after the latest opened day")
+            }
+        }
+    }
+}
+
+impl Error for StateInvariantError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Aggregate(error) => Some(error),
+            Self::MaintenanceAfterHighWater => None,
+        }
+    }
+}
+
 /// A content-free reason private state could not be decoded.
 ///
 /// This type deliberately retains neither the state bytes nor parser errors:
@@ -32,7 +59,7 @@ pub(in crate::telemetry) enum StateContentError {
         line: Option<usize>,
         column: Option<usize>,
     },
-    InvalidAggregateState(AggregateStateInvariantError),
+    InvalidRuntimeState(StateInvariantError),
 }
 
 impl fmt::Display for StateContentError {
@@ -62,9 +89,9 @@ impl fmt::Display for StateContentError {
             Self::InvalidState { .. } => {
                 formatter.write_str("telemetry private state violates its schema")
             }
-            Self::InvalidAggregateState(error) => write!(
+            Self::InvalidRuntimeState(error) => write!(
                 formatter,
-                "telemetry private state violates an aggregate invariant: {error}"
+                "telemetry private state violates a runtime invariant: {error}"
             ),
         }
     }
@@ -103,7 +130,7 @@ impl From<StateContentError> for StateDecodeError {
 /// Failure to encode validated private telemetry state.
 #[derive(Debug)]
 pub(in crate::telemetry) enum StateEncodeError {
-    Invariant(AggregateStateInvariantError),
+    Invariant(StateInvariantError),
     Serialize(toml::ser::Error),
 }
 
@@ -149,7 +176,7 @@ pub(in crate::telemetry) fn decode(bytes: &[u8]) -> Result<TelemetryStateV1, Sta
 
     let raw: RawTelemetryState = parse_toml(source, ParseStage::State)?;
     raw.into_runtime()
-        .map_err(StateContentError::InvalidAggregateState)
+        .map_err(StateContentError::InvalidRuntimeState)
         .map_err(Into::into)
 }
 
@@ -170,17 +197,26 @@ struct TelemetryStateRef<'a> {
     version: StateVersion,
     #[serde(skip_serializing_if = "Option::is_none")]
     storage_limit_day: Option<UtcDay>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_maintenance_attempt_day: Option<UtcDay>,
     identity: &'a IdentityState,
     aggregates: AggregateStateRef<'a>,
 }
 
 impl<'a> TryFrom<&'a TelemetryStateV1> for TelemetryStateRef<'a> {
-    type Error = AggregateStateInvariantError;
+    type Error = StateInvariantError;
 
     fn try_from(state: &'a TelemetryStateV1) -> Result<Self, Self::Error> {
+        let root_state = validate_root_state(state);
+        debug_assert!(
+            root_state.is_ok(),
+            "BUG: runtime private state must satisfy persistence invariants"
+        );
+        root_state?;
         let scope = state.identity.identifier_window_scope();
         let context = AggregatePersistenceContext::new(&scope, state.identity.latest_opened_day);
-        let aggregates = AggregateStateRef::try_from((&state.aggregates, context));
+        let aggregates = AggregateStateRef::try_from((&state.aggregates, context))
+            .map_err(StateInvariantError::Aggregate);
         debug_assert!(
             aggregates.is_ok(),
             "BUG: runtime aggregate state must satisfy persistence invariants"
@@ -189,6 +225,7 @@ impl<'a> TryFrom<&'a TelemetryStateV1> for TelemetryStateRef<'a> {
         Ok(Self {
             version: state.version,
             storage_limit_day: state.storage_limit_day,
+            last_maintenance_attempt_day: state.last_maintenance_attempt_day,
             identity: &state.identity,
             aggregates: aggregates?,
         })
@@ -200,22 +237,40 @@ impl<'a> TryFrom<&'a TelemetryStateV1> for TelemetryStateRef<'a> {
 struct RawTelemetryState {
     version: StateVersion,
     storage_limit_day: Option<UtcDay>,
+    last_maintenance_attempt_day: Option<UtcDay>,
     identity: IdentityState,
     aggregates: RawAggregateState,
 }
 
 impl RawTelemetryState {
-    fn into_runtime(self) -> Result<TelemetryStateV1, AggregateStateInvariantError> {
+    fn into_runtime(self) -> Result<TelemetryStateV1, StateInvariantError> {
         let scope = self.identity.identifier_window_scope();
         let context = AggregatePersistenceContext::new(&scope, self.identity.latest_opened_day);
-        let aggregates = self.aggregates.into_runtime(context)?;
+        let aggregates = self
+            .aggregates
+            .into_runtime(context)
+            .map_err(StateInvariantError::Aggregate)?;
 
-        Ok(TelemetryStateV1 {
+        let state = TelemetryStateV1 {
             version: self.version,
             storage_limit_day: self.storage_limit_day,
+            last_maintenance_attempt_day: self.last_maintenance_attempt_day,
             identity: self.identity,
             aggregates,
-        })
+        };
+        validate_root_state(&state)?;
+        Ok(state)
+    }
+}
+
+fn validate_root_state(state: &TelemetryStateV1) -> Result<(), StateInvariantError> {
+    let valid = state
+        .last_maintenance_attempt_day
+        .is_none_or(|day| day <= state.identity.latest_opened_day);
+    if valid {
+        Ok(())
+    } else {
+        Err(StateInvariantError::MaintenanceAfterHighWater)
     }
 }
 
@@ -266,8 +321,13 @@ fn source_position(source: &str, offset: usize) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone as _, Utc};
+
     use super::*;
-    use crate::telemetry::state::{IDENTIFIER_WINDOW_TEST_STATE, aggregate::AggregateFamily};
+    use crate::telemetry::{
+        schema::UtcSecond,
+        state::{IDENTIFIER_WINDOW_TEST_STATE, aggregate::AggregateFamily},
+    };
 
     fn assert_diagnostic_redacts(error: &StateDecodeError, sensitive: &str) {
         assert!(!error.to_string().contains(sensitive));
@@ -321,10 +381,52 @@ mod tests {
         assert!(matches!(
             result,
             Err(StateDecodeError::Malformed(
-                StateContentError::InvalidAggregateState(
+                StateContentError::InvalidRuntimeState(StateInvariantError::Aggregate(
                     AggregateStateInvariantError::StoreDayMismatch {
                         family: AggregateFamily::PluginHook,
                     }
+                ))
+            ))
+        ));
+    }
+
+    #[test]
+    fn maintenance_attempt_day_round_trips_canonically() {
+        let mut state = decode(IDENTIFIER_WINDOW_TEST_STATE.as_bytes()).unwrap();
+        let accepted_day = state.latest_opened_day();
+        let accepted = state
+            .observe_recording(UtcSecond::from_datetime(
+                Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            ))
+            .unwrap();
+        let due = state.schedule_maintenance(&accepted).unwrap();
+
+        let encoded = encode(&state).unwrap();
+        let decoded = decode(encoded.as_bytes()).unwrap();
+
+        assert_eq!(due.day(), accepted_day);
+        assert!(decoded == state, "decoded state differs");
+        assert_eq!(encode(&decoded).unwrap(), encoded);
+        assert!(
+            encoded.starts_with("version = 1\nlast-maintenance-attempt-day = \"2026-08-03\"\n")
+        );
+    }
+
+    #[test]
+    fn maintenance_attempt_day_after_high_water_is_rejected() {
+        let source = IDENTIFIER_WINDOW_TEST_STATE.replacen(
+            "version = 1\n",
+            "version = 1\nlast-maintenance-attempt-day = \"2026-08-04\"\n",
+            1,
+        );
+
+        let result = decode(source.as_bytes());
+
+        assert!(matches!(
+            result,
+            Err(StateDecodeError::Malformed(
+                StateContentError::InvalidRuntimeState(
+                    StateInvariantError::MaintenanceAfterHighWater
                 )
             ))
         ));
