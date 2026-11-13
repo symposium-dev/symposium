@@ -14,17 +14,27 @@ pub(crate) mod paths;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-pub(crate) use error::{ClientError, Malformation, ProvenanceError, TranscriptError, Unusable};
+pub(crate) use error::{
+    ClientError, LaunchError, Malformation, ProvenanceError, TranscriptError, Unusable,
+};
 
 use crate::grade::ProcessError;
 use crate::grade::process::{Backend, Finished, Invocation};
 use crate::run::Trial;
+use crate::run::client::Client;
 use crate::task::SkillName;
 
 /// One client, as the runner drives it.
 pub(crate) trait ClientRunner {
+    /// Which client this is, the only place a trial's client is named.
+    fn client(&self) -> Client;
+
+    /// The model its sessions are asked to run, as requested: the only place a trial's
+    /// model is named.
+    fn model(&self) -> &str;
+
     /// The command that starts a new session in `trial` and runs `prompt`, with `env` as
     /// its whole environment.
     fn invocation(&self, trial: &Trial, prompt: &str, env: Vec<(OsString, OsString)>)
@@ -45,6 +55,9 @@ pub(crate) trait ClientRunner {
 /// What one transcript says.
 #[derive(Debug)]
 pub(crate) struct Reading {
+    /// Whether the adapter observed the event that introduces a session. This says
+    /// only what was observed; transcript errors decide whether absence is reliable.
+    pub(crate) introduction: SessionIntroduction,
     /// How the session ended, unless the transcript cannot be read, an event the adapter
     /// needs is malformed, or it is not this session's, from the client checked before
     /// launch.
@@ -54,6 +67,13 @@ pub(crate) struct Reading {
     pub(crate) hooks: HookEvidence,
     pub(crate) activity: ToolActivity,
     pub(crate) summary: Summary,
+}
+
+/// Whether a client's transcript introduced its session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionIntroduction {
+    Observed,
+    NotObserved,
 }
 
 /// What a transcript says about the hooks its client ran, a record the agent cannot
@@ -306,6 +326,8 @@ pub(crate) struct Execution {
     /// client never started, and not evidence when the backend lost hold of the output.
     pub(crate) transcript: PathBuf,
     pub(crate) ended: Ended,
+    /// How long the backend ran the client, transcript reading left out.
+    pub(crate) elapsed: Duration,
     pub(crate) loads: Vec<Load>,
     pub(crate) hooks: HookEvidence,
     pub(crate) activity: ToolActivity,
@@ -323,7 +345,7 @@ pub(crate) enum Ended {
     },
     Failed(ClientError),
     /// The client never started: a setup failure, not a trial.
-    NotLaunched(ProcessError),
+    NotLaunched(LaunchError),
     /// The runner could not supervise the client once it started.
     Unsupervised(ProcessError),
     /// The client exited, but its transcript cannot say how the session ended, whatever
@@ -354,17 +376,23 @@ pub(crate) fn execute(
     let invocation = runner.invocation(trial, prompt, env);
     let logs = trial.session();
     let transcript = invocation.log(&logs, "stdout");
+    let started = Instant::now();
+    let ran = backend.run(&invocation, deadline, &logs);
+    let elapsed = started.elapsed();
     let unread = |ended| Execution {
         transcript: transcript.clone(),
         ended,
+        elapsed,
         loads: vec![Load::Unknown; skills.len()],
         hooks: runner.unread_hooks(),
         activity: ToolActivity::unread(),
         summary: Summary::unread(runner.unread_usage()),
     };
-    let finished = match backend.run(&invocation, deadline, &logs) {
+    let finished = match ran {
         Ok(finished) => finished,
-        Err(error @ ProcessError::Spawn { .. }) => return unread(Ended::NotLaunched(error)),
+        Err(error @ ProcessError::Spawn { .. }) => {
+            return unread(Ended::NotLaunched(error.into()));
+        }
         // Every other error comes after the client started. Output the runner lost hold
         // of may still be written, so the transcript is not evidence.
         Err(error) => return unread(Ended::Unsupervised(error)),
@@ -376,8 +404,8 @@ pub(crate) fn execute(
         });
     }
     let reading = runner.read(trial, &transcript, skills);
-    let ended = match (finished, reading.completion) {
-        (_, Err(Unusable::Provenance(error))) => Ended::Mismatched(error),
+    let ended = match (finished, reading.introduction, reading.completion) {
+        (_, _, Err(Unusable::Provenance(error))) => Ended::Mismatched(error),
         (
             Finished {
                 status: None,
@@ -385,20 +413,35 @@ pub(crate) fn execute(
                 ..
             },
             _,
+            _,
         ) => Ended::TimedOut { after_deadline },
-        (_, Err(Unusable::Transcript(error))) => Ended::Unreadable(error),
+        (_, _, Err(Unusable::Transcript(error))) => Ended::Unreadable(error),
         (
             Finished {
                 status: Some(status),
                 stderr,
                 ..
             },
+            SessionIntroduction::NotObserved,
+            _,
+        ) => Ended::NotLaunched(LaunchError::Exited {
+            status,
+            stderr: stderr.tail().trim().to_owned(),
+        }),
+        (
+            Finished {
+                status: Some(status),
+                stderr,
+                ..
+            },
+            SessionIntroduction::Observed,
             Ok(completion),
         ) => ending(status, completion, || stderr.tail().trim().to_owned()),
     };
     Execution {
         transcript,
         ended,
+        elapsed,
         loads: reading.loads,
         hooks: reading.hooks,
         activity: reading.activity,
@@ -434,6 +477,14 @@ mod tests {
     struct OneLine;
 
     impl ClientRunner for OneLine {
+        fn client(&self) -> Client {
+            Client::ClaudeCode
+        }
+
+        fn model(&self) -> &str {
+            "a-model"
+        }
+
         fn invocation(
             &self,
             trial: &Trial,
@@ -464,6 +515,12 @@ mod tests {
                 _ => Load::Unknown,
             };
             Reading {
+                introduction: match text.as_deref().map(str::trim) {
+                    Ok("") | Ok("foreign") | Ok("garbled") | Ok("result-without-introduction") => {
+                        SessionIntroduction::NotObserved
+                    }
+                    _ => SessionIntroduction::Observed,
+                },
                 completion: text
                     .map_err(|source| {
                         TranscriptError::Read {
@@ -494,7 +551,14 @@ mod tests {
                 }
                 .into());
             }
-            "foreign" => return Err(ProvenanceError::Unstated.into()),
+            "foreign" => {
+                return Err(ProvenanceError::Session {
+                    requested: "this-session".to_owned(),
+                    found: "another-session".to_owned(),
+                }
+                .into());
+            }
+            "result-without-introduction" => Completion::Missing,
             _ => Completion::Missing,
         })
     }
@@ -602,6 +666,87 @@ mod tests {
         .ended
     }
 
+    /// Runs for its duration, then writes a finished transcript.
+    struct Slow(Duration);
+
+    impl Backend for Slow {
+        fn run(
+            &self,
+            invocation: &Invocation,
+            _: Duration,
+            logs: &Path,
+        ) -> Result<Finished, ProcessError> {
+            std::thread::sleep(self.0);
+            Replay {
+                transcript: "finished\n",
+                status: Some(0),
+                output_stayed_open: false,
+            }
+            .run(invocation, Duration::ZERO, logs)
+        }
+    }
+
+    /// [`OneLine`], taking its duration to read the transcript.
+    struct SlowReader(Duration);
+
+    impl ClientRunner for SlowReader {
+        fn client(&self) -> Client {
+            OneLine.client()
+        }
+
+        fn model(&self) -> &str {
+            "a-model"
+        }
+
+        fn invocation(
+            &self,
+            trial: &Trial,
+            prompt: &str,
+            env: Vec<(OsString, OsString)>,
+        ) -> Invocation {
+            OneLine.invocation(trial, prompt, env)
+        }
+
+        fn unread_hooks(&self) -> HookEvidence {
+            OneLine.unread_hooks()
+        }
+
+        fn unread_usage(&self) -> Usage {
+            OneLine.unread_usage()
+        }
+
+        fn read(&self, trial: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading {
+            std::thread::sleep(self.0);
+            OneLine.read(trial, transcript, skills)
+        }
+    }
+
+    #[test]
+    fn a_sessions_time_is_the_clients_and_not_its_reading() {
+        let host = Host::new();
+        let trial = trial(&host.batch(), 1, Configuration::Baseline);
+        let (running, reading) = (Duration::from_millis(100), Duration::from_millis(100));
+
+        let started = Instant::now();
+        let execution = execute(
+            &SlowReader(reading),
+            &Slow(running),
+            &trial,
+            Vec::new(),
+            "do the task",
+            &[greeting()],
+            Duration::from_secs(60),
+        );
+        let total = started.elapsed();
+
+        assert!(matches!(execution.ended, Ended::Completed), "{execution:?}");
+        assert!(execution.elapsed >= running, "{:?}", execution.elapsed);
+        assert!(
+            total.saturating_sub(execution.elapsed) >= reading,
+            "{total:?}"
+        );
+    }
+
     #[test]
     fn a_finished_session_is_completed_and_its_transcript_kept() {
         let (_host, trial, execution) = run(&Replay {
@@ -699,12 +844,46 @@ mod tests {
         assert!(
             matches!(
                 execution.ended,
-                Ended::NotLaunched(ProcessError::Spawn { .. })
+                Ended::NotLaunched(LaunchError::Process(ProcessError::Spawn { .. }))
             ),
             "{execution:?}"
         );
         // No transcript was read, but the client still cannot report hooks.
         assert_eq!(execution.hooks, HookEvidence::Unsupported);
+    }
+
+    #[test]
+    fn a_clean_exit_before_the_session_introduction_is_not_launched() {
+        for status in [0, 126, 127] {
+            let ended = replay("", Some(status));
+
+            assert!(
+                matches!(ended, Ended::NotLaunched(LaunchError::Exited { .. })),
+                "{ended:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_matching_result_without_an_introduction_is_not_launched() {
+        let ended = replay("result-without-introduction\n", Some(0));
+
+        assert!(
+            matches!(ended, Ended::NotLaunched(LaunchError::Exited { .. })),
+            "{ended:?}"
+        );
+    }
+
+    #[test]
+    fn an_exit_after_the_session_introduction_is_a_session_failure() {
+        for status in [126, 127] {
+            let ended = replay("finished\n", Some(status));
+
+            assert!(
+                matches!(ended, Ended::Failed(ClientError::Exited { .. })),
+                "{ended:?}"
+            );
+        }
     }
 
     #[test]
@@ -736,6 +915,16 @@ mod tests {
     }
 
     #[test]
+    fn foreign_evidence_without_an_introduction_is_still_mismatched() {
+        let ended = replay("foreign\n", Some(126));
+
+        assert!(
+            matches!(ended, Ended::Mismatched(ProvenanceError::Session { .. })),
+            "{ended:?}"
+        );
+    }
+
+    #[test]
     fn a_transcript_the_runner_cannot_read_is_unreadable_whatever_the_exit() {
         for status in [0, 1] {
             let (_host, _, execution) = run(&Silent(status));
@@ -756,7 +945,7 @@ mod tests {
             let ended = replay("foreign\n", Some(status));
 
             assert!(
-                matches!(ended, Ended::Mismatched(ProvenanceError::Unstated)),
+                matches!(ended, Ended::Mismatched(ProvenanceError::Session { .. })),
                 "{ended:?}"
             );
         }
@@ -789,7 +978,7 @@ mod tests {
         let ended = replay("foreign\n", None);
 
         assert!(
-            matches!(ended, Ended::Mismatched(ProvenanceError::Unstated)),
+            matches!(ended, Ended::Mismatched(ProvenanceError::Session { .. })),
             "{ended:?}"
         );
     }

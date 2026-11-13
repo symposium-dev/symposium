@@ -231,7 +231,6 @@ impl<'a> Submitted<'a> {
 
     /// A trial's project, which started as the starter and [`PROJECT_SCAFFOLD`], holding
     /// `symposium_copies`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the trial driver comes next"))]
     pub(crate) fn trial(project: &'a Path, symposium_copies: &'a [String]) -> Self {
         Self {
             project,

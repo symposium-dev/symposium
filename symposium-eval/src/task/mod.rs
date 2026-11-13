@@ -174,6 +174,11 @@ impl Task {
         self.kind
     }
 
+    /// What the agent is asked to do.
+    pub(crate) fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
     pub(crate) fn fixtures(&self) -> &[FixtureName] {
         &self.fixtures
     }

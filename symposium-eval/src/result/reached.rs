@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use super::session::SessionRecord;
 use super::{Reached, ResultError, SetupStep, sanitized};
+use crate::client::{Ended, Execution};
 use crate::expect::config::ConfigChange;
 use crate::expect::decide::Expectations;
 use crate::grade::Grading;
@@ -15,8 +16,14 @@ use crate::task::Task;
 #[derive(Debug, Serialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub(super) enum ReachedRecord {
-    Setup { error: String },
-    Prelaunch { error: String },
+    Setup {
+        error: String,
+    },
+    Prelaunch {
+        error: String,
+    },
+    /// The client could not be launched; `session` says why.
+    Launch,
     Graded,
 }
 
@@ -43,7 +50,9 @@ pub(super) enum FailureRecord {
 impl<'a> Reached<'a> {
     pub(super) fn outcome(self, task: &Task) -> Outcome {
         match self {
-            Self::Setup { .. } => outcome::decide(task.kind(), Session::NotStarted, &[]),
+            Self::Setup { .. } | Self::Session { .. } => {
+                outcome::decide(task.kind(), Session::NotStarted, &[])
+            }
             Self::Graded {
                 execution,
                 grading,
@@ -62,10 +71,24 @@ impl<'a> Reached<'a> {
 
     pub(super) fn session(self, task: &Task) -> Result<Option<SessionRecord>, ResultError> {
         match self {
-            Self::Graded {
-                execution, elapsed, ..
-            } => SessionRecord::new(task, execution, elapsed).map(Some),
+            Self::Session { execution, .. } | Self::Graded { execution, .. } => {
+                SessionRecord::new(task, execution).map(Some)
+            }
             Self::Setup { .. } => Ok(None),
+        }
+    }
+
+    /// A session is left ungraded exactly when its client never launched.
+    pub(super) fn check_session_phase(self) -> Result<(), ResultError> {
+        let (launched, graded) = match self {
+            Self::Session { execution, .. } => (launched(execution), false),
+            Self::Graded { execution, .. } => (launched(execution), true),
+            Self::Setup { .. } => return Ok(()),
+        };
+        if launched == graded {
+            Ok(())
+        } else {
+            Err(ResultError::SessionPhase { launched })
         }
     }
 
@@ -91,30 +114,36 @@ impl<'a> Reached<'a> {
     pub(super) fn grading(self) -> Option<&'a Grading> {
         match self {
             Self::Graded { grading, .. } => Some(grading),
-            Self::Setup { .. } => None,
+            Self::Setup { .. } | Self::Session { .. } => None,
         }
     }
 
     pub(super) fn expectations(self) -> Option<&'a Expectations> {
         match self {
             Self::Graded { expectations, .. } => expectations,
-            Self::Setup { .. } => None,
+            Self::Setup { .. } | Self::Session { .. } => None,
         }
     }
 
     pub(super) fn changes(self) -> &'a [ConfigChange] {
         match self {
-            Self::Graded { changes, .. } => changes,
+            Self::Session { changes, .. } | Self::Graded { changes, .. } => changes,
             Self::Setup { .. } => &[],
         }
     }
 
     pub(super) fn reported_model(self) -> Option<String> {
         match self {
-            Self::Graded { execution, .. } => execution.summary.model.clone(),
+            Self::Session { execution, .. } | Self::Graded { execution, .. } => {
+                execution.summary.model.clone()
+            }
             Self::Setup { .. } => None,
         }
     }
+}
+
+fn launched(execution: &Execution) -> bool {
+    !matches!(execution.ended, Ended::NotLaunched(_))
 }
 
 impl From<Reached<'_>> for ReachedRecord {
@@ -132,6 +161,7 @@ impl From<Reached<'_>> for ReachedRecord {
             } => Self::Prelaunch {
                 error: sanitized(error),
             },
+            Reached::Session { .. } => Self::Launch,
             Reached::Graded { .. } => Self::Graded,
         }
     }

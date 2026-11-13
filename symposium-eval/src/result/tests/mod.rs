@@ -44,6 +44,7 @@ pub(super) fn execution(ended: Ended, usage: Usage) -> Execution {
     Execution {
         transcript: "transcript.jsonl".into(),
         ended,
+        elapsed: Duration::from_millis(1500),
         loads: vec![Load::Loaded],
         hooks: HookEvidence::Unsupported,
         activity: ToolActivity::unread(),
@@ -160,7 +161,6 @@ pub(super) fn graded<'a>(
 ) -> Reached<'a> {
     Reached::Graded {
         execution,
-        elapsed: Duration::from_millis(1500),
         grading,
         changes: &[],
         expectations,
@@ -201,6 +201,30 @@ fn a_trial_stopped_before_launch() {
     let reached = Reached::Setup {
         step: SetupStep::Prelaunch,
         error: &error,
+    };
+
+    assert_result_snapshot!(result_of(Configuration::Symposium, reached));
+}
+
+/// A session whose client could not be started, as `client::execute` leaves it.
+pub(super) fn not_launched() -> Execution {
+    let error = crate::grade::ProcessError::Spawn {
+        program: "claude".into(),
+        source: io::Error::from(io::ErrorKind::NotFound),
+    };
+    let mut execution = execution(Ended::NotLaunched(error.into()), Usage::Unknown);
+    execution.elapsed = Duration::ZERO;
+    execution.loads = vec![Load::Unknown];
+    execution.summary = Summary::unread(Usage::Unknown);
+    execution
+}
+
+#[test]
+fn a_trial_whose_client_never_launched() {
+    let execution = not_launched();
+    let reached = Reached::Session {
+        execution: &execution,
+        changes: &[],
     };
 
     assert_result_snapshot!(result_of(Configuration::Symposium, reached));

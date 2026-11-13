@@ -2,7 +2,7 @@
 
 use std::io;
 
-use super::{execution, expectations, graded, passing, try_result_of};
+use super::{execution, expectations, graded, not_launched, passing, try_result_of};
 use crate::client::{Ended, Load, Usage};
 use crate::result::{Reached, ResultError, SetupStep};
 use crate::run::Configuration;
@@ -62,4 +62,26 @@ fn loads_must_match_the_skills_looked_for() {
             }
         );
     }
+}
+
+#[test]
+fn only_a_client_that_never_launched_goes_ungraded() {
+    let (launched, unlaunched) = (execution(Ended::Completed, Usage::Unknown), not_launched());
+    let grading = passing();
+    let session = |execution| Reached::Session {
+        execution,
+        changes: &[],
+    };
+    let result = |reached| try_result_of(Configuration::Baseline, reached);
+
+    assert!(result(session(&unlaunched)).is_ok());
+    assert!(result(graded(&launched, &grading, None)).is_ok());
+    assert_eq!(
+        result(session(&launched)).unwrap_err(),
+        ResultError::SessionPhase { launched: true }
+    );
+    assert_eq!(
+        result(graded(&unlaunched, &grading, None)).unwrap_err(),
+        ResultError::SessionPhase { launched: false }
+    );
 }
