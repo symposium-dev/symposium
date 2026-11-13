@@ -554,6 +554,7 @@ mod tests {
         )
         .unwrap();
         fs::write(project.join("src/main.rs"), main).unwrap();
+        fs::create_dir_all(dir.join("tmp")).unwrap();
         let cargo = Cargo::new(project, dir);
         let build = cargo.invocation("build", &["build", "--quiet"]);
         let finished = Local.run(&build, Duration::from_secs(300), dir).unwrap();

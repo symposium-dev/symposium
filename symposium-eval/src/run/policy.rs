@@ -215,19 +215,7 @@ impl Reach {
     /// evaluation root: either would let one rule silently undo another.
     pub(crate) fn for_trial(trial: &Trial, machine: &Machine) -> Result<Self, RunError> {
         let batch = trial.batch();
-        reject_nested(batch.eval_root(), &machine.checkout)?;
-        reject_nested(&machine.toolchain, batch.eval_root())?;
-
-        let mut deny_read = machine.user_data_roots.clone();
-        for name in batch
-            .eval_root_names()
-            .into_iter()
-            .chain([machine.checkout_as_given.clone(), machine.checkout.clone()])
-        {
-            if !deny_read.contains(&name) {
-                deny_read.push(name);
-            }
-        }
+        let deny_read = denied_reads(trial, machine)?;
 
         // Only the trial's read-only directories: srt 0.0.81 rebinds an `allowRead` read-only
         // over the writable directories inside it, and then cannot create its own guard
@@ -256,6 +244,48 @@ impl Reach {
             allow_write,
         })
     }
+
+    /// Confines grading `trial`'s submission to reading its trusted sources and writing
+    /// its work directory, with the toolchain to build them. The sources and the work
+    /// directory are siblings, since `srt` rebinds an `allowRead` read-only over any
+    /// writable directory inside it. Nothing else in the trial is reachable, grading's
+    /// own logs included: what the agent wrote runs here as tests, and the runner
+    /// writes the logs from outside.
+    ///
+    /// # Errors
+    ///
+    /// As [`Reach::for_trial`].
+    pub(crate) fn for_grading(trial: &Trial, machine: &Machine) -> Result<Self, RunError> {
+        Ok(Self {
+            deny_read: denied_reads(trial, machine)?,
+            allow_read: vec![machine.toolchain.clone(), trial.grading_sources()],
+            allow_write: vec![trial.grading_work()],
+        })
+    }
+}
+
+/// What no command of `trial` may read: every user's home, the evaluation root with
+/// every other trial and the batch's hidden checks, and the checkout with `evals/`.
+///
+/// # Errors
+///
+/// When the evaluation root lies inside the checkout, or the toolchain inside the
+/// evaluation root: either would let one rule silently undo another.
+fn denied_reads(trial: &Trial, machine: &Machine) -> Result<Vec<PathBuf>, RunError> {
+    let batch = trial.batch();
+    reject_nested(batch.eval_root(), &machine.checkout)?;
+    reject_nested(&machine.toolchain, batch.eval_root())?;
+    let mut deny_read = machine.user_data_roots.clone();
+    for name in batch
+        .eval_root_names()
+        .into_iter()
+        .chain([machine.checkout_as_given.clone(), machine.checkout.clone()])
+    {
+        if !deny_read.contains(&name) {
+            deny_read.push(name);
+        }
+    }
+    Ok(deny_read)
 }
 
 impl Policy {
@@ -289,6 +319,31 @@ impl Policy {
                     name: api_key.name(),
                     mode: "mask",
                 }],
+            },
+        })
+    }
+
+    /// [`Reach::for_grading`], with no network and no credentials.
+    ///
+    /// # Errors
+    ///
+    /// As [`Reach::for_grading`].
+    pub(crate) fn for_grading(trial: &Trial, machine: &Machine) -> Result<Self, RunError> {
+        let reach = Reach::for_grading(trial, machine)?;
+        Ok(Self {
+            filesystem: Filesystem {
+                deny_read: literals(reach.deny_read),
+                allow_read: literals(reach.allow_read),
+                allow_write: literals(reach.allow_write),
+                deny_write: Vec::new(),
+            },
+            network: Network {
+                allowed_domains: Vec::new(),
+                denied_domains: Vec::new(),
+                tls_terminate: TlsTerminate {},
+            },
+            credentials: Credentials {
+                env_vars: Vec::new(),
             },
         })
     }
