@@ -191,7 +191,7 @@ async fn a_global_plugin_carries_all_its_skills_whatever_the_workspace() {
             &plugin.join("skills/without-rand/SKILL.md"),
             "---\nname: without-rand\ndescription: Without rand\npredicates: not(depends-on(rand))\n---\n",
         );
-        ctx.sym.config.plugins.used.push(UseEntry::Global("gated-guide".into()));
+        ctx.sym.config.plugins.used.push(UseEntry::global("gated-guide".into()));
         ctx.sym.save_config()?;
 
         ctx.symposium(&["init", "--add-agent", "claude"]).await?;
@@ -252,7 +252,7 @@ async fn a_skill_an_agent_takes_as_a_plugin_does_not_rename_its_namesake() {
             .config
             .plugins
             .used
-            .push(UseEntry::Global("gp".into()));
+            .push(UseEntry::global("gp".into()));
         ctx.sym.save_config()?;
 
         ctx.symposium(&[

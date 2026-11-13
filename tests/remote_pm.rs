@@ -681,7 +681,9 @@ async fn a_configured_pms_dependency_plugin_activates_once_consented() {
         symposium::sync::sync(&sym, &ws, symposium::UpdateLevel::None)
             .await
             .unwrap();
-        ws_root.join(".claude/skills/usage/SKILL.md").is_file()
+        ws_root
+            .join(".claude/skills/widget/skills/usage/SKILL.md")
+            .is_file()
     }
 
     // Undecided: offered as a candidate, not active.

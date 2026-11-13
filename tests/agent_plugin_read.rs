@@ -289,8 +289,7 @@ async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
                 status("portable-dep", &entries),
                 (StatusState::Candidate, Some("agent plugin"))
             );
-            let registry = symposium::plugins::load_registry(&ctx.sym).await;
-            let candidates = symposium::discovery::discover(&ctx.sym, &deps, &registry.plugins)
+            let candidates = symposium::discovery::discover_for(&ctx.sym, &deps)
                 .await
                 .candidates;
             assert_eq!(

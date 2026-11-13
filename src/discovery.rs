@@ -694,7 +694,7 @@ fn consent_question(candidate: &DiscoveredPlugin) -> String {
         .unwrap_or_default();
     format!(
         "Dependency `{}` provides {what}{audit}. Enable it?",
-        candidate.name()
+        PluginRef::new(&candidate.id.pm, &candidate.id.name)
     )
 }
 
@@ -874,7 +874,7 @@ mod tests {
             "[plugins]\nuse = [\"widget-lib\"]",
             "[plugins]\nauto-enable = [\"widget-lib\"]",
         ] {
-            let found = discover(&sym_with_audits(tmp.path(), config, revoke), &ws, &[]).await;
+            let found = discover_for(&sym_with_audits(tmp.path(), config, revoke), &ws).await;
             assert!(found.candidates.is_empty(), "{config}");
             assert_eq!(found.enabled().count(), 0, "{config}");
             assert_eq!(found.revoked.len(), 1, "{config}");
@@ -888,7 +888,7 @@ mod tests {
             "[plugins]\nuse = [\"widget-lib\"]\ndisable = [\"widget-lib\"]",
             revoke,
         );
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         assert!(found.revoked.is_empty());
         assert_eq!(found.declined.len(), 1);
         // Declined, and still revoked: no verdict to show in its place.
@@ -907,7 +907,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ws = workspace(tmp.path());
         let sym = sym_with_audits(tmp.path(), "", &widget_audited(tmp.path()));
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         let names: Vec<&str> = found.candidates.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["widget-lib"]);
         assert_eq!(found.candidates[0].audit, Some(Verdict::Audited));
@@ -946,9 +946,9 @@ mod tests {
         assert_eq!(
             questions,
             [
-                "Dependency `audited-lib` provides 1 skill group — audited by the `symposium-audits` list. Enable it?",
-                "Dependency `plain-lib` provides 1 skill group — not audited. Enable it?",
-                "Dependency `git-lib` provides 1 skill group — not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`. Enable it?",
+                "Dependency `cargo:audited-lib` provides 1 skill group — audited by the `symposium-audits` list. Enable it?",
+                "Dependency `cargo:plain-lib` provides 1 skill group — not audited. Enable it?",
+                "Dependency `cargo:git-lib` provides 1 skill group — not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`. Enable it?",
             ]
         );
     }
@@ -1165,6 +1165,8 @@ mod tests {
             canonical: PackageId::any_version(pm, name),
             manifest: crate::plugins::PluginManifest {
                 name: name.to_string(),
+                version: None,
+                description: None,
                 requires_use: dormant,
                 predicates: Default::default(),
                 hooks: vec![],
@@ -1176,6 +1178,8 @@ mod tests {
                 chained: vec![],
             },
             workspace_member: false,
+            root: std::env::temp_dir(),
+            agent_plugin_root: None,
         }
     }
 

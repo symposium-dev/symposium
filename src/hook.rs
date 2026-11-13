@@ -631,7 +631,9 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         pms,
     )
     .await;
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used).with_cwd(deps.start());
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(deps.start());
     let plugins = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -756,7 +758,9 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
         pms,
     )
     .await;
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used).with_cwd(deps.start());
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(deps.start());
     let active = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -804,10 +808,13 @@ async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> 
     } else {
         ""
     };
-    let commands: Vec<String> = pending.iter().map(|c| {
-        let plugin = crate::config::PluginRef::new(&c.id.pm, &c.id.name);
-        format!("`{}`", crate::discovery::use_command(&plugin))
-    }).collect();
+    let commands: Vec<String> = pending
+        .iter()
+        .map(|c| {
+            let plugin = crate::config::PluginRef::new(&c.id.pm, &c.id.name);
+            format!("`{}`", crate::discovery::use_command(&plugin))
+        })
+        .collect();
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
          They stay off until the user consents{audited_or_not} — tell the user \
@@ -912,7 +919,9 @@ pub async fn dispatch_plugin_hooks(
     )
     .await;
     let dir = deps.start().filter(|dir| dir.is_dir());
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used).with_cwd(dir);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(dir);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.
     let plugins = crate::plugins::active_plugins(

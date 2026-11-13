@@ -229,11 +229,7 @@ async fn a_dependency_auto_enable_covers_is_installed_without_a_notice() {
         &["plugin-notice0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            ctx.sym
-                .config
-                .plugins
-                .auto_enable
-                .push("crate-b".to_string());
+            ctx.sym.config.plugins.auto_enable.push("crate-b".into());
             start_session(&ctx, HookAgent::Claude).await;
 
             let root = ctx.workspace_root.clone().unwrap();

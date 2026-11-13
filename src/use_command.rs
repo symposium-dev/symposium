@@ -235,8 +235,14 @@ pub async fn remove_plugin(
             && entry_names(&names, pms, &entry, name, pm).await;
         if !remove {
             sym.config.plugins.used.push(entry);
-        } else if let UseEntry::Global(stored) = entry {
-            removed_global.push(stored);
+        } else if entry.is_global()
+            && entry
+                .plugin
+                .pm
+                .as_deref()
+                .is_none_or(|pm| pm == "user-plugins")
+        {
+            removed_global.push(entry.plugin.name);
         }
     }
     if sym.config.plugins.used.len() == before {
@@ -271,7 +277,7 @@ fn in_scope(entry: &UseEntry, global: bool, workspace_root: Option<&Path>) -> bo
 /// Resolve an existing entry without reaching the network. Bare entries for
 /// cached non-dependencies need the same lookup as config enablement, so they
 /// can be recognized by `use` and removed with `--pm`.
-async fn resolved_entry(
+pub(crate) async fn resolved_entry(
     names: &Names<'_>,
     pms: &PmRegistry,
     entry: &UseEntry,

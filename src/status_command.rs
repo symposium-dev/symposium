@@ -121,6 +121,8 @@ pub async fn workspace_status(
                 version: None,
                 root: "declined (`[plugins] disable`)".to_string(),
                 state: StatusState::Declined,
+                format: parsed.format(),
+                audit: None,
             });
             continue;
         }
@@ -281,6 +283,8 @@ pub async fn workspace_status(
             version: None,
             root: ambiguous_use(entry, pms),
             state: StatusState::Dormant,
+            format: None,
+            audit: None,
         });
     }
 

@@ -1397,8 +1397,17 @@ pub async fn resolve_active_plugins(
                 if withheld(pms, &audits, &plugin).await {
                     revoked.push(plugin);
                 } else {
-                    names.spell(&sym.config.plugins, &plugin.canonical, &mut spellings).await;
-                    record_active(plugin, &sym.config.plugins, &spellings, ctx, &mut active, &mut worklist);
+                    names
+                        .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
+                        .await;
+                    record_active(
+                        plugin,
+                        &sym.config.plugins,
+                        &spellings,
+                        ctx,
+                        &mut active,
+                        &mut worklist,
+                    );
                 }
             }
         }
@@ -3193,7 +3202,10 @@ mod tests {
         assert_eq!(plugin.manifest.name, "my-crate");
         assert!(!plugin.manifest.requires_use);
         let mut deps = std::collections::BTreeSet::new();
-        plugin.manifest.predicates.collect_dep_names(&mut deps);
+        plugin
+            .manifest
+            .predicates
+            .collect_dep_names("cargo", &mut deps);
         assert_eq!(deps.into_iter().collect::<Vec<_>>(), ["serde", "tokio"]);
         assert_eq!(plugin.manifest.skills.len(), 1);
     }

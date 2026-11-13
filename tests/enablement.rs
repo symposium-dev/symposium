@@ -10,7 +10,7 @@ use symposium::status_command::StatusState;
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
 /// Every installed skill directory under `parent` named `<skill_name>` or
-/// `<skill_name>-<hash>`.
+/// `<skill_name>-<hash>`, including skills delivered inside compiled plugins.
 fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return Vec::new();
@@ -25,7 +25,10 @@ fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
             || (name.starts_with(skill_name)
                 && name.as_bytes().get(skill_name.len()) == Some(&b'-'));
         if matches && path.join("SKILL.md").is_file() {
-            out.push(path);
+            out.push(path.clone());
+        }
+        if path.join(".claude-plugin/plugin.json").is_file() {
+            out.extend(find_installed_skills(&path.join("skills"), skill_name));
         }
     }
     out.sort();
@@ -310,6 +313,20 @@ async fn use_global_installs_registry_content_for_the_user() {
             );
             let plugin = ctx.sym.home_dir().join(".claude/skills/serde-guidance");
             assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+
+            // Global compilation also visits inactive registry plugins. It must
+            // honor disable rather than reinstalling the now-inactive plugin.
+            ctx.sym
+                .config
+                .plugins
+                .disable
+                .push(symposium::config::PluginRef::new(
+                    "user-plugins",
+                    "serde-guidance",
+                ));
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+            assert!(!plugin.exists());
             Ok(())
         },
     )
@@ -461,7 +478,7 @@ async fn an_ambiguous_bare_use_enables_nothing_until_qualified() {
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = ctx.sym.home_dir().join(".claude/skills");
 
             // A second registry offering a dormant plugin of the same name.
             let other = workspace_root.join("other-registry/gateless-plugin");
@@ -999,8 +1016,9 @@ async fn session_start_hints_pending_candidates() {
             // No audits list is read here, so the candidate is named with no
             // audit answer at all.
             assert!(
-                context
-                    .contains("not enabled yet: crate-a. They stay off until the user consents —"),
+                context.contains(
+                    "not enabled yet: cargo:crate-a. They stay off until the user consents —"
+                ),
                 "{context}"
             );
             assert!(context.contains("cargo agents use"), "{context}");

@@ -139,10 +139,11 @@ async fn try_installs_a_dormant_plugin_in_every_agent() {
                 std::fs::read_link(user_plugins(&ctx).join("dormant-kit"))?,
                 PathBuf::from(&kit).canonicalize()?
             );
-            assert!(
-                config(&ctx).contains(r#"use = ["dormant-kit"]"#),
-                "{}",
-                config(&ctx)
+            assert_eq!(
+                ctx.sym.config.plugins.used,
+                [symposium::config::UseEntry::global(
+                    symposium::config::PluginRef::new("user-plugins", "dormant-kit",)
+                )]
             );
             assert!(installed_in_every_agent(
                 &ctx,
@@ -298,7 +299,7 @@ async fn try_remove_preserves_preexisting_dormant_enablement() {
             // local trial is unlinked; this test checks the durable configuration.
             let outside = tempfile::tempdir()?;
             ctx.workspace_root = Some(outside.path().to_path_buf());
-            let own = symposium::config::UseEntry::Global("dormant-kit".into());
+            let own = symposium::config::UseEntry::global("dormant-kit".into());
             ctx.sym.config.plugins.used.push(own.clone());
             ctx.sym.save_config()?;
 
@@ -333,7 +334,10 @@ async fn try_remove_preserves_explicitly_recreated_enablement() {
                     .plugins
                     .used
             };
-            let explicit = symposium::config::UseEntry::Global("dormant-kit".into());
+            let explicit = symposium::config::UseEntry::global(symposium::config::PluginRef::new(
+                "user-plugins",
+                "dormant-kit",
+            ));
             assert!(saved_uses().is_empty());
 
             ctx.symposium(&["plugin", "try", &kit]).await?;
@@ -374,7 +378,9 @@ async fn try_remove_after_adding_a_gate_drops_its_enablement() {
             ctx.symposium(&["plugin", "try", &kit]).await?;
             assert_eq!(
                 ctx.sym.config.plugins.used,
-                [symposium::config::UseEntry::Global("dormant-kit".into())]
+                [symposium::config::UseEntry::global(
+                    symposium::config::PluginRef::new("user-plugins", "dormant-kit")
+                )]
             );
             let manifest = PathBuf::from(&kit).join("Symposium.toml");
             let edited = std::fs::read_to_string(&manifest)?.replace(
