@@ -63,7 +63,7 @@ fn populated_aggregates(
     let _staged = aggregates
         .stage_hook_invocation(
             recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             observation,
         )
         .unwrap();

@@ -16,7 +16,7 @@ use std::{error::Error, fmt, io};
 use super::{
     LockedStorage, RecordingPersistenceAccess, RecordingWrites,
     atomic::AtomicReplaceError,
-    events::{AppendEventBatchError, EventBatch},
+    events::AppendEventBatchError,
     limits::{EventSuppression, EventWrite},
     metrics::{
         MetricSuppression, MetricWrite, PrepareMetricSnapshotError, PreparedMetricSnapshot,
@@ -25,22 +25,18 @@ use super::{
     private_state::PreparedPrivateState,
 };
 use crate::telemetry::{
-    schema::{DroppedOperation, UtcDay},
-    state::{MaintenanceDue, StagedRecording, StateEncodeError},
+    schema::UtcDay,
+    state::{
+        ChangePublication, MaintenanceDue, MetricNotRequestedReason, MetricRecording,
+        RecordingChange, StateEncodeError,
+    },
 };
 
-/// Optional low-volume publication belonging to one staged recording.
+/// Aggregate bytes, or the reason this operation requested no replacement.
 #[derive(Debug)]
-pub(super) struct EventPublicationRequest {
-    batch: EventBatch,
-    operation: DroppedOperation,
-}
-
-impl EventPublicationRequest {
-    #[must_use]
-    pub(super) const fn new(batch: EventBatch, operation: DroppedOperation) -> Self {
-        Self { batch, operation }
-    }
+enum PreparedMetricPublication {
+    Requested(PreparedMetricSnapshot),
+    NotRequested(MetricNotRequestedReason),
 }
 
 /// Complete bytes and policy decisions prepared before private-state storage.
@@ -49,17 +45,18 @@ impl EventPublicationRequest {
 pub(super) struct PreparedRecording {
     private_state: PreparedPrivateState,
     event: Option<EventWrite>,
-    metric: PreparedMetricSnapshot,
+    metric: PreparedMetricPublication,
     stopped_day: Option<UtcDay>,
     maintenance_due: Option<MaintenanceDue>,
 }
 
 impl<Writer> LockedStorage<Writer> {
-    /// Prepare one staged recording without changing any file.
+    /// Prepare one state-produced recording change without changing any file.
     ///
-    /// The state and aggregate snapshot correspond by construction: the state
-    /// coordinator is their only producer. Day checks defend that boundary and
-    /// any future producer that may be added.
+    /// A staged aggregate snapshot corresponds to the state by construction:
+    /// the state coordinator is their only producer. Day checks defend that
+    /// boundary and any future producer that may be added. A typed
+    /// `NotRequested` metric half bypasses metric preparation entirely.
     ///
     /// # Errors
     ///
@@ -67,35 +64,42 @@ impl<Writer> LockedStorage<Writer> {
     /// failure. No file has changed when this method returns an error.
     pub(super) fn prepare_recording(
         &self,
-        staged: StagedRecording,
-        event: Option<EventPublicationRequest>,
-        maintenance_due: Option<MaintenanceDue>,
+        change: RecordingChange,
     ) -> Result<PreparedRecording, PrepareRecordingError> {
+        debug_assert!(
+            matches!(change.publication(), ChangePublication::Present),
+            "BUG: a recording with no public data must be dropped before preparation"
+        );
         let access = RecordingPersistenceAccess::new();
-        let (mut state, snapshot) = staged.into_persistence_parts(access);
+        let (mut state, metric, event, maintenance_due) = change.into_persistence_parts(access);
         let state_day = state.latest_opened_day();
-        let metric = snapshot.prepare().map_err(PrepareRecordingError::Metric)?;
-        if metric.day() != state_day {
-            return Err(PrepareRecordingError::MetricDayMismatch {
-                state_day,
-                metric_day: metric.day(),
-            });
-        }
+        let metric = match metric {
+            MetricRecording::Staged(snapshot) => {
+                let prepared = snapshot.prepare().map_err(PrepareRecordingError::Metric)?;
+                if prepared.day() != state_day {
+                    return Err(PrepareRecordingError::MetricDayMismatch {
+                        state_day,
+                        metric_day: prepared.day(),
+                    });
+                }
+                PreparedMetricPublication::Requested(prepared)
+            }
+            MetricRecording::NotRequested(reason) => {
+                PreparedMetricPublication::NotRequested(reason)
+            }
+        };
 
         let event = event
             .map(|request| {
-                if request.batch.day() != state_day {
+                let (batch, operation) = request.into_parts();
+                if batch.day() != state_day {
                     return Err(PrepareRecordingError::EventDayMismatch {
                         state_day,
-                        event_day: request.batch.day(),
+                        event_day: batch.day(),
                     });
                 }
 
-                Ok(self.plan_event_write(
-                    request.batch,
-                    request.operation,
-                    state.storage_limit_day(),
-                ))
+                Ok(self.plan_event_write(batch, operation, state.storage_limit_day()))
             })
             .transpose()?;
 
@@ -196,7 +200,7 @@ impl<Writer: RecordingWrites> LockedStorage<Writer> {
 
 /// Private state was not persisted, so no publication receipt was minted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PersistRecordingError {
+pub(in crate::telemetry) enum PersistRecordingError {
     Create(io::ErrorKind),
     Write(io::ErrorKind),
     Persist(io::ErrorKind),
@@ -233,7 +237,7 @@ impl Error for PersistRecordingError {}
 pub(super) struct PersistedRecording<'storage, Writer> {
     storage: &'storage mut LockedStorage<Writer>,
     event: Option<EventWrite>,
-    metric: PreparedMetricSnapshot,
+    metric: PreparedMetricPublication,
     stopped_day: Option<UtcDay>,
     maintenance_due: Option<MaintenanceDue>,
     publication_attempted: bool,
@@ -258,15 +262,19 @@ impl<Writer: RecordingWrites> PersistedRecording<'_, Writer> {
             }
         };
 
-        let metric = match self
-            .storage
-            .plan_metric_write(&self.metric, self.stopped_day)
-        {
-            MetricWrite::Suppressed(reason) => MetricPublication::Suppressed(reason),
-            MetricWrite::Replace => match self.storage.replace_metric_snapshot(&self.metric) {
-                Ok(()) => MetricPublication::Published,
-                Err(error) => MetricPublication::Failed(error.into()),
-            },
+        let metric = match &self.metric {
+            PreparedMetricPublication::NotRequested(reason) => {
+                MetricPublication::NotRequested(*reason)
+            }
+            PreparedMetricPublication::Requested(metric) => {
+                match self.storage.plan_metric_write(metric, self.stopped_day) {
+                    MetricWrite::Suppressed(reason) => MetricPublication::Suppressed(reason),
+                    MetricWrite::Replace => match self.storage.replace_metric_snapshot(metric) {
+                        Ok(()) => MetricPublication::Published,
+                        Err(error) => MetricPublication::Failed(error.into()),
+                    },
+                }
+            }
         };
 
         let maintenance_due = self.maintenance_due.take();
@@ -290,14 +298,14 @@ impl<Writer> Drop for PersistedRecording<'_, Writer> {
 
 /// Independent results of the two best-effort public writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PublishOutcome {
-    pub(super) event: EventPublication,
-    pub(super) metric: MetricPublication,
+pub(in crate::telemetry) struct PublishOutcome {
+    pub(in crate::telemetry) event: EventPublication,
+    pub(in crate::telemetry) metric: MetricPublication,
 }
 
 /// Result of the optional low-volume event publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EventPublication {
+pub(in crate::telemetry) enum EventPublication {
     NotRequested,
     Published,
     Suppressed(EventSuppression),
@@ -306,7 +314,7 @@ pub(super) enum EventPublication {
 
 /// Bounded event-append failure retained for reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EventPublicationFailure {
+pub(in crate::telemetry) enum EventPublicationFailure {
     Prepare(io::ErrorKind),
     InspectTail(io::ErrorKind),
     RepairTail(io::ErrorKind),
@@ -326,7 +334,8 @@ impl From<AppendEventBatchError> for EventPublicationFailure {
 
 /// Result of the aggregate metric publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MetricPublication {
+pub(in crate::telemetry) enum MetricPublication {
+    NotRequested(MetricNotRequestedReason),
     Published,
     Suppressed(MetricSuppression),
     Failed(MetricPublicationFailure),
@@ -334,7 +343,7 @@ pub(super) enum MetricPublication {
 
 /// Bounded metric-replacement failure retained for reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MetricPublicationFailure {
+pub(in crate::telemetry) enum MetricPublicationFailure {
     Create(io::ErrorKind),
     Write(io::ErrorKind),
     Persist(io::ErrorKind),

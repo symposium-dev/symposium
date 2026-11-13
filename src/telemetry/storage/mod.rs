@@ -16,6 +16,7 @@ mod maintenance;
 pub(in crate::telemetry) mod metrics;
 mod paths;
 mod private_state;
+pub(in crate::telemetry) mod recorder;
 mod recording;
 mod writes;
 
