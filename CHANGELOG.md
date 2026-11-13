@@ -7,6 +7,350 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.1...symposium-v0.6.0) - 2026-11-12
+
+### Added
+
+- *(status)* show revoked plugins and every dependency plugin's audit answer, and document it
+- *(discovery)* say whether a candidate is audited in the prompt and hint
+- *(audits)* a revoked plugin never loads
+- *(audits)* audits file format, payload digest and `plugin digest`
+- *(init)* preselect detected agents
+- *(agents)* detect installed agents by config directory
+- *(plugin-tooling)* try a local plugin in your agents
+- *(plugin-tooling)* import Claude Code plugins
+- *(hooks)* set CLAUDE_PLUGIN_ROOT for claude-format hooks
+- *(plugin-tooling)* warn about plugins that do not port across agents
+- *(agent-plugins)* register the MCP servers of a package's mcp.json
+- *(agent-plugins)* accept the Agent Plugins 1.1.0 schema
+- *(agent-plugins)* validate a package from its plugin.json path
+- *(agent-plugins)* read Agent Plugins plugin.json packages as plugins
+- *(sync)* install project plugins for Claude Code
+- *(agents)* install global plugins for Antigravity CLI and Goose
+- *(sync)* install plugins enabled with use --global for Codex CLI
+- *(sync)* install plugins enabled with use --global for the Copilot CLI
+- *(hook)* tell the agent when the session-start sync changed its plugins
+- *(sync)* install plugins enabled with use --global for Claude Code
+- *(config)* `[[package-manager]]` entries for ecosystems beyond cargo
+- *(pm)* the cargo package manager is its own crate and its own binary
+- *(pm)* a package manager's answers name its own packages, by absolute path
+- *(pm)* out-of-process package managers over newline-delimited JSON-RPC
+- *(hooks)* register the Stop hook for Codex
+- persist aggregates in private state
+- validate complete aggregate private state
+- persist extension-invocation private state
+- persist plugin-hook aggregate private state
+- persist hook aggregate private state
+- define aggregate session persistence bridge
+- coordinate aggregate hook invocation staging
+- model complete aggregate hook observations
+- index aggregate snapshots for recovery
+- persist bounded aggregate metric snapshots
+- enforce daily telemetry storage limits
+- append low-volume telemetry batches
+- preserve telemetry day high-water state
+- load and replace private telemetry state
+- atomically replace telemetry files
+- add exclusive telemetry storage access
+- [**breaking**] rename SYMPOSIUM.toml to Symposium.toml
+- cap daily public plugin hook aggregates
+- add private state for hook aggregates
+- record extension invocation aggregates
+- *(telemetry)* define extension invocation metric rows
+- *(telemetry)* admit extension invocation aggregates
+- *(telemetry)* define invocation attribution inputs
+- track extension invocation sessions independently
+- *(telemetry)* define safe skill attribution
+- *(telemetry)* update plugin hook metrics atomically
+- *(telemetry)* define plugin hook metric rows
+- *(telemetry)* update hook metrics atomically
+- *(telemetry)* define hook metric rows
+- *(telemetry)* bind low-volume rows to recording transitions
+- *(telemetry)* define eligible command identities
+- *(telemetry)* bind session rows to one state transition
+- *(telemetry)* define extension resolution rows
+- *(telemetry)* bind subjects to typed recording scopes
+- *(telemetry)* define package resolution rows
+- *(telemetry)* define resolution summary rows
+- *(telemetry)* define agent recording rows
+- *(telemetry)* model the private identity lifecycle
+- *(telemetry)* implement scoped telemetry identities
+- *(telemetry)* define the common recording schema
+
+### Fixed
+
+- *(discovery)* show an audit answer only when a list was read
+- *(use)* refuse a revoked crate
+- *(cli)* keep auto-update output off plugin digest's stdout
+- *(audits)* make a link that leaves the crate ineligible
+- *(audits)* name digest entries by the group's own path
+- *(audits)* read the list from the git cache, not as a plugin registry
+- *(audits)* unregister a revoked crate's MCP servers in every scope
+- *(audits)* list a revoked crate's installs without running its manifest
+- *(config)* resolve a relative SYMPOSIUM_HOME against the starting directory
+- *(agents)* keep a user's enabled = false on the Antigravity symposium hook
+- *(hooks)* run Antigravity plugin hooks and their predicates in the workspace
+- *(hooks)* pass Antigravity native hook decisions and injected steps through
+- *(sdk)* write a pre-tool-use deny that has no reason
+- *(hooks)* read plain text from native claude and codex hooks as context
+- *(hooks)* ignore portable hook output that is not a canonical output
+- *(plugins)* reject a hook matcher that is not a valid regex
+- *(hooks)* check hook predicates before picking a plugin's hook
+- *(hooks)* skip a hook whose agent is another agent
+- *(agents)* detect agents where their relocation variables point
+- *(init)* preserve explicitly selected agents across detection changes
+- *(plugin-tooling)* let use --remove end a trial's ownership of its entry
+- *(hooks)* take a Claude hook's plain-text stdout as context
+- *(plugin-tooling)* import SessionStart hooks only when they run on startup
+- *(hooks)* run every matching hook of a plugin's selected format
+- *(plugin-tooling)* remove only the use entry a trial added
+- *(plugin-tooling)* import a command with CRLF frontmatter
+- *(hooks)* keep the SessionStart refresh installer in the caller's process group
+- *(hooks)* keep installers in the caller's process group outside hook dispatch
+- *(hooks)* stop installer descendants and the git probe when acquisition is cancelled
+- *(hooks)* kill the cargo installer when hook setup hits its deadline
+- *(hooks)* kill timed-out hooks with their children and bound hook setup
+- *(hooks)* name pending plugins in the mid-session notice
+- *(plugins)* validate a plugin, skill or crate folder directly
+- *(agent-plugins)* keep a member's skills when its plugin.json is not an Agent Plugins manifest
+- *(agent-plugins)* fill a bare Symposium.toml from the plugin.json beside it
+- *(agent-plugins)* start a package's stdio MCP server through /bin/sh
+- *(agent-plugins)* skip a Claude Code plugin in a plugin source
+- *(report)* show a repeated warning once per command
+- *(agent-plugins)* label a dependency package in status
+- *(agent-plugins)* install a workspace member package's skills on Windows
+- *(agent-plugins)* start a package's stdio MCP server in its folder
+- *(init)* leave MCP server registration to sync
+- *(agent-plugins)* validate a package the same way from every path
+- *(agent-plugins)* offer an MCP-only dependency package for consent
+- *(agent-plugins)* keep package skill links inside the package
+- *(hooks)* no dependency notice for a workspace seen the first time
+- *(hooks)* bound plugin hook runtime and stop pipes from stalling dispatch
+- *(hooks)* parse plugin hook stdout on any non-zero exit other than 2
+- *(hook)* tell the agent how to load plugins a mid-session sync installed
+- *(sync)* skip the plugin debounce when its skills changed
+- *(sync)* copy the skills of a plugin an agent could not take
+- *(agents)* install OpenCode skills in .opencode/skills
+- *(pm)* preserve artifacts and enable plugins across ecosystems
+- *(pm)* preserve remote identities and bound process lifetimes
+- *(hooks)* request a Claude Code skill rescan on every SessionStart
+- *(plugin)* run workspace plugin scripts on Windows
+- *(plugin)* resolve a plugin's own script paths
+- *(sync)* a failed package manager keeps its MCP entries too
+- *(pm)* report the manifests that decide where the cargo workspace is rooted
+- *(sync)* keep a skill whose refresh failed out of cleanup
+- *(sync)* stage skill installs in a uniquely named directory
+- *(sync)* serialize concurrent syncs with a lock
+- *(sync)* stage skill installs and rename them into place
+- *(sync)* install beside a dangling symlink at a skill slot
+- *(sync)* keep what a plugin installed while its manifest fails to load
+- *(discovery)* count a use entry only for the package it resolves to
+- *(pm)* ask each package manager whether it has a name
+- *(plugins)* wake a dormant plugin only by its exact registry name
+- *(config)* match [plugins] entries under each package manager's rule
+- *(pm)* read only crates.io sources in the cache-only crate lookup
+- *(sync)* show cargo's error when cargo metadata fails
+- *(crate-info)* resolve a workspace member to its own directory
+- *(pm)* serve chained and enabled crates from the cargo cache outside sync
+- *(agents)* keep the layout of JSON agent configs
+- *(agents)* keep user hooks that share symposium's matcher group
+- *(sync)* remove an MCP server the workspace no longer offers
+- *(init)* clean up after removing an agent
+- *(sync)* report a skill that fails to load as a warning
+- *(skills)* load skills whose frontmatter has non-string values
+- *(search)* list a registry entry once
+- *(status)* stop listing plugin-less dependencies as active
+- *(search)* match registry entries case-insensitively
+- *(use)* treat widget-lib and widget_lib as one entry
+- *(status)* list each declined plugin once
+- *(config)* treat empty or relative directory env vars as unset
+- *(config)* run without a log file when the logs dir is unwritable
+- *(init)* keep and skip agent names this version does not know
+- *(init)* default non-interactive init to Claude Code
+- *(agents)* preserve config permissions at temp file creation
+- *(agents)* keep mode and symlinks when rewriting JSON agent configs
+- *(plugins)* reserve every built-in command name for plugin subcommands
+- *(sync)* remove only the MCP servers symposium registered
+- *(sync)* never reap skills through a symlink
+- *(config)* [**breaking**] drop the [[plugin-source]] spelling of [[registry]]
+- *(config)* stop writing empty agent and registry lists
+- *(config)* never overwrite or auto-update from an unreadable config
+- *(agents)* write a type on remote Claude Code MCP entries
+- *(agents)* leave agent config files symposium cannot parse untouched
+- *(agents)* honor GOOSE_PATH_ROOT for Goose MCP
+- *(agents)* honor COPILOT_HOME for Copilot CLI hooks and MCP
+- *(agents)* honor CODEX_HOME for Codex CLI hooks and MCP
+- *(agents)* honor CLAUDE_CONFIG_DIR for Claude Code hooks and MCP
+- *(telemetry)* wait for the lock release in the lock release tests
+- *(sync)* keep installed skills when a registry cannot be read
+- *(test)* use canonical plugin manifest names
+- *(skills)* reject skill names that are not plain directory names
+- *(book)* drop duplicated md/ from edit link
+- *(crate-sources)* find binary-only crates missing from cargo metadata
+- *(hook)* deliver plugin tool decisions to every agent
+- *(telemetry)* reconcile failed invocation observations
+- *(telemetry)* reconcile aggregate schemas after rebase
+- *(telemetry)* derive resolution session identifiers
+- *(telemetry)* carry Antigravity into identity labels
+- *(telemetry)* redact private state parse errors
+- *(telemetry)* record Antigravity instead of Gemini
+
+### Other
+
+- *(audits)* digest each payload once per invocation
+- *(audits)* audits reference, `plugin digest`, and design notes
+- *(hooks)* drop the other-agent format fallback that does not exist
+- *(state)* drop unused record_detected_agents and order tests
+- Merge pull request #388 from fnzko/hook-exit-and-timeout
+- *(plugin-try)* preserve explicitly recreated enablement
+- *(plugin-tooling)* cover trial ownership and CRLF imports
+- *(install)* stop the gated installer on every Ctrl-C
+- *(hooks)* reproduce refresh installer surviving Ctrl-C
+- *(install)* cover Ctrl-C during foreground acquisition
+- *(hooks)* cover installer descendants and Git probe cancellation
+- *(hooks)* stop Cargo acquisition after its deadline
+- *(hooks)* time hook setup without update checks or first-exec latency
+- *(hooks)* cover descendant cancellation and setup deadlines
+- *(agent-plugins)* cover private PATH and bare manifest validation
+- *(agent-plugins)* cover discovery, activation, validation, and cwd gaps
+- *(agent-plugins)* update the RFD for MCP servers in packages
+- *(agent-plugins)* document MCP servers in packages
+- *(agent-plugins)* document skill link containment
+- *(agent-plugins)* document Agent Plugins packages
+- *(hook)* find the nested workspace's skill in its project plugin
+- describe partial delivery, plugin debounce and mid-session reload notices
+- document project plugin delivery for Claude Code
+- *(sync)* cover project plugin delivery end to end
+- *(agent-plugins)* amend the RFD with what the agent probes verified
+- Merge pull request #417 from emiperez95/docs/contributing-tickets
+- *(hooks)* say what exit code 2 does per Codex event
+- Merge pull request #421 from symposium-dev/pms-out-of-process/out-of-process
+- *(pm)* require remote name normalization
+- *(pm)* cover remote identity, cancellation, and hook deadlines
+- *(rfd)* describe what the transcript shows
+- *(eval)* decide a trial's expectations
+- *(eval)* find each expected hook's event
+- *(eval)* cross-check evidence with the transcript
+- *(eval)* record the agent's file and shell activity
+- *(eval)* read the hook runs Claude Code reports
+- *(eval)* decode each message's tool calls once
+- *(eval)* snapshot the hook and Symposium config
+- Merge pull request #428 from gmemuriuki/feat/agent-eval-expectations
+- *(eval)* inspect every skill copy without blocking
+- *(eval)* read each expected hook's record
+- *(eval)* record each format-on-stop run
+- *(eval)* read the SessionStart hook trace
+- *(eval)* read successful sync evidence
+- *(eval)* decide whether sync installed each skill
+- Merge pull request #427 from gmemuriuki/feat/agent-eval-claude
+- *(eval)* decide skill use from each load
+- *(eval)* skip a transcript line over 8 MiB
+- *(eval)* edit fixtures through checked helpers
+- *(eval)* replay transcripts through a stand-in claude
+- *(eval)* resolve a skill read where Claude ran
+- *(eval)* pair tool calls apart from skill matching
+- *(eval)* read a transcript once, for its loads too
+- *(eval)* check a transcript is this session's
+- *(eval)* refuse Claude Code older than 2.1.316
+- *(eval)* run Claude Code and read how it ended
+- *(eval)* run a client session to an ending
+- *(plugin)* cover workspace and Cargo-relative script paths
+- *(plugin)* show a plugin's own scripts do not run
+- *(sync)* retain MCP entries when a package manager fails
+- *(hooks)* invalidate cached roots for new nested workspaces
+- *(pm)* one `PackageManager` trait, in the SDK, whose operations fail
+- *(pm)* the workspace is the project package managers report
+- *(eval)* cover symlink access and failed trial setup
+- *(eval)* exercise concurrent isolation and credential forwarding
+- *(eval)* run trials in the client's own sandbox
+- *(eval)* check trials before launch
+- *(eval)* set up Symposium in a trial
+- *(eval)* stage tools and link them into trials
+- *(eval)* smoke-test the trial boundary under srt
+- *(eval)* launch trials under srt
+- *(eval)* give each trial its own environment
+- *(eval)* generate each trial's srt policy
+- *(eval)* lay out trials
+- *(eval)* grade the repository's tasks
+- *(eval)* add the store-durability task
+- *(eval)* add the formatting task
+- *(eval)* run each hidden check as one test
+- *(eval)* run the crate's tests and fmt check
+- *(eval)* build solutions with a deadline
+- *(eval)* protect build scripts at custom paths
+- *(eval)* check starter lockfiles with cargo metadata
+- *(eval)* import solutions through editable
+- *(eval)* protect the build files of a task
+- *(eval)* clarify conditional compilation inside check bodies
+- add a bug issue form and treat ticket type as a suggestion
+- *(eval)* check tasks in CI
+- *(eval)* require one test per check file
+- *(eval)* parse task.toml with --check-tasks
+- *(eval)* add the symposium-eval crate
+- check and test every crate in the workspace
+- *(sync)* retain installed skills after failed updates
+- *(sync)* preserve user content at staging paths
+- Merge pull request #412 from fnzko/plugin-identity-everywhere
+- Merge pull request #366 from fnzko/cli-fixes
+- add contributor guidance for tickets and the project board
+- *(sync)* preserve MCP registrations on plugin parse failures
+- *(enablement)* preserve registry precedence over dependencies
+- Merge pull request #390 from fnzko/plugin-name-matching
+- Merge pull request #315 from orhun/docs/add-videos
+- *(enablement)* cover [plugins] name matching per package manager
+- *(plugins)* key loaded plugins on their package identity
+- *(pm)* preserve registry identity in cached crate lookup
+- correct stale agent and skill install statements
+- separate older Symposium videos with a version warning
+- *(pm)* let each package manager decide which names match
+- add Definition and Notes to the initiative template
+- route private state fixtures through codec
+- *(hook)* reproduce the SessionStart skill bug
+- add an issue template for board initiatives
+- stage extension-invocation aggregate state
+- stage plugin-hook aggregate private state
+- stage hook aggregate private state
+- share bounded aggregate session tracking
+- make aggregate identities reconstructible
+- retain safe extension attribution in admission
+- *(telemetry)* share metric snapshot decoding
+- separate aggregate rows from event batches
+- Merge pull request #326 from symposium-dev/telemetry/event-storage-limits
+- Merge pull request #386 from fnzko/fix/config-write-mode-symlink
+- *(plugins)* use find_subcommand and test against the documented names
+- Merge pull request #384 from fnzko/fix/mcp-server-ownership
+- *(telemetry)* centralize daily file discovery
+- Merge pull request #323 from Fluzko/authoring-plugins-llms-txt
+- Merge pull request #308 from orhun/docs/add-arch-btw-installation
+- Update md/crate-authors/authoring-a-plugin.md
+- Update md/crate-authors/authoring-a-plugin.md
+- Update md/crate-authors/authoring-a-plugin.md
+- Update md/crate-authors/authoring-a-plugin.md
+- clarify the llms.txt subcommand example and stop listing reserved names
+- reorganize llms.txt by task and have agents download it with curl
+- add an llms.txt guide for agents writing plugins
+- show what a subcommand's command names and that users run it too
+- drop the skip-consent path and rewrite the subcommands section
+- update the crate author guides for crate-shipped plugins
+- explain agent evaluations through run and write walkthroughs
+- Add RFD: evaluating agent tasks with and without Symposium
+- *(reference)* apply review feedback on subcommands and registries
+- *(reference)* bring the plugin reference in line with the code
+- Merge pull request #306 from Fluzko/fix/hook-tool-decisions
+- Merge pull request #324 from Fluzko/fix/skill-name-path-traversal
+- Merge pull request #316 from Fluzko/symposium-toml-rename
+- Merge branch 'main' into telemetry/recording-core
+- Fix link to reference in install and about chapter
+- *(website)* add videos page with Symposium talks and demos
+- *(install)* document Arch Linux package
+- bind plugin hook rows to private aggregate state
+- separate plugin hook attribution from admission
+- share telemetry day rollover logic
+- *(telemetry)* split aggregate metric modules
+- *(telemetry)* share strict row decoding
+- *(telemetry)* separate schema and state modules
+- *(telemetry)* prepare the recording contract for implementation
+
 ## [0.5.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.0...symposium-v0.5.1) - 2026-10-01
 
 ### Other
