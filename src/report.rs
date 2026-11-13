@@ -163,7 +163,7 @@ pub enum ReportEvent {
     PluginRemoved { name: String, global: bool },
 
     /// A local plugin was linked by `cargo agents plugin try`.
-    PluginTried { name: String },
+    PluginTried { name: String, global: bool },
 
     /// A trial was discarded by `cargo agents plugin try --remove`.
     PluginTrialRemoved { name: String },
@@ -399,10 +399,9 @@ impl ReportEvent {
                 };
                 format!("➖ removed the {name} enablement for {scope}")
             }
-            Self::PluginTried { name } => {
-                format!(
-                    "trying {name} in every workspace; edits reach your agents on the next sync"
-                )
+            Self::PluginTried { name, global } => {
+                let scope = if *global { " in every workspace" } else { "" };
+                format!("trying {name}{scope}; edits reach your agents on the next sync")
             }
             Self::PluginTrialRemoved { name } => format!("stopped trying {name}"),
             // A bare digest on success, so `$(cargo agents plugin digest ..)`

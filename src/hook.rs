@@ -549,7 +549,7 @@ async fn run_auto_sync(
 
     tracing::debug!("auto-sync running");
     let plugin_changes = match crate::sync::sync(sym, deps, update).await {
-        Ok(plugin_changes) => plugin_changes,
+        Ok(synced) => synced.plugin_changes,
         Err(e) => {
             tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
             return (false, Vec::new());
