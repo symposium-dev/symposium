@@ -117,11 +117,16 @@ fn merge_inject_steps(acc: &mut Value, mut next: Value) {
     crate::hook::merge(acc, serde_json::json!({ "injectSteps": steps }));
 }
 
-antigravity_event!(
-    AntigravityStopEvent,
-    AntigravityStopInput,
-    AntigravityStopOutput
-);
+pub struct AntigravityStopEvent;
+impl AgentHookEvent for AntigravityStopEvent {
+    type Input = AntigravityStopInput;
+    type Output = AntigravityStopOutput;
+
+    fn blocked(&self, reason: &str) -> HookResponse {
+        let stop = symposium::OutputEvent::Stop(symposium::StopOutput::context(reason));
+        self.respond(&self.translate_output(&stop).to_hook_output())
+    }
+}
 
 // ── Common ────────────────────────────────────────────────────────────
 

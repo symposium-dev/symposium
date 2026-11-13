@@ -113,6 +113,10 @@ pub trait AgentHookEvent {
         HookResponse::success(self.serialize_output(output))
     }
 
+    fn blocked(&self, reason: &str) -> HookResponse {
+        HookResponse::blocked(reason)
+    }
+
     fn merge_output(&self, acc: &mut serde_json::Value, next: serde_json::Value) {
         crate::hook::merge(acc, next)
     }
@@ -174,6 +178,8 @@ pub trait ErasedAgentHookEvent {
     /// Most agents take JSON on stdout; Kiro takes plain text, and exit 2 to deny.
     fn respond(&self, output: &serde_json::Value) -> HookResponse;
 
+    fn blocked(&self, reason: &str) -> HookResponse;
+
     fn merge_output(&self, acc: &mut serde_json::Value, next: serde_json::Value);
 }
 
@@ -204,6 +210,10 @@ where
 
     fn respond(&self, output: &serde_json::Value) -> HookResponse {
         self.0.respond(output)
+    }
+
+    fn blocked(&self, reason: &str) -> HookResponse {
+        self.0.blocked(reason)
     }
 
     fn merge_output(&self, acc: &mut serde_json::Value, next: serde_json::Value) {
