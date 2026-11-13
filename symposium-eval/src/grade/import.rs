@@ -362,7 +362,7 @@ impl<'a> Submission<'a> {
         // The listing never follows a link below the root, and listing a root that is a
         // link would follow it, so the root must be a real directory too.
         let root_kind = fs::symlink_metadata(root)
-            .map(|metadata| EntryKind::of(metadata.file_type()))
+            .map(|metadata| EntryKind::of_metadata(&metadata))
             .map_err(|source| {
                 ImportError::Submission(WalkError::Read {
                     path: ".".to_owned(),

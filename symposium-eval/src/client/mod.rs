@@ -325,6 +325,8 @@ pub(crate) struct Execution {
     /// The client's standard output, under the trial's `session/`. Missing when the
     /// client never started, and not evidence when the backend lost hold of the output.
     pub(crate) transcript: PathBuf,
+    /// The client's standard error, beside the transcript.
+    pub(crate) stderr: PathBuf,
     pub(crate) ended: Ended,
     /// How long the backend ran the client, transcript reading left out.
     pub(crate) elapsed: Duration,
@@ -376,11 +378,13 @@ pub(crate) fn execute(
     let invocation = runner.invocation(trial, prompt, env);
     let logs = trial.session();
     let transcript = invocation.log(&logs, "stdout");
+    let stderr = invocation.log(&logs, "stderr");
     let started = Instant::now();
     let ran = backend.run(&invocation, deadline, &logs);
     let elapsed = started.elapsed();
     let unread = |ended| Execution {
         transcript: transcript.clone(),
+        stderr: stderr.clone(),
         ended,
         elapsed,
         loads: vec![Load::Unknown; skills.len()],
@@ -440,6 +444,7 @@ pub(crate) fn execute(
     };
     Execution {
         transcript,
+        stderr,
         ended,
         elapsed,
         loads: reading.loads,
