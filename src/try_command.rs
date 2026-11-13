@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -8,9 +9,10 @@ use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
 use crate::config::{Symposium, UseEntry};
-use crate::plugins::{Plugin, PluginSource};
+use crate::plugins::Plugin;
 use crate::pm::{PackageId, PluginKind};
 use crate::report::ReportEvent;
+use crate::sync::Synced;
 
 pub async fn try_plugin(
     sym: &mut Symposium,
@@ -73,10 +75,12 @@ pub async fn try_plugin(
     tracing::info!(
         report = %ReportEvent::PluginTried { name: name.clone(), global },
     );
-    let applies_here = global || report_gate(sym, cwd, &plugin).await;
+    if !global {
+        report_gate(&plugin);
+    }
 
-    if sync_here(sym, cwd, update).await? && applies_here {
-        report_loaded(sym, cwd, &name, &skill_names(&plugin)).await;
+    if let Some(synced) = sync_here(sym, cwd, update).await? {
+        report_loaded(sym, cwd, &plugin, &synced.skill_origins).await;
     }
     Ok(())
 }
@@ -106,45 +110,22 @@ pub async fn remove_trial(
     sync_here(sym, cwd, update).await.map(|_| ())
 }
 
-async fn sync_here(sym: &Symposium, cwd: &Path, update: UpdateLevel) -> Result<bool> {
+async fn sync_here(sym: &Symposium, cwd: &Path, update: UpdateLevel) -> Result<Option<Synced>> {
     let workspace = sym.workspace(cwd);
     if workspace.root().await.is_some() {
-        crate::sync::sync(sym, &workspace, update).await?;
-        return Ok(true);
+        return crate::sync::sync(sym, &workspace, update).await.map(Some);
     }
     tracing::info!(
         report = %ReportEvent::Info {
             message: "not in a Rust workspace; agents pick the change up when a session starts in one".to_string(),
         },
     );
-    Ok(false)
+    Ok(None)
 }
 
 const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 
 const USER_PLUGINS: &str = "user-plugins";
-
-fn skill_names(plugin: &Plugin) -> Vec<String> {
-    let mut names: Vec<String> = plugin
-        .manifest
-        .skills
-        .iter()
-        .filter_map(|group| match &group.source {
-            PluginSource::Path(dir) => Some(crate::skills::discover_skills(
-                dir,
-                group.workspace_member,
-                &group.predicates,
-            )),
-            PluginSource::Git(_) => None,
-        })
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|skill| skill.name().to_string())
-        .collect();
-    names.sort();
-    names.dedup();
-    names
-}
 
 fn listing(agent: Agent) -> Option<(&'static str, &'static [&'static str])> {
     match agent {
@@ -201,11 +182,26 @@ async fn run_listing(
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"))?
 }
 
-async fn report_loaded(sym: &Symposium, cwd: &Path, plugin: &str, skills: &[String]) {
-    if skills.is_empty() {
+async fn report_loaded(sym: &Symposium, cwd: &Path, plugin: &Plugin, installed: &BTreeSet<String>) {
+    let name = &plugin.manifest.name;
+    let on_disk = crate::skills::skills_on_disk(sym, std::slice::from_ref(plugin));
+    if on_disk.is_empty() {
         return;
     }
-    let installed_as = crate::compile::normalize_name(plugin).unwrap_or_default();
+    let mut skills: Vec<String> = on_disk
+        .into_iter()
+        .filter(|(_, origin_hash)| installed.contains(origin_hash))
+        .map(|(skill, _)| skill)
+        .collect();
+    skills.sort();
+    skills.dedup();
+    if skills.is_empty() {
+        warn(format!(
+            "no skill of `{name}` applies in this workspace, so none is installed here"
+        ));
+        return;
+    }
+    let installed_as = crate::compile::normalize_name(name).unwrap_or_default();
     for entry in &sym.config.agents {
         let Ok(agent) = Agent::from_config_name(&entry.name) else {
             continue;
@@ -266,9 +262,9 @@ fn load_plugin_dir(dir: &Path) -> Result<Plugin> {
         .with_context(|| format!("run `cargo agents plugin validate` on `{}`", dir.display()))
 }
 
-async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) -> bool {
+fn report_gate(plugin: &Plugin) {
     let name = &plugin.manifest.name;
-    let mut deps = std::collections::BTreeSet::new();
+    let mut deps = BTreeSet::new();
     plugin.manifest.predicates.collect_dep_names(&mut deps);
     let deps: Vec<String> = deps.iter().map(|dep| format!("`{dep}`")).collect();
     if deps.is_empty() {
@@ -281,19 +277,6 @@ async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) -> bool {
             deps.join(" or ")
         ));
     }
-
-    let workspace = sym.workspace(cwd);
-    if workspace.root().await.is_none() {
-        return false;
-    }
-    let mut ctx = crate::predicate::PredicateContext::new(workspace.dep_ids().await);
-    let applies = plugin.applies(&mut ctx);
-    if !applies {
-        warn(format!(
-            "`{name}` does not apply in this workspace, so nothing is installed here"
-        ));
-    }
-    applies
 }
 
 fn user_plugins_dir(sym: &Symposium) -> PathBuf {

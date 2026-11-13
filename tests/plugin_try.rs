@@ -224,7 +224,7 @@ async fn try_leaves_a_gated_plugin_to_its_gate() {
             );
             for expected in [
                 "`gated-kit` activates only in workspaces that depend on `serde`, as it does for its users",
-                "`gated-kit` does not apply in this workspace, so nothing is installed here",
+                "no skill of `gated-kit` applies in this workspace, so none is installed here",
             ] {
                 assert!(messages.iter().any(|m| m == expected), "{messages:#?}");
             }
@@ -267,9 +267,80 @@ async fn try_checks_a_gated_plugin_the_user_enabled_everywhere() {
                 "{messages:#?}"
             );
             assert!(
-                !messages.iter().any(|m| m.contains("does not apply")),
+                !messages.iter().any(|m| m.contains("none is installed")),
                 "{messages:#?}"
             );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn try_predicate_kit(ctx: &mut TestContext, check: &str) -> anyhow::Result<Vec<String>> {
+    init(ctx).await?;
+    std::fs::write(
+        ctx.tempdir.join("ready-check.sh"),
+        format!("#!/bin/sh\n{check}\n"),
+    )?;
+    fake_agent(
+        ctx,
+        "codex",
+        r#"[{"content":[{"text":"- predicate-guidance: Guidance (file: r0/predicate-guidance/SKILL.md)"}]}]"#,
+    );
+    let kit = plugin_path(ctx, "predicate-kit");
+    Ok(report_messages(ctx, &["plugin", "try", &kit]).await)
+}
+
+#[tokio::test]
+async fn try_checks_a_plugin_whose_custom_predicate_holds() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let messages = try_predicate_kit(&mut ctx, "exit 0").await?;
+
+            assert!(installed_in_every_agent(
+                &ctx,
+                &workspace(&ctx),
+                "predicate-guidance"
+            ));
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m == "Codex CLI lists predicate-guidance"),
+                "{messages:#?}"
+            );
+            assert!(
+                !messages.iter().any(|m| m.contains("none is installed")),
+                "{messages:#?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn try_skips_the_check_when_the_custom_predicate_fails() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let messages = try_predicate_kit(&mut ctx, "exit 1").await?;
+
+            assert!(!installed_anywhere(
+                &ctx,
+                &workspace(&ctx),
+                "predicate-guidance"
+            ));
+            assert!(
+                messages.iter().any(|m| m
+                    == "no skill of `predicate-kit` applies in this workspace, so none is installed here"),
+                "{messages:#?}"
+            );
+            assert!(!messages.iter().any(|m| m.contains("list")), "{messages:#?}");
             Ok(())
         },
     )
