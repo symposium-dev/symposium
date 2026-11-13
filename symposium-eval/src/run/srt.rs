@@ -15,6 +15,13 @@
 //! sandbox inside, with its own PID namespace (`--unshare-pid --die-with-parent`), so
 //! killing the tree reaches every process, including one that called `setsid`.
 //!
+//! The same outer namespace binds that `tmp/` at a short alias too, [`SRT_RUNTIME_TMP`],
+//! which is `srt`'s own `TMPDIR`. `srt` makes its proxy's Unix sockets there, and a
+//! socket's path is limited to 107 bytes, so a long evaluation root would otherwise
+//! leave no room. Each outer namespace maps the alias to its own sandbox's directory, so
+//! concurrent sandboxes never share one. The command itself still gets its own `tmp/` as
+//! `TMPDIR`: it runs through `env`, since `srt` would otherwise set `/tmp/claude`.
+//!
 //! Enforced mode is Linux only. On macOS trials would share `/tmp/claude`, and a process
 //! that leaves the process group outlives the deadline, since there is no PID namespace.
 
@@ -38,6 +45,22 @@ const PROBE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Where `srt` lets every sandbox write.
 const SRT_SHARED_TMP: &str = "/tmp/claude";
+
+/// `srt`'s own `TMPDIR` inside each outer namespace: the sandbox's `tmp/`, by a path
+/// short enough for the proxy's sockets whatever the evaluation root.
+const SRT_RUNTIME_TMP: &str = "/tmp/symposium-srt";
+
+/// The longest Unix socket path Linux allows, in bytes, its terminating NUL left out.
+const MAX_SOCKET_PATH: usize = 107;
+
+/// What `srt` 0.0.81 adds to its `TMPDIR` for its proxy's sockets:
+/// `/claude-socks-<16 hex>.sock` (`linux-sandbox-utils.js`, `initializeLinuxNetworkBridge`).
+const SRT_SOCKET_NAME: usize = "/claude-socks-0123456789abcdef.sock".len();
+
+const _: () = assert!(SRT_RUNTIME_TMP.len() + SRT_SOCKET_NAME <= MAX_SOCKET_PATH);
+
+/// Runs a command with the environment variables before it set.
+const ENV: &str = "/usr/bin/env";
 
 /// The `srt` installation trials run under, on Linux.
 #[derive(Debug, Clone)]
@@ -165,10 +188,6 @@ impl Srt {
         if !policy.is_file() {
             return Err(RunError::NoPolicy(policy));
         }
-        // Only on Linux does `srt` bridge its proxy through Unix sockets.
-        if cfg!(target_os = "linux") && tmp.as_os_str().len() + SRT_SOCKET_NAME > MAX_SOCKET_PATH {
-            return Err(RunError::TmpTooLong(tmp));
-        }
         Ok(Sandboxed {
             srt: self,
             policy,
@@ -176,13 +195,6 @@ impl Srt {
         })
     }
 }
-
-/// The longest Unix socket path Linux allows, in bytes, its terminating NUL left out.
-const MAX_SOCKET_PATH: usize = 107;
-
-/// What `srt` 0.0.81 adds to its `TMPDIR` for its proxy's sockets:
-/// `/claude-socks-<16 hex>.sock` (`linux-sandbox-utils.js`, `initializeLinuxNetworkBridge`).
-const SRT_SOCKET_NAME: usize = "/claude-socks-0123456789abcdef.sock".len();
 
 /// Whether `node --version` output, such as `v22.12.0`, is at least [`NODE_MINIMUM`].
 fn node_is_supported(version: &str) -> bool {
@@ -196,18 +208,18 @@ fn node_is_supported(version: &str) -> bool {
 
 impl Srt {
     /// `invocation`, run by `srt` under `policy` inside the outer `bwrap`, which binds
-    /// `tmp` over `/tmp/claude`.
+    /// `tmp` over `/tmp/claude` and at [`SRT_RUNTIME_TMP`]. The command gets `tmp` as its
+    /// `TMPDIR` through `env`, over the one `srt` sets.
     fn wrap(&self, policy: &Path, tmp: &Path, invocation: &Invocation) -> Invocation {
-        let mut args: Vec<OsString> = vec![
-            "--dev-bind".into(),
-            "/".into(),
-            "/".into(),
-            // A bind needs its destination, and `srt` may not have created it yet.
-            "--dir".into(),
-            SRT_SHARED_TMP.into(),
-            "--bind".into(),
-            tmp.into(),
-            SRT_SHARED_TMP.into(),
+        let mut command_tmpdir = OsString::from("TMPDIR=");
+        command_tmpdir.push(tmp);
+        let mut args: Vec<OsString> = vec!["--dev-bind".into(), "/".into(), "/".into()];
+        for alias in [SRT_SHARED_TMP, SRT_RUNTIME_TMP] {
+            // A bind needs its destination, which may not exist yet.
+            args.extend(["--dir".into(), alias.into()]);
+            args.extend(["--bind".into(), tmp.into(), alias.into()]);
+        }
+        args.extend([
             "--die-with-parent".into(),
             "--".into(),
             self.node.clone().into(),
@@ -215,30 +227,28 @@ impl Srt {
             "--settings".into(),
             policy.into(),
             "--".into(),
+            ENV.into(),
+            command_tmpdir,
             invocation.program.clone(),
-        ];
+        ]);
         args.extend(invocation.args.iter().cloned());
+        let mut env = invocation.env.clone();
+        env.retain(|(name, _)| name != "TMPDIR");
+        env.push(("TMPDIR".into(), SRT_RUNTIME_TMP.into()));
         Invocation {
             program: self.bwrap.clone().into(),
             args,
             dir: invocation.dir.clone(),
-            env: invocation.env.clone(),
+            env,
             log_name: invocation.log_name.clone(),
         }
     }
 }
 
 impl Sandboxed<'_> {
-    /// `invocation`, run by `srt` under the policy, with its own `/tmp/claude`, and the
-    /// sandbox's directory as `TMPDIR`: `srt` makes its proxy's sockets there, so its
-    /// path must stay short.
+    /// `invocation`, run by `srt` under the policy, with this sandbox's own `tmp/`.
     fn wrap(&self, invocation: &Invocation) -> Invocation {
-        let mut invocation = invocation.clone();
-        invocation.env.retain(|(name, _)| name != "TMPDIR");
-        invocation
-            .env
-            .push(("TMPDIR".into(), self.tmp.clone().into()));
-        self.srt.wrap(&self.policy, &self.tmp, &invocation)
+        self.srt.wrap(&self.policy, &self.tmp, invocation)
     }
 }
 
@@ -287,37 +297,31 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn a_sandboxed_command_has_the_sandboxs_tmpdir() {
-        let host = Host::new();
-        let trial = written_trial(&host);
-        let srt = srt(&host);
-        let mut invocation = probe(&trial);
-        invocation.env.push(("TMPDIR".into(), "/elsewhere".into()));
-
-        let wrapped = srt.for_trial(&trial).unwrap().wrap(&invocation);
-
-        let tmpdirs: Vec<_> = wrapped
-            .env
-            .iter()
-            .filter(|(name, _)| name == "TMPDIR")
-            .map(|(_, value)| PathBuf::from(value))
-            .collect();
-        assert_eq!(tmpdirs, [trial.tmp()]);
+    /// The `--bind` pairs the outer `bwrap` gets, as `(source, destination)`.
+    fn binds(wrapped: &Invocation) -> Vec<(OsString, OsString)> {
+        wrapped
+            .args
+            .windows(3)
+            .filter(|window| window[0] == "--bind")
+            .map(|window| (window[1].clone(), window[2].clone()))
+            .collect()
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn a_tmp_too_long_for_srts_sockets_is_refused() {
+    fn grading_gets_its_own_tmp() {
         let host = Host::new();
         let trial = written_trial(&host);
-        let srt = srt(&host);
-        let fits = PathBuf::from("/").join("t".repeat(MAX_SOCKET_PATH - SRT_SOCKET_NAME - 1));
-        let long = fits.join("x");
+        fs::create_dir_all(trial.grading()).unwrap();
+        fs::write(trial.grading_policy_file(), "{}").unwrap();
 
-        assert!(srt.sandboxed(trial.policy_file(), fits).is_ok());
-        let result = srt.sandboxed(trial.policy_file(), long);
-        assert!(matches!(result, Err(RunError::TmpTooLong(_))), "{result:?}");
+        let wrapped = srt(&host).for_grading(&trial).unwrap().wrap(&probe(&trial));
+
+        let sources: Vec<_> = binds(&wrapped)
+            .into_iter()
+            .map(|(source, _)| source)
+            .collect();
+        let grading_tmp = trial.grading_tmp().into_os_string();
+        assert_eq!(sources, [grading_tmp.clone(), grading_tmp]);
     }
 
     #[test]
@@ -337,8 +341,13 @@ mod tests {
         let trial = written_trial(&host);
         let srt = srt(&host);
 
-        let wrapped = srt.for_trial(&trial).unwrap().wrap(&probe(&trial));
+        let mut invocation = probe(&trial);
+        invocation.env.push(("TMPDIR".into(), "/elsewhere".into()));
 
+        let wrapped = srt.for_trial(&trial).unwrap().wrap(&invocation);
+
+        let mut command_tmpdir = OsString::from("TMPDIR=");
+        command_tmpdir.push(trial.tmp());
         let expected: Vec<OsString> = vec![
             "--dev-bind".into(),
             "/".into(),
@@ -348,6 +357,11 @@ mod tests {
             "--bind".into(),
             trial.tmp().into(),
             "/tmp/claude".into(),
+            "--dir".into(),
+            "/tmp/symposium-srt".into(),
+            "--bind".into(),
+            trial.tmp().into(),
+            "/tmp/symposium-srt".into(),
             "--die-with-parent".into(),
             "--".into(),
             host.join("bin/node").into(),
@@ -355,6 +369,8 @@ mod tests {
             "--settings".into(),
             trial.policy_file().into(),
             "--".into(),
+            "/usr/bin/env".into(),
+            command_tmpdir,
             "sh".into(),
             "-c".into(),
             "echo hello".into(),
@@ -362,8 +378,9 @@ mod tests {
         assert_eq!(wrapped.program, host.join("bin/bwrap").as_os_str());
         assert_eq!(wrapped.args, expected);
         assert_eq!(wrapped.dir, trial.project());
+        // `srt` itself gets the short alias, never the command's own `TMPDIR`.
         let mut env = probe(&trial).env;
-        env.push(("TMPDIR".into(), trial.tmp().into()));
+        env.push(("TMPDIR".into(), "/tmp/symposium-srt".into()));
         assert_eq!(wrapped.env, env);
     }
 

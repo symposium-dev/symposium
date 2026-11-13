@@ -1,29 +1,17 @@
 //! Real sandbox regressions with fake credentials and no model requests.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
-use super::test_support::{RealSrt, api_key, on_path};
+use super::test_support::{RealSrt, api_key, on_path, wait_for};
 use super::{ApiKey, Configuration};
 
 const DEADLINE: Duration = Duration::from_secs(60);
-
-fn wait_for(path: &Path) {
-    let deadline = Instant::now() + DEADLINE;
-    while !path.is_file() {
-        assert!(
-            Instant::now() < deadline,
-            "never created {}",
-            path.display()
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
-}
 
 #[test]
 #[ignore = "needs node, srt, and bubblewrap installed"]

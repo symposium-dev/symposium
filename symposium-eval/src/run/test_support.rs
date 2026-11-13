@@ -101,19 +101,27 @@ pub(crate) struct RealSrt {
 #[cfg(target_os = "linux")]
 impl RealSrt {
     pub(crate) fn new(api_key: ApiKey) -> Self {
+        Self::nested(api_key, std::path::Path::new(""))
+    }
+
+    /// As [`Self::new`], with the evaluation root at `under` inside its temporary
+    /// directory, so a test can make the root's path as long as it needs.
+    pub(crate) fn nested(api_key: ApiKey, under: &std::path::Path) -> Self {
         let srt = installed_srt();
         let decoy_home = decoy_home();
         let machine =
             Machine::new(vec![decoy_home.path().to_owned()], &checkout(), &sysroot()).unwrap();
-        let eval_root = TempDir::new().unwrap();
-        srt.preflight(eval_root.path()).unwrap();
-        let batch = Batch::create(eval_root.path(), &BatchName::new("batch").unwrap()).unwrap();
+        let temp = TempDir::new().unwrap();
+        let eval_root = temp.path().join(under);
+        fs::create_dir_all(&eval_root).unwrap();
+        srt.preflight(&eval_root).unwrap();
+        let batch = Batch::create(&eval_root, &BatchName::new("batch").unwrap()).unwrap();
         Self {
             srt,
             machine,
             batch,
             api_key,
-            _eval_root: eval_root,
+            _eval_root: temp,
             decoy_home,
         }
     }
@@ -384,6 +392,20 @@ fn decoy_home() -> TempDir {
     fs::create_dir_all(installed.parent().unwrap()).unwrap();
     executable(&installed, "#!/bin/sh\necho 'installed cargo-agents'\n");
     home
+}
+
+/// Waits up to a minute for a sandboxed command to create the file at `path`.
+#[cfg(target_os = "linux")]
+pub(crate) fn wait_for(path: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !path.is_file() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never created {}",
+            path.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Writes an executable shell script at `path`.
