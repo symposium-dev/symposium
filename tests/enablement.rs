@@ -10,7 +10,7 @@ use symposium::status_command::StatusState;
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
 /// Every installed skill directory under `parent` named `<skill_name>` or
-/// `<skill_name>-<hash>`.
+/// `<skill_name>-<hash>`, including skills delivered inside compiled plugins.
 fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return Vec::new();
@@ -25,7 +25,10 @@ fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
             || (name.starts_with(skill_name)
                 && name.as_bytes().get(skill_name.len()) == Some(&b'-'));
         if matches && path.join("SKILL.md").is_file() {
-            out.push(path);
+            out.push(path.clone());
+        }
+        if path.join(".claude-plugin/plugin.json").is_file() {
+            out.extend(find_installed_skills(&path.join("skills"), skill_name));
         }
     }
     out.sort();
@@ -108,7 +111,7 @@ async fn use_records_workspace_entry_and_installs() {
     .unwrap();
 }
 
-/// `--global` records a plain-string entry with no workspace scope.
+/// `--global` records an entry with no workspace scope.
 #[tokio::test]
 async fn use_global_records_unscoped_entry() {
     with_fixture(
@@ -119,9 +122,14 @@ async fn use_global_records_unscoped_entry() {
             ctx.symposium(&["use", "--global", "crate-a"]).await?;
 
             let config = read_config(&ctx);
+            // Written precisely, naming its package manager.
             assert!(
-                config.contains(r#"use = ["crate-a"]"#),
-                "global entry is a plain string: {config}"
+                config.contains(r#"pm = "cargo""#) && config.contains(r#"name = "crate-a""#),
+                "global entry names its package manager: {config}"
+            );
+            assert!(
+                !config.contains("workspace ="),
+                "a global entry carries no workspace scope: {config}"
             );
             ctx.symposium(&["use", "--global", "crate_a"]).await?;
             assert_eq!(
@@ -228,7 +236,7 @@ async fn plugins_entries_match_crate_names_like_cargo() {
             assert!(installed(), "auto-enable");
 
             ctx.sym.config.plugins.auto_enable.clear();
-            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate_a".into())];
+            ctx.sym.config.plugins.used = vec![UseEntry::global("crate_a".into())];
             ctx.symposium(&["sync"]).await?;
             let user_plugin = ctx.sym.home_dir().join(".claude/skills/crate-a");
             assert!(
@@ -263,7 +271,7 @@ async fn plugins_entries_match_registry_plugin_names_exactly() {
             let woken = || !find_installed_skills(&skills_dir, "gateless-guidance").is_empty();
 
             ctx.sym.config.plugins.auto_enable = vec!["gateless-plugin".into()];
-            ctx.sym.config.plugins.used = vec![UseEntry::Global("gateless_plugin".into())];
+            ctx.sym.config.plugins.used = vec![UseEntry::global("gateless_plugin".into())];
             ctx.symposium(&["sync"]).await?;
             assert!(!woken(), "auto-enable and a folded `use` spelling");
 
@@ -305,6 +313,20 @@ async fn use_global_installs_registry_content_for_the_user() {
             );
             let plugin = ctx.sym.home_dir().join(".claude/skills/serde-guidance");
             assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+
+            // Global compilation also visits inactive registry plugins. It must
+            // honor disable rather than reinstalling the now-inactive plugin.
+            ctx.sym
+                .config
+                .plugins
+                .disable
+                .push(symposium::config::PluginRef::new(
+                    "user-plugins",
+                    "serde-guidance",
+                ));
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+            assert!(!plugin.exists());
             Ok(())
         },
     )
@@ -328,10 +350,184 @@ async fn use_wakes_and_remove_sleeps_a_dormant_plugin() {
 
             ctx.symposium(&["use", "gateless-plugin"]).await?;
             find_installed_skill(&skills_dir, "gateless-guidance");
-            assert!(read_config(&ctx).contains("gateless-plugin"));
+            // Written precisely, naming the registry.
+            let config = read_config(&ctx);
+            assert!(
+                config.contains(r#"pm = "user-plugins""#)
+                    && config.contains(r#"name = "gateless-plugin""#),
+                "{config}"
+            );
 
             ctx.symposium(&["use", "--remove", "gateless-plugin"])
                 .await?;
+            assert!(find_installed_skills(&skills_dir, "gateless-guidance").is_empty());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// The recorded `use` entries, as `pm:name` or a bare name.
+fn used_names(ctx: &TestContext) -> Vec<String> {
+    ctx.sym
+        .config
+        .plugins
+        .used
+        .iter()
+        .map(|e| e.plugin().to_string())
+        .collect()
+}
+
+/// Configure a package manager named `other` whose search finds every name it
+/// is asked about, as crates.io does for many a recommendation's name.
+fn add_pm_that_finds_everything(ctx: &mut TestContext) {
+    let script = ctx.sym.config_dir().join("pm-other.sh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"other"}}\n' "$id" ;;
+    *'"canonical_names"'*)
+      names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"names":%s}}\n' "$id" "$names" ;;
+    *'"search"'*)
+      q=$(printf '%s' "$line" | sed 's/.*"query":"\([^"]*\)".*/\1/')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[{"id":{"pm":"other","name":"%s","version":"*"}}]}}\n' "$id" "$q" ;;
+    *)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[],"deps":[]}}\n' "$id" ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    ctx.sym
+        .config
+        .package_managers
+        .push(symposium::config::PackageManagerConfig {
+            name: "other".to_string(),
+            command: "sh".to_string(),
+            args: vec![script.display().to_string()],
+        });
+}
+
+/// A registry plugin answers its name before any package manager is searched,
+/// so a package elsewhere that shares a dormant recommendation's name does not
+/// make `use` ambiguous.
+#[tokio::test]
+async fn use_prefers_a_registry_plugin_over_a_search_hit() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dormant-plugin0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            add_pm_that_finds_everything(&mut ctx);
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+
+            ctx.symposium(&["use", "gateless-plugin"]).await?;
+            find_installed_skill(&skills_dir, "gateless-guidance");
+            assert_eq!(used_names(&ctx), vec!["user-plugins:gateless-plugin"]);
+
+            // Naming the package manager still reaches the search hit.
+            ctx.symposium(&["use", "gateless-plugin", "--pm", "other"])
+                .await?;
+            assert_eq!(
+                used_names(&ctx),
+                vec!["user-plugins:gateless-plugin", "other:gateless-plugin"]
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `--remove --pm` drops only that package manager's entry for a name.
+#[tokio::test]
+async fn use_remove_with_pm_leaves_other_pms_entries() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            add_pm_that_finds_everything(&mut ctx);
+            ctx.symposium(&["use", "crate-a", "--global"]).await?;
+            ctx.symposium(&["use", "crate-a", "--global", "--pm", "other"])
+                .await?;
+
+            ctx.symposium(&["use", "--remove", "crate-a", "--global", "--pm", "other"])
+                .await?;
+            assert_eq!(used_names(&ctx), vec!["cargo:crate-a"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A bare `use` name that two registries' dormant plugins share enables
+/// neither, and `status` says to name the registry. Naming it wakes that one.
+#[tokio::test]
+async fn an_ambiguous_bare_use_enables_nothing_until_qualified() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dormant-plugin0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = ctx.sym.home_dir().join(".claude/skills");
+
+            // A second registry offering a dormant plugin of the same name.
+            let other = workspace_root.join("other-registry/gateless-plugin");
+            std::fs::create_dir_all(other.join("skills/other-guidance"))?;
+            std::fs::write(
+                other.join("Symposium.toml"),
+                "name = \"gateless-plugin\"\n\n[[skills]]\nsource.path = \"skills\"\n",
+            )?;
+            std::fs::write(
+                other.join("skills/other-guidance/SKILL.md"),
+                "---\nname: other-guidance\ndescription: d\n---\nBody.\n",
+            )?;
+            ctx.sym
+                .config
+                .registries
+                .push(symposium::config::RegistryConfig {
+                    name: "other".to_string(),
+                    git: None,
+                    path: Some(workspace_root.join("other-registry").display().to_string()),
+                    auto_update: false,
+                });
+            ctx.sym
+                .config
+                .plugins
+                .used
+                .push(symposium::config::UseEntry::global(
+                    "gateless-plugin".into(),
+                ));
+            ctx.sym.save_config()?;
+
+            ctx.symposium(&["sync"]).await?;
+            assert!(find_installed_skills(&skills_dir, "gateless-guidance").is_empty());
+            assert!(find_installed_skills(&skills_dir, "other-guidance").is_empty());
+
+            let ws = ctx.sym.workspace(&workspace_root);
+            let entries = symposium::status_command::workspace_status(&ctx.sym, &ws).await?;
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| e.root.contains("could be from `other` or `user-plugins`")),
+                "{entries:?}"
+            );
+
+            ctx.sym.config.plugins.used = vec![symposium::config::UseEntry::global(
+                symposium::config::PluginRef::new("other", "gateless-plugin"),
+            )];
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "other-guidance");
             assert!(find_installed_skills(&skills_dir, "gateless-guidance").is_empty());
             Ok(())
         },
@@ -523,14 +719,11 @@ async fn use_on_a_disabled_plugin_errors() {
         &["auto-enable0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            let pms = ctx.sym.detached_managers();
             symposium::discovery::apply_consent(
                 &mut ctx.sym,
-                &pms,
                 &[],
-                &[PackageId::any_version("cargo", "crate-a")],
-            )
-            .await?;
+                &[symposium::pm::PackageId::any_version("cargo", "crate-a")],
+            )?;
 
             let err = ctx
                 .symposium(&["use", "crate-a"])
@@ -572,14 +765,14 @@ async fn status_reports_candidate_then_used() {
             assert!(candidate.root.contains("awaiting consent"), "{candidate:?}");
 
             ctx.symposium(&["use", "crate-a"]).await?;
-            let pms = ctx.sym.detached_managers();
             symposium::discovery::apply_consent(
                 &mut ctx.sym,
-                &pms,
                 &[],
-                &[PackageId::any_version("cargo", "noisy-crate")],
-            )
-            .await?;
+                &[symposium::pm::PackageId::any_version(
+                    "cargo",
+                    "noisy-crate",
+                )],
+            )?;
 
             let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
@@ -743,24 +936,22 @@ async fn apply_consent_records_both_answers() {
             ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
 
-            let pms = ctx.sym.detached_managers();
             symposium::discovery::apply_consent(
                 &mut ctx.sym,
-                &pms,
+                &[symposium::pm::PackageId::any_version("cargo", "crate-a")],
+                &[],
+            )?;
+            assert!(read_config(&ctx).contains("auto-enable"));
+            // Discovery supplies canonical identities; repeated consent is idempotent.
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
                 &[PackageId::any_version("cargo", "crate-a")],
                 &[],
-            )
-            .await?;
-            assert!(read_config(&ctx).contains("auto-enable"));
-            // Cargo's two spellings still record one decision.
-            symposium::discovery::apply_consent(
-                &mut ctx.sym,
-                &pms,
-                &[PackageId::any_version("cargo", "crate_a")],
-                &[],
-            )
-            .await?;
-            assert_eq!(ctx.sym.config.plugins.auto_enable, ["crate-a"]);
+            )?;
+            assert_eq!(
+                ctx.sym.config.plugins.auto_enable,
+                [symposium::config::PluginRef::new("cargo", "crate-a")]
+            );
 
             ctx.symposium(&["sync"]).await?;
             find_installed_skill(&workspace_root.join(".agents/skills"), "a-guidance");
@@ -773,14 +964,11 @@ async fn apply_consent_records_both_answers() {
                 "a decided dependency is not offered again"
             );
 
-            let pms = ctx.sym.detached_managers();
             symposium::discovery::apply_consent(
                 &mut ctx.sym,
-                &pms,
                 &[],
-                &[PackageId::any_version("cargo", "other-dep")],
-            )
-            .await?;
+                &[symposium::pm::PackageId::any_version("cargo", "other-dep")],
+            )?;
             assert!(read_config(&ctx).contains("disable"));
             Ok(())
         },
@@ -828,8 +1016,9 @@ async fn session_start_hints_pending_candidates() {
             // No audits list is read here, so the candidate is named with no
             // audit answer at all.
             assert!(
-                context
-                    .contains("not enabled yet: crate-a. They stay off until the user consents —"),
+                context.contains(
+                    "not enabled yet: cargo:crate-a. They stay off until the user consents —"
+                ),
                 "{context}"
             );
             assert!(context.contains("cargo agents use"), "{context}");
@@ -856,14 +1045,11 @@ async fn status_reports_a_used_but_disabled_plugin_as_declined() {
             ctx.symposium(&["use", "crate-a"]).await?;
             // Straight into the config: `use` itself now refuses this pairing,
             // but a hand-edited config can still hold both.
-            let pms = ctx.sym.detached_managers();
             symposium::discovery::apply_consent(
                 &mut ctx.sym,
-                &pms,
                 &[],
-                &[PackageId::any_version("cargo", "crate-a")],
-            )
-            .await?;
+                &[symposium::pm::PackageId::any_version("cargo", "crate-a")],
+            )?;
 
             let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
@@ -888,7 +1074,7 @@ async fn status_lists_each_declined_name_once() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
             ctx.sym.config.plugins.disable = ["crate_a", "*", "never-seen", "never_seen"]
-                .map(String::from)
+                .map(symposium::config::PluginRef::from)
                 .to_vec();
 
             let deps = ctx.sym.workspace(&workspace_root);
@@ -930,7 +1116,7 @@ async fn status_reports_a_pluginless_dependency_only_when_used() {
                 .config
                 .plugins
                 .used
-                .push(symposium::config::UseEntry::Global("not-a-dep".into()));
+                .push(symposium::config::UseEntry::global("not-a-dep".into()));
 
             let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
@@ -989,4 +1175,216 @@ async fn choosing_registry_plugin_does_not_enable_same_named_dependency() {
             "enabling the registry plugin also installed the unconsented dependency: {installed:?}");
         Ok(())
     }).await.unwrap();
+}
+
+/// A recommendation is named after the crate it advises. Consenting to the
+/// crate's own plugin still loads it beside the recommendation: the two share a
+/// name, not an identity.
+#[tokio::test]
+async fn a_consented_crate_loads_beside_a_recommendation_of_the_same_name() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            let advice = ctx.sym.config_dir().join("plugins/crate-a");
+            std::fs::create_dir_all(advice.join("skills/crate-a-advice"))?;
+            std::fs::write(
+                advice.join("Symposium.toml"),
+                "name = \"crate-a\"\ndepends-on = [\"crate-a\"]\n\n[[skills]]\nsource.path = \"skills\"\n",
+            )?;
+            std::fs::write(
+                advice.join("skills/crate-a-advice/SKILL.md"),
+                "---\nname: crate-a-advice\ndescription: A recommendation about crate-a\n---\nAdvice.\n",
+            )?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "crate-a-advice");
+            assert!(find_installed_skills(&skills_dir, "a-guidance").is_empty());
+
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &[symposium::pm::PackageId::any_version("cargo", "crate-a")],
+                &[],
+            )?;
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "crate-a-advice");
+            find_installed_skill(&skills_dir, "a-guidance");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A name that no package manager offers is rejected before anything is
+/// recorded, and `--pm` narrows to one that does not offer it either.
+#[tokio::test]
+async fn use_with_an_unknown_pm_errors() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let err = ctx
+                .symposium(&["use", "crate-a", "--pm", "npm"])
+                .await
+                .expect_err("no npm package manager is configured");
+            assert!(
+                err.to_string().contains("no package manager `npm`"),
+                "{err}"
+            );
+            assert!(!read_config(&ctx).contains("crate-a"), "nothing recorded");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `disable` turns off a registry plugin too: a trusted source is what lets a
+/// plugin activate without being asked about, not a claim the user cannot
+/// change their mind.
+#[tokio::test]
+async fn disable_turns_off_a_registry_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            let advice = ctx.sym.config_dir().join("plugins/advice");
+            std::fs::create_dir_all(advice.join("skills/advice"))?;
+            std::fs::write(
+                advice.join("Symposium.toml"),
+                "name = \"advice\"\ndepends-on = [\"*\"]\n\n[[skills]]\nsource.path = \"skills\"\n",
+            )?;
+            std::fs::write(
+                advice.join("skills/advice/SKILL.md"),
+                "---\nname: advice\ndescription: Advice\n---\nAdvice.\n",
+            )?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "advice");
+
+            ctx.sym
+                .config
+                .plugins
+                .disable
+                .push(symposium::config::PluginRef::new("user-plugins", "advice"));
+            ctx.symposium(&["sync"]).await?;
+            assert!(find_installed_skills(&skills_dir, "advice").is_empty());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn disable_turns_off_a_crate_reached_through_a_chain() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-facets0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let mcp = ctx.workspace_root.clone().unwrap().join(".mcp.json");
+            let registered = || {
+                std::fs::read_to_string(&mcp)
+                    .unwrap_or_default()
+                    .contains("facet-server")
+            };
+            ctx.symposium(&["sync"]).await?;
+            assert!(registered(), "chained crate before disable");
+
+            ctx.sym.config.plugins.disable = vec![symposium::config::PluginRef::bare("crate-f")];
+            ctx.symposium(&["sync"]).await?;
+            assert!(!registered(), "chained crate after disable");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn disable_naming_an_unknown_pm_does_not_leave_the_plugin_on() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            let advice = ctx.sym.config_dir().join("plugins/advice");
+            std::fs::create_dir_all(advice.join("skills/advice"))?;
+            std::fs::write(
+                advice.join("Symposium.toml"),
+                "name = \"advice\"\ndepends-on = [\"*\"]\n\n[[skills]]\nsource.path = \"skills\"\n",
+            )?;
+            std::fs::write(
+                advice.join("skills/advice/SKILL.md"),
+                "---\nname: advice\ndescription: Advice\n---\nAdvice.\n",
+            )?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "advice");
+
+            ctx.sym
+                .config
+                .plugins
+                .disable
+                .push(symposium::config::PluginRef::new("user-plugin", "advice"));
+            ctx.sym.save_config()?;
+            ctx.sym = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
+
+            let error = ctx
+                .symposium(&["sync"])
+                .await
+                .expect_err("unknown disable PM must be reported");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unknown package manager or registry `user-plugin`"),
+                "{error:#}"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn use_remove_drops_an_exact_entry_while_its_pm_is_broken() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            add_pm_that_finds_everything(&mut ctx);
+            ctx.symposium(&["use", "crate-a", "--global", "--pm", "other"])
+                .await?;
+            assert_eq!(used_names(&ctx), vec!["other:crate-a"]);
+
+            let other = ctx
+                .sym
+                .config
+                .package_managers
+                .iter_mut()
+                .find(|pm| pm.name == "other")
+                .unwrap();
+            other.command = "symposium-test-missing-pm".to_string();
+            other.args.clear();
+
+            ctx.symposium(&["use", "--remove", "crate-a", "--global", "--pm", "other"])
+                .await?;
+            assert!(used_names(&ctx).is_empty());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
 }

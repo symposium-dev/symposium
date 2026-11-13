@@ -64,19 +64,18 @@ Plugin content must not decide where Symposium writes. A name it supplies, such 
 
 ## Names compare as package identities
 
-Whether two names are the same package is the package manager's rule, not a string comparison: cargo treats `widget-lib` and `widget_lib` as one crate, while a registry compares its plugin names exactly. So code that matches a name typed by the user against a plugin or a dependency resolves both through `PmRegistry::identify` or `PmRegistry::identity` and compares the results, rather than comparing strings or applying one ecosystem's normalization to every name. Nor is a name a crate by default: `identify` asks the package managers whether they have it and fails with `no package named ...` when none does. A `[plugins]` entry names no package manager, so the `PluginsConfig` queries take the `PackageId` being checked and compare the entry under that id's package manager: `disable = ["my_plugin"]` covers the crate `my-plugin` but not a registry plugin named `my-plugin`. A `"*"` entry is a pattern, not a name: the `PluginsConfig` queries treat it as matching everything, so code that lists entries skips it rather than reporting it as a plugin.
+Whether two names are the same package is the package manager's rule, not a string comparison: cargo treats `widget-lib` and `widget_lib` as one crate, while a registry compares its plugin names exactly. Only the package manager can say, through `canonical_name`, which may be a request to another process, so lookup first checks exact reported identities and normalizes names when needed. Group fallback comparisons through `canonical_names` rather than sending a request per dependency. Ids compare as they are, since a package manager spells each of its packages one way. A name typed on the command line goes through `discovery::Names` and the package managers' `PmInstance::find`, preserving lookup tiers and each PM's naming rules. Nor is a name a crate by default: `use` fails with `no package named ...` when no package manager has it. A `[plugins]` entry is resolved once per invocation, `use` by `discovery::used` and `auto-enable` and `disable` by `Names::spellings`, and the `PluginsConfig` queries take the result: `disable = ["my_plugin"]` covers the crate `my-plugin` but not a registry plugin named `my-plugin`. A `"*"` entry is a pattern, not a name: the `PluginsConfig` queries treat it as matching everything, so code that lists entries skips it rather than reporting it as a plugin.
 
 ## Remote package managers need identity and lifecycle boundaries
 
 A remote PM's naming rules do not come from its configured name. Every PM
-implements `canonical_names` to answer batches of names;
-lookup and config comparisons await that operation for both returned package
-names and user entries. Failed normalization marks the PM failed and cannot
+implements name normalization; the wire operation is the existing
+`canonical_names` batch. Lookup checks exact identities first, and configuration
+comparisons group reported spellings and user entries by PM. Failed normalization marks the PM failed and cannot
 bypass `disable` or authorize cleanup. Consent decisions retain the discovered
-package's PM identity, and recording them uses that PM's naming rules for both
-approvals and declines. Activation includes enabled dependencies from every
-ecosystem. Consent recording propagates normalization errors instead of
-reporting an unwritten decision as saved.
+package's canonical PM identity for both approvals and declines. Activation
+includes enabled dependencies from every ecosystem. Failed name resolution
+cannot grant consent, and recording a decision propagates config write errors.
 
 A remote PM can die after successfully describing the project and dependencies.
 Transport failures carry an `Unavailable` error marker so `PmInstance` also
@@ -121,6 +120,7 @@ The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so tha
 
 - **Paths in TOML/JSON string literals.** A Windows path like `C:\Users\...` is invalid inside a TOML or JSON string (the backslashes read as escapes). When substituting a real path into fixture text, convert to forward slashes first; Windows accepts `/` in paths. See `setup_fixture` in `symposium-testlib`.
 - **Paths inside `sh` script bodies.** On Windows `sh` is git-bash's MSYS shell, which reads `C:\a\b` as escapes plus an illegal `:`. Rewrite to the `/c/a/b` form and quote the value. See `sh_path` in `predicate.rs` tests.
+- **Shell executable paths.** Spawn `sh` from `PATH`, not `/bin/sh`. Windows CI adds Git for Windows' `sh.exe` to `PATH`; a Unix absolute path cannot launch it. This also applies to fake package managers configured by tests.
 - **`.sh` files must use `script`, not `executable`.** A shell script cannot be spawned directly as a process on Windows (no shebang support). In fixtures, reference it via `script = "..."` so it is run through `sh`, never `executable = "..."`.
 - **Canonicalized paths carry a `\\?\` prefix.** `fs::canonicalize` on Windows returns an extended-length path that `cargo`'s output lacks. Canonicalize both sides before comparing. A path that will be run by `sh` must not carry it, since MSYS cannot open it: use `dunce::canonicalize`, as `workspace_plugins` does.
 - **Paths inside asserted messages.** A report event or error that embeds a path renders it with backslashes on Windows, so an assertion matching a `/`-separated substring fails there. Normalize with `replace('\\', "/")` before matching, the way `normalize_paths` does for snapshots.
@@ -131,3 +131,14 @@ The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so tha
 A test that asserts on `ReportEvent`s installs a `ReportLayer` with `tracing::subscriber::set_default`, which is thread-local. tracing caches callsite interest and the global max level process-wide, recomputing both from whichever dispatchers are alive the first time a callsite is reached. Tests run in parallel, so a thread with no subscriber can reach a reporting callsite first and pin it to `Interest::never()` for every thread; the capturing test then drains zero events, which looks like the command reporting nothing. The failure is timing-dependent, so it shows up as a platform-specific flake rather than a reproducible failure.
 
 `install_tracing_baseline` (in `symposium-testlib`) installs a permissive global default subscriber once per test process to keep that cache open, and a thread-local `set_default` still takes precedence over it. `setup_fixture` calls it, and so must any helper that installs its own report layer.
+
+## Invalid disable PMs and offline revocation
+
+A qualified `disable` entry naming no effective PM or registry is an error, not
+an empty match. Sync validates it before writing agent files; shared plugin
+activation also stops so hooks and subcommands cannot ignore a typo or renamed
+registry. Workspace plugins use the `local` identity.
+
+Removing an exact stored `use` entry must not depend on its PM being available.
+Check the stored name and optional PM before resolving aliases. A bare entry with
+an explicit `--pm` still needs resolution to establish which grant is being removed.

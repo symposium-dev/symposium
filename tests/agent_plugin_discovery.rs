@@ -24,8 +24,7 @@ async fn an_mcp_only_dependency_package_is_offered_for_consent() {
             assert_eq!(loaded[0].manifest.mcp_servers.len(), 1);
             assert!(loaded[0].manifest.skills.is_empty());
 
-            let registry = symposium::plugins::load_registry(&ctx.sym).await;
-            let discovery = symposium::discovery::discover(&ctx.sym, &ws, &registry.plugins).await;
+            let discovery = symposium::discovery::discover_for(&ctx.sym, &ws).await;
             assert!(
                 discovery
                     .candidates

@@ -10,6 +10,7 @@ use crate::pm::{
     CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginKind, PmInstance,
     UnvalidatedPlugin,
 };
+use symposium_pm_cargo::sources::normalize_crate_name;
 
 /// A file entry for [`instantiate_fixture`].
 pub struct File<'a>(pub &'a str, pub &'a str);
@@ -73,7 +74,7 @@ impl FakeCargo {
     fn has(&self, crates: &[&'static str], name: &str) -> Option<PackageId> {
         crates
             .iter()
-            .find(|known| self.canonical_name(known) == self.canonical_name(name))
+            .find(|known| normalize_crate_name(known) == normalize_crate_name(name))
             .map(|known| PackageId::any_version(CARGO_PM, *known))
     }
 }
@@ -84,8 +85,8 @@ impl PackageManager for FakeCargo {
         CARGO_PM
     }
 
-    fn canonical_name(&self, name: &str) -> String {
-        symposium_pm_cargo::sources::normalize_crate_name(name)
+    async fn canonical_name(&self, name: &str) -> anyhow::Result<String> {
+        Ok(normalize_crate_name(name))
     }
 
     async fn load_plugin(

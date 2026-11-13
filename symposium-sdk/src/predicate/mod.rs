@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 pub mod syntax;
 
 pub use syntax::{
-    BUILTIN_PREDICATE_NAMES, DependsOnList, Predicate, PredicateSet, parse_comma_separated,
-    parse_dep_atom, parse_predicate, validate_custom_predicate_name,
+    BUILTIN_PREDICATE_NAMES, Dependency, DependsOnList, Predicate, PredicateSet,
+    parse_comma_separated, parse_dep_atom, parse_predicate, validate_custom_predicate_name,
 };
 
 /// A record emitted by a custom predicate on stdout. Each event describes an

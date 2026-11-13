@@ -34,7 +34,7 @@ fn registry(name: &str, gate: &str) -> Plugin {
 }
 
 fn global(name: &str) -> UseEntry {
-    UseEntry::Global(name.into())
+    UseEntry::global(name.into())
 }
 
 fn skill(name: &str, origin: &str, skill_md: &Path, plugin_index: usize) -> SkillWithGroupContext {
@@ -102,10 +102,7 @@ async fn only_a_global_use_entry_naming_the_plugin_installs_it_for_the_user() {
     crate_plugin.manifest.name = "a-tools".into();
     let mut member = registry("house-style", "");
     member.workspace_member = true;
-    let workspace_use = UseEntry::Workspace {
-        name: "dormant-guide".into(),
-        workspace: "/ws".into(),
-    };
+    let workspace_use = UseEntry::scoped("dormant-guide".into(), "/ws".into());
     let always = || registry("always-guide", "depends-on = [\"*\"]");
 
     let cases = [
@@ -134,6 +131,21 @@ async fn only_a_global_use_entry_naming_the_plugin_installs_it_for_the_user() {
             false,
         ),
         (
+            "qualified global use names the registry",
+            always(),
+            vec![UseEntry::global(PluginRef::new(
+                "user-plugins",
+                "always-guide",
+            ))],
+            true,
+        ),
+        (
+            "qualified global use leaves another PM's plugin alone",
+            always(),
+            vec![UseEntry::global(PluginRef::new("cargo", "always-guide"))],
+            false,
+        ),
+        (
             "workspace use",
             registry("dormant-guide", ""),
             vec![workspace_use],
@@ -154,12 +166,8 @@ async fn only_a_global_use_entry_naming_the_plugin_installs_it_for_the_user() {
             used,
             ..Default::default()
         };
-        let used = globally_used(&config, &pms, std::slice::from_ref(&plugin)).await;
-        assert_eq!(
-            installs_globally(&pms, &used, &plugin).await,
-            expected,
-            "{label}"
-        );
+        let used = globally_used(&config, &pms, std::slice::from_ref(&plugin), &[]).await;
+        assert_eq!(installs_globally(&used, &plugin), expected, "{label}");
     }
 }
 
@@ -173,9 +181,9 @@ async fn a_global_use_naming_a_registry_plugin_leaves_a_crate_of_that_name() {
         used: vec![global("crate_a")],
         ..Default::default()
     };
-    let used = globally_used(&config, &pms, std::slice::from_ref(&registry_plugin)).await;
-    assert!(installs_globally(&pms, &used, &registry_plugin).await);
-    assert!(!installs_globally(&pms, &used, &crate_plugin).await);
+    let used = globally_used(&config, &pms, std::slice::from_ref(&registry_plugin), &[]).await;
+    assert!(installs_globally(&used, &registry_plugin));
+    assert!(!installs_globally(&used, &crate_plugin));
 }
 
 #[test]

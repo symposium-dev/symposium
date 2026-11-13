@@ -7,7 +7,7 @@
 //! The fixture PMs are shell scripts. A script is enough to exercise the
 //! protocol from Symposium's side, and it keeps the test independent of build
 //! ordering: no PM binary has to exist before the test can run. They run
-//! through `/bin/sh` and splice paths into JSON unescaped, so these tests are
+//! through `sh` and splice paths into JSON unescaped, so these tests are
 //! Unix-only.
 #![cfg(unix)]
 
@@ -74,8 +74,82 @@ done
 fn remote(name: &str, script: &Path) -> RemotePm {
     RemotePm::new(
         name,
-        RemotePmCommand::new("/bin/sh").arg(script.display().to_string()),
+        RemotePmCommand::new("sh").arg(script.display().to_string()),
     )
+}
+
+/// Batch normalization retains the established wire method and caches each
+/// answer for the connection, preserving input order and duplicates.
+#[tokio::test]
+async fn a_pm_batches_and_reuses_name_comparisons() {
+    let tmp = tempfile::tempdir().unwrap();
+    let asked = tmp.path().join("asked");
+    let folding = script(
+        tmp.path(),
+        "pm-folding.sh",
+        &format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id" ;;
+    *'"canonical_names"'*)
+      names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/')
+      echo "$names" >> "{asked}"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"names":%s}}}}\n' "$id" "$(printf '%s' "$names" | tr - _)" ;;
+  esac
+done
+"#,
+            asked = asked.display()
+        ),
+    );
+    let pm = remote("demo", &folding);
+    assert_eq!(
+        pm.canonical_names(&["widget-lib".into(), "serde".into(), "widget-lib".into()])
+            .await
+            .unwrap(),
+        ["widget_lib", "serde", "widget_lib"]
+    );
+    for name in ["widget-lib", "widget-lib", "serde"] {
+        let expected = name.replace('-', "_");
+        assert_eq!(pm.canonical_name(name).await.unwrap(), expected);
+    }
+    assert_eq!(
+        std::fs::read_to_string(&asked).unwrap(),
+        "[\"serde\",\"widget-lib\"]\n"
+    );
+
+    let pms = PmRegistry::new(vec![PmInstance::new(
+        "demo",
+        false,
+        PluginKind::Package,
+        Box::new(pm),
+    )]);
+    let deps: Vec<_> = (0..128)
+        .map(|n| PackageId::new("demo", format!("item-{n}"), "1.0.0"))
+        .collect();
+    let names = symposium::discovery::Names::new(&[], &deps, &pms);
+    assert_eq!(
+        names.nearest("item-127", Some("demo")).await,
+        [deps[127].clone()]
+    );
+    // Exact identities need no normalization, even after many other candidates.
+    assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 1);
+
+    let config = symposium::config::PluginsConfig {
+        disable: vec![symposium::config::PluginRef::new("demo", "item_127")],
+        ..Default::default()
+    };
+    let spellings = names.spellings(&config).await;
+    assert!(config.is_disabled(&deps[127], &spellings));
+    assert!(!config.is_disabled(&deps[0], &spellings));
+    assert_eq!(
+        names.nearest("item_127", Some("demo")).await,
+        [deps[127].clone()]
+    );
+    // All fallback dependency/config comparisons share one additional request.
+    assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 2);
 }
 
 #[tokio::test]
@@ -360,6 +434,8 @@ async fn the_cargo_pm_answers_from_its_own_process() {
     // What the workspace depends on: resolved by the PM, in its own process,
     // from nothing but the path handed over at `initialize`.
     let deps = pm.list_deps().await.unwrap();
+    // Cargo's names, read across the boundary.
+    assert_eq!(pm.canonical_name("widget-lib").await.unwrap(), "widget_lib");
     assert!(
         deps.iter().any(|d| d.name == "widget" && d.pm == "cargo"),
         "got deps {deps:?}"
@@ -533,6 +609,104 @@ done
     assert!(!bound.dep_ids().await.iter().any(|d| d.pm == "demo"));
 }
 
+/// An `npm` package manager whose project at `ws` depends on `widget`, whose
+/// content (at `content`) carries a `skills/` directory and no manifest.
+fn npm_workspace_pm(dir: &Path, ws: &Path, content: &Path) -> std::path::PathBuf {
+    let plugin = format!(
+        r#"{{"id":{{"pm":"npm","name":"widget","version":"1.0.0"}},"root":"{}","manifest":{{}}}}"#,
+        content.display()
+    );
+    script(
+        dir,
+        "pm-npm.sh",
+        &format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"npm"}}}}\n' "$id" ;;
+    *'"project_info"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"project":{{"root":"{ws}"}}}}}}\n' "$id" ;;
+    *'"list_deps"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[{{"pm":"npm","name":"widget","version":"1.0.0"}}]}}}}\n' "$id" ;;
+    *'"active_plugins"'*|*'"load_plugin"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[{plugin}]}}}}\n' "$id" ;;
+    *)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[]}}}}\n' "$id" ;;
+  esac
+done
+"#,
+            ws = ws.display(),
+        ),
+    )
+}
+
+/// The consent path holds for a configured package manager exactly as it does
+/// for cargo: the plugin a dependency embeds is a candidate until consented
+/// to, under its own package manager's name, and then activates.
+#[tokio::test]
+async fn a_configured_pms_dependency_plugin_activates_once_consented() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws_root = tmp.path().join("ws");
+    let content = tmp.path().join("widget");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    std::fs::create_dir_all(content.join("skills/usage")).unwrap();
+    std::fs::write(
+        content.join("skills/usage/SKILL.md"),
+        "---\nname: usage\ndescription: d\n---\nBody.\n",
+    )
+    .unwrap();
+    let pm = npm_workspace_pm(tmp.path(), &ws_root, &content);
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let write_config = |plugins: &str| {
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                "[[agent]]\nname = \"claude\"\n\n\
+                 [defaults]\nsymposium-recommendations = false\nuser-plugins = false\n\n\
+                 [[package-manager]]\nname = \"npm\"\ncommand = \"/bin/sh\"\nargs = [{:?}]\n\n{plugins}",
+                pm.display().to_string()
+            ),
+        )
+        .unwrap();
+    };
+
+    // Whether a sync installs the package's skill.
+    async fn syncs_npm_skill(config_dir: &Path, ws_root: &Path) -> bool {
+        let sym = symposium::config::Symposium::from_dir(config_dir);
+        let ws = sym.workspace(ws_root);
+        symposium::sync::sync(&sym, &ws, symposium::UpdateLevel::None)
+            .await
+            .unwrap();
+        ws_root
+            .join(".claude/skills/widget/skills/usage/SKILL.md")
+            .is_file()
+    }
+
+    // Undecided: offered as a candidate, not active.
+    write_config("");
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+    let ws = sym.workspace(&ws_root);
+    let found = symposium::discovery::discover_for(&sym, &ws).await;
+    assert_eq!(found.candidates.len(), 1, "{found:?}");
+    assert_eq!(found.candidates[0].id.pm, "npm");
+    assert!(!syncs_npm_skill(&config_dir, &ws_root).await);
+
+    // Consent to the crate of that name is not consent to the npm package.
+    write_config("[plugins]\nauto-enable = [{ pm = \"cargo\", name = \"widget\" }]\n");
+    assert!(!syncs_npm_skill(&config_dir, &ws_root).await);
+
+    write_config("[plugins]\nauto-enable = [{ pm = \"npm\", name = \"widget\" }]\n");
+    assert!(syncs_npm_skill(&config_dir, &ws_root).await);
+
+    // Nothing else here is called `widget`, so the bare name means it.
+    write_config("[plugins]\nauto-enable = [\"widget\"]\n");
+    assert!(syncs_npm_skill(&config_dir, &ws_root).await);
+}
+
 /// A package manager that appends a line to `log` each time it starts, finds
 /// a project at `ws`, and names `input` as the one file its answers depend on.
 fn logging_pm(dir: &Path, log: &Path, ws: &Path, input: &Path) -> std::path::PathBuf {
@@ -619,10 +793,11 @@ async fn an_event_where_nothing_changed_spawns_no_package_manager() {
 }
 
 /// Name rules belong to the PM even when they have nothing to do with Cargo.
-/// Both returned names and arbitrary configuration names pass through the RPC.
+/// Arbitrary user and configuration names pass through the RPC.
 #[tokio::test]
 async fn remote_name_rules_cover_lookup_and_configuration() {
-    use symposium::config::{PluginsConfig, UseEntry};
+    use symposium::config::{PluginRef, PluginsConfig, Symposium, UseEntry};
+    use symposium::discovery::{Names, used};
     let tmp = tempfile::tempdir().unwrap();
     let pm = remote(
         "demo",
@@ -636,7 +811,7 @@ while IFS= read -r line; do
     *'"initialize"'*)
       printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
     *'"list_deps"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"pm":"demo","name":"WIDGET-LIB","version":"1"}]}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"pm":"demo","name":"widget-lib","version":"1"}]}}\n' "$id" ;;
     *'"canonical_names"'*)
       names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/' | tr '[:upper:]' '[:lower:]')
       printf '{"id":%s,"jsonrpc":"2.0","result":{"names":%s}}\n' "$id" "$names" ;;
@@ -651,31 +826,37 @@ done
         PluginKind::Package,
         Box::new(pm),
     )]);
-    let id = pms
-        .identify(&[], "Widget-Lib", UpdateLevel::None)
+    let deps = pms.list_deps().await;
+    let names = Names::new(&[], &deps, &pms);
+    let identified = names
+        .qualify(&PluginRef::bare("Widget-Lib"))
         .await
+        .unwrap()
         .unwrap();
-    assert_eq!(id, PackageId::any_version("demo", "widget-lib"));
+    assert_eq!(identified, PluginRef::new("demo", "widget-lib"));
     let config = PluginsConfig {
         auto_enable: vec!["Widget-Lib".into()],
-        disable: vec!["widget-lib".into()],
-        used: vec![UseEntry::Global("wIdGeT-lIb".into())],
+        disable: vec!["WIDGET-LIB".into()],
+        used: vec![UseEntry::global("wIdGeT-lIb".into())],
     };
-    let returned = PackageId::any_version("demo", "WIDGET-LIB");
-    assert!(config.is_auto_enabled(&pms, &returned).await);
-    assert!(config.is_disabled(&pms, &returned).await);
-    assert!(config.is_used_in(&pms, &returned, tmp.path()).await);
-    // This PM folds case, not underscores: do not borrow Cargo's rule.
+    let returned = PackageId::any_version("demo", "widget-lib");
+    let spellings = names.spellings(&config).await;
+    assert!(config.is_auto_enabled(&returned, &deps, &spellings));
+    assert!(config.is_disabled(&returned, &spellings));
+    let mut sym = Symposium::from_dir(tmp.path());
+    sym.config.plugins = config;
+    assert_eq!(used(&sym, tmp.path(), &names).await.plugins, [identified]);
     assert!(
-        !config
-            .is_disabled(&pms, &PackageId::any_version("demo", "widget_lib"))
-            .await
+        !sym.config
+            .plugins
+            .is_disabled(&PackageId::any_version("demo", "widget_lib"), &spellings)
     );
 }
 
 #[tokio::test]
 async fn failed_normalization_cannot_bypass_disable_or_allow_cleanup() {
-    use symposium::config::{PluginsConfig, UseEntry};
+    use symposium::config::{PluginsConfig, Symposium, UseEntry};
+    use symposium::discovery::{Names, used};
     let tmp = tempfile::tempdir().unwrap();
     let pm = remote(
         "demo",
@@ -688,7 +869,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"initialize"'*)
       printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
-    *) printf '{"id":%s,"jsonrpc":"2.0","result":{"names":[]}}\n' "$id" ;;
+    *) printf '{"id":%s,"jsonrpc":"2.0","result":{"name":[]}}\n' "$id" ;;
   esac
 done
 "#,
@@ -703,13 +884,18 @@ done
     let config = PluginsConfig {
         auto_enable: vec!["widget".into()],
         disable: vec!["widget".into()],
-        used: vec![UseEntry::Global("widget".into())],
+        used: vec![UseEntry::global("widget".into())],
     };
     let id = PackageId::any_version("demo", "Widget");
-    assert!(config.is_disabled(&pms, &id).await);
-    assert!(!config.is_auto_enabled(&pms, &id).await);
-    assert!(!config.is_used_in(&pms, &id, tmp.path()).await);
-    assert!(pms.identity(&id).await.is_err());
+    let deps = [id.clone()];
+    let names = Names::new(&[], &deps, &pms);
+    let spellings = names.spellings(&config).await;
+    assert!(config.is_disabled(&id, &spellings));
+    assert!(!config.is_auto_enabled(&id, &deps, &spellings));
+    let mut sym = Symposium::from_dir(tmp.path());
+    sym.config.plugins = config;
+    assert!(used(&sym, tmp.path(), &names).await.plugins.is_empty());
+    assert!(pms.canonical_name("demo", "Widget").await.is_err());
     assert_eq!(pms.failed(), vec!["demo"]);
 }
 
@@ -725,7 +911,7 @@ async fn a_pm_without_normalization_cannot_compare_names() {
         Box::new(pm),
     )]);
     let error = pms
-        .identity(&PackageId::any_version("demo", "Widget-Lib"))
+        .canonical_name("demo", "Widget-Lib")
         .await
         .expect_err("normalization must be provided by the PM");
     assert!(format!("{error:#}").contains("unknown method"), "{error:#}");

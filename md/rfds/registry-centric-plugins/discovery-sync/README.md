@@ -112,6 +112,8 @@ Fetching happens in parallel across PMs and packages.
 For each cached plugin, evaluate its predicates against the workspace:
 - `workspace-member()` → is this plugin defined by a member of the workspace?
 - `depends-on(axum>=0.7)` → did some PM's `list-deps` include a matching axum?
+- `depends-on(npm:react)` → did the `npm` PM's `list-deps` include react? An atom
+  names its PM only when the name alone could mean another ecosystem's package.
 - etc.
 
 Plugins that pass are *active*. Plugins that don't pass are installed but dormant.
@@ -141,7 +143,9 @@ The hook does NOT install anything. It only notifies. Installation goes through 
 Enablement is keyed on `(pm, canonical-name)`, the identity every PM gives the
 plugins it offers (see the [PM interface](../pm-interface/README.md#naming-a-plugin-in-configuration)).
 The pair is what lets a user name one specific plugin: a crate for the cargo PM,
-an entry path for a registry PM, and never an ambiguous bare word.
+a plugin's own `name` for a registry PM. The PM may be left out when the name
+alone is unambiguous, and an ambiguous bare name enables nothing until it is
+qualified.
 
 ```toml
 # In ~/.symposium/config.toml
@@ -247,7 +251,7 @@ Wire up the pipeline with the path PM initially to validate the flow end-to-end.
 
 ### Step 2: Discovery algorithm
 
-Implement `list-deps` → `search` loop across all PMs. 
+Implement the `list-deps` → `active_plugins` pass across all PMs, and the consent classification of what untrusted PMs offer.
 
 - [x] PR: discovery algorithm
 
