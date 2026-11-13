@@ -120,6 +120,17 @@ pub(crate) struct Expectations {
     pub(crate) uses: Vec<SkillUse>,
 }
 
+impl Expectations {
+    /// Every expectation's reported verdict, for the trial's outcome.
+    pub(crate) fn verdicts(&self) -> Vec<Verdict> {
+        let mut verdicts = vec![self.session_start.verdict(), self.sync.verdict()];
+        verdicts.extend(self.hooks.iter().map(Checked::verdict));
+        verdicts.extend(self.installs.iter().map(Checked::verdict));
+        verdicts.extend(self.uses.iter().map(|used| used.verdict));
+        verdicts
+    }
+}
+
 /// Reads what `trial` left for `task` and `client`, with `source_of` giving each
 /// skill's directory in `evals/`.
 pub(crate) fn gather(
@@ -397,6 +408,26 @@ mod tests {
         let baseline = test_support::trial(&host.batch(), 1, Configuration::Baseline);
 
         assert!(SymposiumTrial::new(&baseline).is_none());
+    }
+
+    #[test]
+    fn every_expectation_gives_its_reported_verdict() {
+        let host = Host::new();
+        let trial = trial(&host);
+        let mut facts = passing();
+        facts.hooks[0].records = 2;
+
+        let expectations = decided(&trial, facts, &both_ran(), &quiet(), &[]);
+
+        assert_eq!(
+            expectations.verdicts(),
+            [
+                Verdict::Pass,
+                Verdict::Pass,
+                Verdict::Inconclusive,
+                Verdict::Pass
+            ]
+        );
     }
 
     #[test]

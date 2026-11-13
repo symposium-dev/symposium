@@ -80,7 +80,7 @@ A successful load shows the skill reached the agent in that same session. It doe
 
 The agent's own tests alone prove little, since they could pass with nothing meaningful in them. The hidden tests are what check the behavior the task asked for.
 
-**7. Report the result.** A `formatting` trial **passes** when every check in steps 5 and 6 passes, and **fails** when any of them fails. It is **inconclusive** when the evidence cannot decide a check and nothing failed: for example, the runner could not interpret the transcript, or the hook evidence is missing or contradicts the transcript. A timeout or client error is a failure. The [reference](./reference.md#expectations) has the exact rules.
+**7. Report the result.** A `formatting` trial **passes** when every check in steps 5 and 6 passes, and **fails** when any of them fails. It is **inconclusive** when the evidence cannot decide a check and nothing failed: for example, part of the transcript could not be read, so it cannot show a skill load, or the hook evidence is missing or contradicts the transcript. A timeout or client error is a failure, and so is a session whose ending the runner could not observe. The [reference](./reference.md#expectations) has the exact rules.
 
 The trial's result directory keeps the transcript, the submission as the agent left it, the grading output, the hook traces, and Symposium's log, so any result can be checked by hand. A rerun creates a new batch; earlier results are never overwritten.
 

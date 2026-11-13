@@ -166,6 +166,14 @@ impl Task {
         &self.name
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the runner records this later in RFD step 4")
+    )]
+    pub(crate) fn kind(&self) -> TaskKind {
+        self.kind
+    }
+
     pub(crate) fn fixtures(&self) -> &[FixtureName] {
         &self.fixtures
     }
