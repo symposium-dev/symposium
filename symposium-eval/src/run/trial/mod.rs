@@ -71,6 +71,7 @@ pub(crate) struct SessionOutput {
 }
 
 impl Done {
+    #[cfg(test)]
     pub(crate) fn result(&self) -> PathBuf {
         self.root.join(RESULT_FILE)
     }
@@ -116,7 +117,7 @@ struct Stopped {
 }
 
 impl<S: Sandbox> Driver<'_, S> {
-    /// Runs trial `number` of `arm` with `runner`'s client, and writes its result.
+    /// Runs `arm` in `round` with `runner`'s client, and writes its result.
     ///
     /// # Errors
     ///
@@ -124,14 +125,14 @@ impl<S: Sandbox> Driver<'_, S> {
     /// result cannot be written. Anything else that goes wrong is in the result.
     pub(crate) fn run(
         &self,
-        number: usize,
+        round: usize,
         arm: Arm,
         runner: &impl ClientRunner,
     ) -> Result<Done, TrialError> {
         let configuration = arm.configuration();
         let new = self
             .batch
-            .allocate_trial(number, configuration, self.inputs)
+            .allocate_trial(round, configuration, self.inputs)
             .map_err(TrialError::Allocate)?;
         let root = new.root().to_owned();
         let path = root.join(RESULT_FILE);
@@ -141,7 +142,7 @@ impl<S: Sandbox> Driver<'_, S> {
             client: runner.client(),
             model: runner.model(),
             arm,
-            trial: number,
+            trial: round,
         };
         let ran = self.ran(new, runner);
         let result = TrialResult::new(planned, self.provenance.clone(), ran.reached())

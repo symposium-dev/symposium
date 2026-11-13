@@ -177,7 +177,7 @@ impl RealSrt {
         audience: super::stage::Audience,
     ) -> super::stage::StagedTool {
         let name = crate::task::ToolName::new(name).unwrap();
-        self.batch.stage(name, tool, audience).unwrap().clone()
+        self.batch.stage(name, tool, audience).unwrap()
     }
 
     pub(crate) fn srt(&self) -> &super::srt::Srt {
@@ -364,10 +364,8 @@ fn installed_srt() -> super::srt::Srt {
 /// The first file called `name` in a directory on `PATH`.
 #[cfg(target_os = "linux")]
 pub(crate) fn on_path(name: &str) -> PathBuf {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|dir| dir.join(name))
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| panic!("`{name}` is not on PATH"))
+    let path = std::env::var_os("PATH").unwrap();
+    crate::command::host::on_path(&path, name).unwrap_or_else(|| panic!("`{name}` is not on PATH"))
 }
 
 /// The active toolchain's sysroot, as `rustc` reports it.

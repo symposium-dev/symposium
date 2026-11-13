@@ -299,6 +299,39 @@ pub(crate) fn grade(
     }
 }
 
+/// Checks the trusted task inputs and the grading toolchain without importing or
+/// running a submission.
+///
+/// This is the same preparation [`grade`] performs for every trial: it copies the
+/// starter and fixtures, resolves the starter with Cargo, places and verifies every
+/// hidden check, and verifies `cargo fmt` when the task requires formatting.
+///
+/// # Errors
+///
+/// When trusted inputs cannot be copied, a required command cannot be run or does not
+/// succeed, or the starter and hidden checks do not have the expected Cargo targets.
+pub(crate) fn preflight_task(
+    evals: &Evals,
+    task: &Task,
+    backend: &impl Backend,
+    limits: &GradeLimits,
+    dirs: &GradingDirs,
+) -> Result<(), GradeError> {
+    fs::create_dir_all(&dirs.logs)
+        .map_err(|source| ImportError::Write {
+            path: dirs.logs.clone(),
+            source,
+        })
+        .map_err(GradeError::from)?;
+    let mut commands = Commands {
+        backend,
+        budget: Budget::new(limits.commands),
+        logs: &dirs.logs,
+    };
+    prepare(evals, task, &PROJECT_SCAFFOLD, dirs, &mut commands, limits)?;
+    Ok(())
+}
+
 fn try_grade(
     evals: &Evals,
     task: &Task,
@@ -375,7 +408,7 @@ fn prepare(
     let placed = inspect_starter(&cargo, "metadata-checks", &copy, commands, limits.metadata)?;
     verify_check_targets(task.checks(), &placed.tests)?;
     if task.fmt_check() {
-        preflight(
+        preflight_command(
             commands,
             &cargo.fmt_version(),
             "cargo fmt --version",
@@ -541,7 +574,7 @@ fn inspect_starter(
     commands: &mut Commands<'_, impl Backend>,
     cap: Duration,
 ) -> Result<StarterTargets, GradeError> {
-    let finished = preflight(commands, &cargo.metadata(log_name), "cargo metadata", cap)?;
+    let finished = preflight_command(commands, &cargo.metadata(log_name), "cargo metadata", cap)?;
     cargo::starter_targets(finished.stdout.log(), &copy.project())
 }
 
@@ -585,7 +618,7 @@ fn verify_check_targets(
 
 /// Runs a command that must succeed on the trusted starter. Its failure is the task's or
 /// the machine's, never the submission's.
-fn preflight(
+fn preflight_command(
     commands: &mut Commands<'_, impl Backend>,
     invocation: &Invocation,
     step: &str,
@@ -1098,6 +1131,29 @@ fn locks_grading_tmp() {
     }
 
     #[test]
+    fn task_preflight_checks_the_required_formatter() {
+        let fixture = TaskFixture::new("fmt_check = true\n");
+        let root = TempDir::new().unwrap();
+
+        let error = preflight_task(
+            fixture.evals(),
+            fixture.task(),
+            &FailsOn { argument: "fmt" },
+            &GradeLimits::default(),
+            &GradingDirs::under(root.path()),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                GradeError::Process { ref step, .. } if step == "cargo fmt --version"
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn an_infrastructure_failure_keeps_steps_that_already_completed() {
         let grading = grade_with_failure("--test");
 
@@ -1158,7 +1214,7 @@ fn locks_grading_tmp() {
         };
         let invocation = Cargo::new(logs.path().to_owned(), logs.path()).metadata("metadata");
 
-        let error = preflight(
+        let error = preflight_command(
             &mut commands,
             &invocation,
             "cargo metadata",

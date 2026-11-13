@@ -81,6 +81,10 @@ pub(crate) enum SessionIntroduction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HookEvidence {
     /// The client's output does not report hook runs.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a client that reports no hooks comes with Codex")
+    )]
     Unsupported,
     Reported(HookRuns),
 }
@@ -292,6 +296,10 @@ impl Summary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Usage {
     /// The client's output never reports usage.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a client that reports no usage comes with Codex")
+    )]
     Unsupported,
     Reported(Tokens),
     /// The client reports usage, but the transcript does not show this session's.

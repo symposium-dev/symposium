@@ -54,6 +54,10 @@ impl Claude {
     /// # Errors
     ///
     /// As [`Trial::exploratory_arguments`].
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "--exploratory needs its own design")
+    )]
     pub(crate) fn exploratory(
         model: String,
         version: Version,
@@ -73,6 +77,10 @@ impl Claude {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only tests ask for the session")
+    )]
     pub(crate) fn session(&self) -> Uuid {
         self.session
     }
