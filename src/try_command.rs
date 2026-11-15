@@ -267,9 +267,9 @@ fn warn(message: String) {
 }
 
 fn load_plugin_dir(dir: &Path) -> Result<Plugin> {
-    let unvalidated = crate::plugins::entry_plugin(dir, Path::new(""), USER_PLUGINS)
+    let unvalidated = crate::plugins::offline_entry_plugin(dir, Path::new(""), USER_PLUGINS)
         .with_context(|| format!("no Symposium.toml or SKILL.md in `{}`", dir.display()))??;
-    crate::plugins::validate_plugin(unvalidated, PluginKind::Registry)
+    crate::plugins::validate_plugin(unvalidated, None, PluginKind::Registry)
         .with_context(|| format!("run `cargo agents plugin validate` on `{}`", dir.display()))
 }
 

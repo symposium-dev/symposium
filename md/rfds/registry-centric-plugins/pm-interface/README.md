@@ -21,11 +21,15 @@ A PM is a separate binary that speaks JSON-RPC over stdio. Here's the cargo PM r
 source.cargo = "serde-skills>=1"
 ```
 
-Symposium sends `load_plugin` with the id `(cargo, serde-skills, >=1)`. The cargo PM resolves the requirement, obtains the crate source, and returns the exact id, the content directory, and the plugin manifest it read (or synthesized) from that directory:
+Symposium sends `load_plugin` with a coordinate target `(cargo, serde-skills, >=1)`. The cargo PM resolves the requirement, obtains the crate source, and returns the exact resolution, the content directory, and the plugin manifest it read (or synthesized) from that directory:
 
 ```json
 { "result": { "plugins": [{
-    "id": { "pm": "cargo", "name": "serde-skills", "version": "1.2.3" },
+    "package": {
+      "id": { "pm": "cargo", "name": "serde-skills", "version": "1.2.3" },
+      "source": "crates_io",
+      "key": "opaque-cargo-package-id"
+    },
     "root": "/home/user/.cargo/registry/src/index.crates.io-.../serde-skills-1.2.3",
     "manifest": { "skills": [{ "source": { "path": "skills" } }] }
 }] } }
@@ -37,7 +41,7 @@ Symposium validates that manifest, applies its own defaults and trust rules, and
 
 ### Package-ids
 
-A **package-id** is a tuple `(pm, name, version)` where all three components are PM-defined strings. There is no mandated string-serialized format — the tuple is the identity.
+A **package-id** is a tuple `(pm, name, version)` where all three components are PM-defined strings. It is the coordinate used for routing, configuration, and predicates, not proof of one exact resolved package: two source-distinct packages may report the same coordinate. `PackageResolution` adds the supplier-scoped key that distinguishes them. There is no mandated string-serialized form for the tuple.
 
 Examples:
 - `(cargo, serde, 1.0.210)`
@@ -50,6 +54,8 @@ In the JSON-RPC protocol, a package-id is represented as:
 { "pm": "cargo", "name": "serde", "version": "1.0.210" }
 ```
 
+A resolved package is a `PackageResolution`: that exact coordinate, a payload-free source classification, and an opaque supplier-session key. Claims contain no URL, path, registry name, or authority. Keys may contain private source representations, are bounded to 16 KiB of UTF-8, and must never be logged or persisted independently of the supplier's current resolution session. Across operations, a repeated key must keep the same coordinate, classification, and canonical content root once content has been returned. Within one dependency listing, every key must be unique even when two entries otherwise agree.
+
 ### The protocol
 
 A PM speaking the protocol is a binary invoked by Symposium. Communication uses JSON-RPC 2.0 over stdio, **newline-delimited**: one JSON object per line, no `Content-Length` framing. Nothing in the payloads needs an embedded newline, so the simpler framing is enough. Each PM binary is long-lived: Symposium spawns it once per invocation and sends it requests one at a time.
@@ -59,13 +65,13 @@ A PM speaking the protocol is a binary invoked by Symposium. Communication uses 
 ```json
 // Request
 { "method": "initialize", "params": {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "workspace": "/home/user/projects/my-app",
     "cache_dir": "/home/user/.symposium/cache"
 } }
 
 // Response
-{ "result": { "protocol_version": 1, "name": "cargo" } }
+{ "result": { "protocol_version": 2, "name": "cargo" } }
 ```
 
 Sent once, before any other method. Carries the per-invocation context the PM needs; environment variables travel the ordinary way, in the process environment the PM is spawned with. The PM answers with the name it owns (the `pm` component of every id it mints).
@@ -74,19 +80,23 @@ There is no capability list. A method a PM has no use for answers with nothing (
 
 A PM is otherwise **self-contained**: it holds whatever it needs to resolve its own ecosystem, so no later method takes ambient context. This is why `workspace` lives here rather than on `list_deps` as originally proposed: with a long-lived process the workspace is fixed for the connection's lifetime.
 
-Version negotiation is strict for now: a PM reporting a `protocol_version` Symposium doesn't know is refused with a warning, and its plugins are simply absent.
+Version negotiation is strict: a PM reporting a `protocol_version` Symposium doesn't know is refused with a warning, and its plugins are simply absent. Version 2 adds source claims, opaque keys, and key-bearing load targets; version 1 payloads are not inferred or upgraded by core.
 
 #### `active_plugins`
 
 ```json
 // Request
-{ "method": "active_plugins", "params": { "deps": [{ "pm": "cargo", "name": "serde", "version": "1.0.210" }] } }
+{ "method": "active_plugins", "params": { "deps": [{
+  "id": { "pm": "cargo", "name": "serde", "version": "1.0.210" },
+  "source": "crates_io",
+  "key": "opaque-cargo-package-id"
+}] } }
 
 // Response
-{ "result": { "plugins": [{ "id": {...}, "root": "...", "manifest": {...} }], "errors": [] } }
+{ "result": { "plugins": [{ "package": {...}, "root": "...", "manifest": {...} }], "errors": [] } }
 ```
 
-The plugins this PM activates for the workspace's dependency set. The two shapes it covers:
+The plugins this PM activates for the workspace's exact dependency set. Core returns resolutions only to the supplier that minted their keys. The two shapes it covers:
 
 - A **registry** instance lists its own entries and ignores `deps`.
 - An **ecosystem transport** (cargo) surfaces the plugins its dependencies embed.
@@ -98,14 +108,23 @@ Whether the result may run without the user's consent is Symposium's decision, n
 #### `load_plugin`
 
 ```json
-// Request
-{ "method": "load_plugin", "params": { "id": { "pm": "cargo", "name": "serde-skills", "version": ">=1" }, "update": "none" } }
+// Start a resolution from a coordinate
+{ "method": "load_plugin", "params": {
+  "target": { "kind": "coordinate", "id": { "pm": "cargo", "name": "serde-skills", "version": ">=1" } },
+  "update": "none"
+} }
+
+// Or inspect a package this supplier resolved in the current session
+{ "method": "load_plugin", "params": {
+  "target": { "kind": "resolved", "key": "opaque-cargo-package-id" },
+  "update": "none"
+} }
 
 // Response
-{ "result": { "plugins": [{ "id": {...}, "root": "...", "manifest": {...} }] } }
+{ "result": { "plugins": [{ "package": {...}, "root": "...", "manifest": {...} }] } }
 ```
 
-The plugin(s) a *specific* id maps to: a `[[plugins]]` chained reference, or a crate the user enabled by name. Resolves the version requirement, obtains the content, and returns the plugin(s) found there. Returning zero plugins is not an error.
+The plugin(s) a coordinate or exact resolved key maps to. A coordinate request resolves a new `[[plugins]]` chained reference or a non-dependency package the user enabled by name. An enabled dependency retains its admitted handle and produces a resolved request directly; core never tries to recover exact identity by looking up its coordinate. A resolved request inspects the exact package previously selected by that supplier. A stale or unknown key fails; the supplier and core must not fall back to coordinates. Returning zero plugins is not an error, but rejected entries make the listing incomplete and prevent cleanup for that supplier.
 
 Under `"update": "none"` (the default) the PM serves only what is already on disk, so a hook event never reaches the network; Symposium asks with `"check"` when it syncs. This is the method the original `resolve` folded into. The version component of the request id may be a requirement (`">=1"`, or `"*"` for none); the response id always names the exact resolved version.
 
@@ -113,7 +132,10 @@ Under `"update": "none"` (the default) the PM serves only what is already on dis
 
 ```json
 // Response
-{ "result": { "deps": [{ "pm": "cargo", "name": "serde", "version": "1.0.210" }, { "pm": "cargo", "name": "tokio", "version": "1.38.0" }] } }
+{ "result": { "deps": [
+  { "id": { "pm": "cargo", "name": "serde", "version": "1.0.210" }, "source": "crates_io", "key": "cargo-serde" },
+  { "id": { "pm": "cargo", "name": "tokio", "version": "1.38.0" }, "source": "crates_io", "key": "cargo-tokio" }
+] } }
 ```
 
 The dependencies of the workspace given at `initialize`, in this PM's ecosystem. PMs with no workspace notion return empty.
@@ -121,6 +143,7 @@ The dependencies of the workspace given at `initialize`, in this PM's ecosystem.
 Contract:
 - Direct dependencies only (not transitive).
 - Must be fast: this is on the hook path. Read lockfiles, don't query the network, cache on the lockfile's mtime.
+- The complete listing is one transaction. A foreign coordinate, malformed entry, or any repeated key rejects the supplier's dependency set instead of publishing a partial exact graph.
 
 #### `project_info`
 
@@ -166,10 +189,10 @@ that implements nothing but `active_plugins` still participates fully in it.
 { "method": "fetch", "params": { "id": {...}, "update": "none" } }
 
 // Response
-{ "result": { "id": {...}, "root": "/home/user/.cargo/registry/src/.../serde-skills-1.2.3" } }
+{ "result": { "package": {...}, "root": "/home/user/.cargo/registry/src/.../serde-skills-1.2.3" } }
 ```
 
-Acquire a package's content and report where it landed, canonicalizing the id's version. `update` is `none` (serve from cache, never touch the network), `check`, or `fetch` (force).
+Acquire a package's content and report where it landed, returning the exact resolution rather than only the canonicalized coordinate. `update` is `none` (serve from cache, never touch the network), `check`, or `fetch` (force). A cache-only miss is distinct from a later `check` or `fetch` request in the supplier's resolution cache.
 
 Contract:
 - The same package-id always produces the same content.
@@ -219,10 +242,10 @@ for a single name.
 A PM returns a **plugin manifest**, not merely a directory:
 
 ```json
-{ "id": {...}, "root": "/path/to/content", "manifest": { /* Symposium.toml schema, as JSON */ } }
+{ "package": { "id": {...}, "source": "path", "key": "opaque" }, "root": "/path/to/content", "manifest": { /* Symposium.toml schema, as JSON */ } }
 ```
 
-Returning a manifest rather than only a path is what lets a PM **synthesize** a plugin: for a package with no manifest at all, or one whose configuration lives in a different ecosystem's format (an npm PM reading `package.json`, say). A PM that does nothing special just parses the `Symposium.toml` it found and hands it back.
+Returning a manifest rather than only a path is what lets a PM **synthesize** a plugin: for a package with no manifest at all, or one whose configuration lives in a different ecosystem's format (an npm PM reading `package.json`, say). The accompanying resolution lets core bind the plugin to the exact supplier-selected package without interpreting or exposing its key. A PM that does nothing special just parses the `Symposium.toml` it found and hands it back.
 
 The manifest on the wire is the **raw, unvalidated** schema: the same shape a `Symposium.toml` deserializes into. Validation is Symposium's. Its steps live in the SDK, so a PM can check its own output with the same code, but only what Symposium runs counts:
 
@@ -305,7 +328,7 @@ Errors use JSON-RPC error codes:
 
 Beyond named codes, plugin loading is **best-effort** and must stay that way across the process boundary. A PM that errors, hangs past its timeout, crashes, or fails its `initialize` handshake degrades to "contributes no plugins," logged as a warning. One broken PM never aborts a sync or a hook: the same contract the in-process layer already holds, where a plugin that fails to load is dropped rather than surfaced.
 
-Anything written to a PM's stderr is captured and logged at debug level, so a PM can be diagnosed without disturbing the protocol on stdout.
+Anything written to a PM's stderr is captured and logged at debug level, so a PM can be diagnosed without disturbing the protocol on stdout. A PM must never put a `PackageKey` in stderr: keys may embed private source representations, and core cannot redact arbitrary process diagnostics. Across the protocol boundary, core retains only bounded categories for source-bearing decode failures, per-entry plugin failures, and JSON-RPC errors; it discards supplier error text and serde diagnostics that could echo a key or source representation.
 
 ### PM lifecycle
 

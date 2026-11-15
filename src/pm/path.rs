@@ -18,8 +18,8 @@ use anyhow::{Context, Result};
 use symposium_install::UpdateLevel;
 
 use super::{
-    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
-    RegistrySource, UnvalidatedPlugin, layout,
+    ANY_VERSION, FetchedPackage, PackageId, PackageKey, PackageLoadTarget, PackageManager,
+    PackageResolution, PackageSourceClaim, PluginInfo, PluginListing, RegistrySource, layout,
 };
 
 /// A configured path registry: one local directory whose tree is a
@@ -44,6 +44,22 @@ impl PathPm {
             dir: self.dir.clone(),
         }
     }
+
+    fn resolution(&self, subpath: &Path) -> Result<PackageResolution> {
+        let key = layout::subpath_key(subpath);
+        Ok(PackageResolution::new(
+            PackageId::new(&self.name, &key, ANY_VERSION),
+            PackageSourceClaim::Path,
+            PackageKey::new(key)?,
+        ))
+    }
+
+    fn subpath(&self, key: &str) -> Result<Option<PathBuf>> {
+        Ok(layout::enumerate(&self.dir)?
+            .into_iter()
+            .find(|entry| layout::subpath_key(&entry.subpath) == key)
+            .map(|entry| entry.subpath))
+    }
 }
 
 #[async_trait::async_trait]
@@ -60,7 +76,7 @@ impl PackageManager for PathPm {
     /// Fails when the directory cannot be read, since sync removes what a
     /// registry stops offering. One entry that fails to load is skipped and
     /// named in the listing's errors.
-    async fn active_plugins(&self, _deps: &[PackageId]) -> Result<PluginListing> {
+    async fn active_plugins(&self, _deps: &[PackageResolution]) -> Result<PluginListing> {
         std::fs::read_dir(&self.dir).with_context(|| {
             format!(
                 "cannot read registry `{}` at {}",
@@ -72,7 +88,8 @@ impl PackageManager for PathPm {
             .with_context(|| format!("cannot list registry `{}`", self.name))?;
         let mut listing = PluginListing::complete(Vec::new());
         for entry in entries {
-            match crate::plugins::entry_plugin(&self.dir, &entry.subpath, &self.name) {
+            let resolution = self.resolution(&entry.subpath)?;
+            match crate::plugins::entry_plugin(&self.dir, &entry.subpath, resolution) {
                 Some(Ok(p)) => listing.plugins.push(p),
                 Some(Err(e)) => listing.errors.push(format!(
                     "{}: {e:#}",
@@ -87,15 +104,27 @@ impl PackageManager for PathPm {
     /// The entry an id names (`id.name` is the entry's subpath key).
     async fn load_plugin(
         &self,
-        id: &PackageId,
+        target: &PackageLoadTarget,
         _update: UpdateLevel,
-    ) -> Result<Vec<UnvalidatedPlugin>> {
-        if id.pm != self.name {
-            return Ok(Vec::new());
-        }
-        match crate::plugins::entry_plugin(&self.dir, Path::new(&id.name), &self.name) {
-            Some(p) => Ok(vec![p?]),
-            None => Ok(Vec::new()),
+    ) -> Result<PluginListing> {
+        let key = match target {
+            PackageLoadTarget::Coordinate { id } if id.pm == self.name => &id.name,
+            PackageLoadTarget::Coordinate { .. } => {
+                return Ok(PluginListing::complete(Vec::new()));
+            }
+            PackageLoadTarget::Resolved { key } => key.as_str(),
+        };
+        let Some(subpath) = self.subpath(key)? else {
+            return Ok(PluginListing::complete(Vec::new()));
+        };
+        let resolution = self.resolution(&subpath)?;
+        match crate::plugins::entry_plugin(&self.dir, &subpath, resolution) {
+            Some(Ok(plugin)) => Ok(PluginListing::complete(vec![plugin])),
+            Some(Err(error)) => Ok(PluginListing {
+                plugins: Vec::new(),
+                errors: vec![error.to_string()],
+            }),
+            None => Ok(PluginListing::complete(Vec::new())),
         }
     }
 
@@ -115,9 +144,12 @@ impl PackageManager for PathPm {
 
     /// The entry directory an id names — path entries are their own cache.
     async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
+        let Some(subpath) = self.subpath(&id.name)? else {
+            anyhow::bail!("package `{id}` is not present in registry `{}`", self.name);
+        };
         Ok(FetchedPackage {
-            id: id.clone(),
-            root: self.dir.join(&id.name),
+            package: self.resolution(&subpath)?,
+            root: self.dir.join(subpath),
         })
     }
 }
@@ -157,7 +189,7 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["style", "tools"]);
-        assert!(active.plugins.iter().all(|o| o.id.pm == "user-plugins"));
+        assert!(active.plugins.iter().all(|o| o.id().pm == "user-plugins"));
 
         // A bare SKILL.md is synthesized into a manifest with one group.
         let style = active
@@ -170,13 +202,17 @@ mod tests {
         // load_plugin by the entry's subpath key.
         let one = pm
             .load_plugin(
-                &PackageId::new("user-plugins", "tools", ANY_VERSION),
+                &PackageLoadTarget::coordinate(PackageId::new(
+                    "user-plugins",
+                    "tools",
+                    ANY_VERSION,
+                )),
                 UpdateLevel::None,
             )
             .await
             .unwrap();
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0].manifest.name.as_deref(), Some("tools"));
+        assert_eq!(one.plugins.len(), 1);
+        assert_eq!(one.plugins[0].manifest.name.as_deref(), Some("tools"));
 
         let hits = pm.search("too").await.unwrap();
         assert_eq!(hits.len(), 1);
@@ -190,10 +226,13 @@ mod tests {
     #[tokio::test]
     async fn fetch_returns_the_local_entry_directory() {
         let tmp = tempfile::tempdir().unwrap();
-        let pm = PathPm::new("local", tmp.path().join("registry"));
+        let registry = tmp.path().join("registry");
+        std::fs::create_dir_all(registry.join("tools")).unwrap();
+        std::fs::write(registry.join("tools/Symposium.toml"), "name = \"tools\"").unwrap();
+        let pm = PathPm::new("local", &registry);
         let id = PackageId::new("local", "tools", ANY_VERSION);
         let fetched = pm.fetch(&id, UpdateLevel::None).await.unwrap();
-        assert_eq!(fetched.root, tmp.path().join("registry/tools"));
-        assert_eq!(fetched.id, id);
+        assert_eq!(fetched.root, registry.join("tools"));
+        assert_eq!(fetched.id(), &id);
     }
 }

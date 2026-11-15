@@ -20,6 +20,7 @@
 //! to. Registry instances resolve their own ids, so those ids are never routed
 //! through the ecosystem transports.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -28,11 +29,15 @@ use symposium_install::UpdateLevel;
 
 use crate::plugins::Plugin;
 
+mod admission;
 mod git;
 pub mod layout;
 mod path;
 pub mod remote;
 
+pub use admission::ResolvedContent;
+use admission::ResolvedDependency;
+pub(crate) use admission::{PackageNamingAuthority, PackageNamingView, ResolvedPackage};
 pub use git::GitPm;
 pub use path::PathPm;
 pub use remote::{RemotePm, RemotePmCommand};
@@ -47,9 +52,14 @@ pub use symposium_pm_cargo::{
 /// The identity types and the operation set are the SDK's, since they cross
 /// the PM boundary: a package-manager binary speaks in them too.
 pub use symposium_sdk::pm::{
-    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
-    ProjectInfo, UnvalidatedPlugin,
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageKey, PackageLoadTarget,
+    PackageManager, PackageResolution, PackageSourceClaim, PluginInfo, PluginListing, ProjectInfo,
+    UnvalidatedPlugin,
 };
+
+/// The Git source core recognizes as Symposium's recommendations registry.
+pub(crate) const BUILTIN_RECOMMENDATIONS_URL: &str =
+    "https://github.com/symposium-dev/recommendations";
 
 /// Where a registry instance's content comes from — the git-vs-path
 /// distinction, made visible on the PM itself rather than inferred elsewhere.
@@ -77,6 +87,40 @@ pub enum PluginKind {
     Package,
 }
 
+/// One package-plugin load selected by core.
+///
+/// Dependencies retain their admitted identity. A coordinate is used only
+/// when a reference has not selected a package in the dependency snapshot.
+#[derive(Clone)]
+pub(crate) enum PackageRequest {
+    Resolved(ResolvedPackage),
+    Coordinate(PackageId),
+}
+
+pub(crate) struct ValidatedPluginListing {
+    pub(crate) plugins: Vec<Plugin>,
+    complete: bool,
+}
+
+impl ValidatedPluginListing {
+    pub(crate) fn is_complete(&self) -> bool {
+        self.complete
+    }
+}
+
+impl PackageRequest {
+    pub(crate) fn coordinate(id: PackageId) -> Self {
+        Self::Coordinate(id)
+    }
+
+    pub(crate) fn id(&self) -> &PackageId {
+        match self {
+            Self::Resolved(package) => package.id(),
+            Self::Coordinate(id) => id,
+        }
+    }
+}
+
 /// A package-manager instance: its attribution name (the config registry name,
 /// or `cargo` for the transport: the `pm` component of every id it owns), the
 /// policy its plugins are validated under, a trust marker, and the PM itself.
@@ -95,6 +139,7 @@ pub struct PmInstance {
     /// when the user names it (`plugin sync <name>`).
     pub auto_update: bool,
     pub pm: Box<dyn PackageManager>,
+    admission: admission::PackageAdmission,
     /// Whether an operation on this instance has failed. Its silence is not
     /// an empty answer, so nothing it would have offered is removed on its
     /// strength.
@@ -108,8 +153,20 @@ impl PmInstance {
         kind: PluginKind,
         pm: Box<dyn PackageManager>,
     ) -> Self {
+        Self::with_authority(name, trusted, kind, pm, admission::PackageAuthority::Remote)
+    }
+
+    fn with_authority(
+        name: impl Into<String>,
+        trusted: bool,
+        kind: PluginKind,
+        pm: Box<dyn PackageManager>,
+        authority: admission::PackageAuthority,
+    ) -> Self {
+        let name = name.into();
         Self {
-            name: name.into(),
+            admission: admission::PackageAdmission::new(name.clone(), authority),
+            name,
             trusted,
             kind,
             source: None,
@@ -120,6 +177,15 @@ impl PmInstance {
     }
 
     pub fn with_source(mut self, source: RegistrySource) -> Self {
+        let authority = match &source {
+            RegistrySource::Git { url } if url == BUILTIN_RECOMMENDATIONS_URL => {
+                admission::PackageAuthority::Recommendations
+            }
+            RegistrySource::Git { .. } | RegistrySource::Path { .. } => {
+                admission::PackageAuthority::Remote
+            }
+        };
+        self.admission = admission::PackageAdmission::new(self.name.clone(), authority);
         self.source = Some(source);
         self
     }
@@ -145,26 +211,72 @@ impl PmInstance {
         }
     }
 
+    fn mark_incomplete(&self, operation: &str) {
+        self.failed.store(true, Ordering::Relaxed);
+        tracing::warn!(
+            instance = %self.name,
+            operation,
+            "package manager returned an incomplete plugin listing"
+        );
+    }
+
+    async fn admit_dependencies(&self) -> Result<Vec<ResolvedDependency>> {
+        let found = match self.pm.list_deps().await {
+            Ok(found) => found,
+            Err(error) => {
+                self.admission.invalidate_dependency_snapshot();
+                return self.failure("list_deps", error);
+            }
+        };
+        match self.admission.admit_dependencies(found) {
+            Ok(dependencies) => Ok(dependencies),
+            Err(error) => {
+                self.admission.invalidate_dependency_snapshot();
+                self.failure("list_deps", error.into())
+            }
+        }
+    }
+
+    /// Recover supplier-session keys when the durable workspace cache reused
+    /// only coordinates from a previous invocation.
+    async fn ensure_dependencies_admitted(&self, ids: &[PackageId]) -> Result<()> {
+        let needs_snapshot =
+            ids.iter().any(|id| id.pm == self.name) && !self.admission.has_dependency_snapshot();
+        if needs_snapshot {
+            self.admit_dependencies().await?;
+        }
+        Ok(())
+    }
+
+    fn load_target(&self, request: &PackageRequest) -> Result<PackageLoadTarget> {
+        match request {
+            PackageRequest::Resolved(package) => self
+                .admission
+                .project(package.handle())
+                .map(|resolution| PackageLoadTarget::resolved(resolution.key().clone()))
+                .map_err(Into::into),
+            PackageRequest::Coordinate(id) => Ok(PackageLoadTarget::coordinate(id.clone())),
+        }
+    }
+
+    async fn resolved_dependencies(&self, ids: &[PackageId]) -> Result<Vec<ResolvedDependency>> {
+        self.ensure_dependencies_admitted(ids).await?;
+        Ok(self.admission.resolved_dependencies(ids))
+    }
+
     /// This instance's active plugins, validated. Each entry the PM could not
     /// read is reported, and a plugin that fails validation is reported and
     /// dropped; either leaves the listing with errors.
-    pub async fn try_active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing<Plugin>> {
-        match self.pm.active_plugins(deps).await {
+    async fn try_active_plugins(&self, deps: &[PackageId]) -> Result<ValidatedPluginListing> {
+        self.ensure_dependencies_admitted(deps).await?;
+        let deps = self.admission.project_dependencies(deps);
+        match self.pm.active_plugins(&deps).await {
             Ok(listing) => {
-                let total = listing.plugins.len();
-                let mut errors = listing.errors;
-                for e in &errors {
-                    self.skipped(e);
+                let listing = self.validate_listing(listing);
+                if !listing.is_complete() {
+                    self.mark_incomplete("active_plugins");
                 }
-                let plugins = self.validate_all(listing.plugins);
-                if plugins.len() < total {
-                    errors.push(format!(
-                        "{} of `{}`'s plugins were dropped",
-                        total - plugins.len(),
-                        self.name
-                    ));
-                }
-                Ok(PluginListing { plugins, errors })
+                Ok(listing)
             }
             Err(e) => self.failure("active_plugins", e),
         }
@@ -182,7 +294,7 @@ impl PmInstance {
     /// A registry's plugins, or `None` with a report when it cannot be read:
     /// sync removes what a registry stops offering, so an unreadable one must
     /// not read as an empty one, nor an incomplete one as all it offers.
-    pub async fn registry_plugins(&self) -> Option<PluginListing<Plugin>> {
+    pub(crate) async fn registry_plugins(&self) -> Option<ValidatedPluginListing> {
         match self.try_active_plugins(&[]).await {
             Ok(listing) => Some(listing),
             Err(e) => {
@@ -201,11 +313,29 @@ impl PmInstance {
     /// A package-specific error is logged without blocking stale-artifact
     /// cleanup for the ecosystem. A transport failure is recorded against the
     /// instance: missing answers from a dead PM cannot authorize cleanup.
-    pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
-        match self.record_transport_failure("load_plugin", self.pm.load_plugin(id, update).await) {
-            Ok(plugins) => self.validate_all(plugins),
+    async fn load_plugin(&self, target: &PackageLoadTarget, update: UpdateLevel) -> Vec<Plugin> {
+        match self
+            .record_transport_failure("load_plugin", self.pm.load_plugin(target, update).await)
+        {
+            Ok(mut listing) => {
+                let mut exact_mismatch = false;
+                if let PackageLoadTarget::Resolved { key } = target {
+                    let before = listing.plugins.len();
+                    listing.plugins.retain(|plugin| plugin.package.key() == key);
+                    if listing.plugins.len() != before {
+                        exact_mismatch = true;
+                        self.skipped("exact package load answered with another package key");
+                    }
+                }
+                let mut listing = self.validate_listing(listing);
+                listing.complete &= !exact_mismatch;
+                if !listing.is_complete() {
+                    self.mark_incomplete("load_plugin");
+                }
+                listing.plugins
+            }
             Err(e) => {
-                tracing::warn!(instance = %self.name, id = %id, error = %format!("{e:#}"), "failed to load package");
+                tracing::warn!(instance = %self.name, error = %format!("{e:#}"), "failed to load package");
                 Vec::new()
             }
         }
@@ -224,30 +354,37 @@ impl PmInstance {
             return None;
         }
         let wanted = self.canonical_name(name).await.ok()?;
-        if let Ok(deps) = self.record_transport_failure("list_deps", self.pm.list_deps().await) {
-            let deps: Vec<_> = deps.into_iter().filter(|dep| dep.pm == self.name).collect();
+        if let Ok(deps) = self.admit_dependencies().await {
+            let deps: Vec<_> = deps
+                .into_iter()
+                .filter(|dep| dep.id().pm == self.name)
+                .collect();
             if let Some(dep) = deps
                 .iter()
-                .find(|dep| dep.name == wanted || dep.name == name)
+                .find(|dep| dep.id().name == wanted || dep.id().name == name)
             {
-                return Some(dep.clone());
+                return Some(dep.id().clone());
             }
-            let spellings: Vec<_> = deps.iter().map(|dep| dep.name.clone()).collect();
+            let spellings: Vec<_> = deps.iter().map(|dep| dep.id().name.clone()).collect();
             let canonical = self.canonical_names(&spellings).await.ok()?;
             if let Some((dep, _)) = deps
                 .into_iter()
                 .zip(canonical)
                 .find(|(_, known)| *known == wanted)
             {
-                return Some(dep);
+                return Some(dep.id().clone());
             }
         }
         let named = PackageId::any_version(&self.name, name);
         if let Ok(cached) =
             self.record_transport_failure("fetch", self.pm.fetch(&named, UpdateLevel::None).await)
-            && self.names(&cached.id, &wanted).await
+            && self.names(cached.id(), &wanted).await
         {
-            return Some(cached.id);
+            return self
+                .admission
+                .admit_content(cached.package, &cached.root)
+                .ok()
+                .map(|content| content.id().clone());
         }
         if matches!(update, UpdateLevel::None) {
             return None;
@@ -312,28 +449,81 @@ impl PmInstance {
     /// A registry entry that fails validation is the user's to fix, so it is
     /// reported. A package's is its author's, and the hook path must not print
     /// it next to the agent's JSON, so it is only logged.
-    fn validate_all(&self, unvalidated: Vec<UnvalidatedPlugin>) -> Vec<Plugin> {
-        unvalidated
-            .into_iter()
-            .filter(|plugin| self.owns(&plugin.id))
-            .filter(|plugin| {
-                absolute(&self.name, &plugin.id, &plugin.root)
-                    && plugin
-                        .label_root
-                        .as_ref()
-                        .is_none_or(|dir| absolute(&self.name, &plugin.id, dir))
-            })
-            .filter_map(|plugin| {
-                let id = plugin.id.clone();
-                match crate::plugins::validate_plugin(plugin, self.kind) {
-                    Ok(p) => Some(p),
-                    Err(e) => {
-                        self.skipped(&format!("`{id}`: {e:#}"));
-                        None
-                    }
+    fn validate_listing(&self, listing: PluginListing) -> ValidatedPluginListing {
+        let total = listing.plugins.len();
+        let mut complete = listing.errors.is_empty();
+        if !complete {
+            self.skipped("package manager reported unreadable plugin entries");
+        }
+
+        // Conflicting answers for one supplier key reject every entry carrying
+        // that key. Choosing the first would make listing order authoritative.
+        let mut resolutions = HashMap::<PackageKey, PackageResolution>::new();
+        let mut conflicting_keys = HashSet::<PackageKey>::new();
+        for plugin in &listing.plugins {
+            match resolutions.get(plugin.package.key()) {
+                Some(previous) if previous != &plugin.package => {
+                    conflicting_keys.insert(plugin.package.key().clone());
                 }
+                Some(_) => {}
+                None => {
+                    resolutions.insert(plugin.package.key().clone(), plugin.package.clone());
+                }
+            }
+        }
+
+        let mut candidates = Vec::with_capacity(total);
+        for mut plugin in listing.plugins {
+            if conflicting_keys.contains(plugin.package.key()) {
+                self.skipped("package listing contains a conflicting package key");
+                continue;
+            }
+            let id = plugin.id().clone();
+            if !absolute(&self.name, &id, &plugin.root)
+                || plugin
+                    .label_root
+                    .as_ref()
+                    .is_some_and(|dir| !absolute(&self.name, &id, dir))
+            {
+                continue;
+            }
+            let content = match self
+                .admission
+                .admit_content(plugin.package.clone(), &plugin.root)
+            {
+                Ok(content) => content,
+                Err(error) => {
+                    self.skipped(&error.to_string());
+                    continue;
+                }
+            };
+            plugin.root = content.root().to_owned();
+            let handle = content.package().handle();
+            match crate::plugins::validate_plugin(plugin, Some(content), self.kind) {
+                Ok(plugin) => candidates.push((handle, plugin)),
+                Err(error) => self.skipped(&format!("`{id}`: {error:#}")),
+            }
+        }
+
+        // A package may offer several differently named plugins. Two answers
+        // for the same package and validated name are instead one conflicting
+        // identity, so reject both independent of their order.
+        let mut identities = HashMap::new();
+        for (handle, plugin) in &candidates {
+            *identities
+                .entry((*handle, plugin.manifest.name.clone()))
+                .or_insert(0_usize) += 1;
+        }
+        let plugins: Vec<_> = candidates
+            .into_iter()
+            .filter_map(|(handle, plugin)| {
+                (identities[&(handle, plugin.manifest.name.clone())] == 1).then_some(plugin)
             })
-            .collect()
+            .collect();
+        if plugins.len() < total {
+            complete = false;
+        }
+        ValidatedPluginListing { plugins, complete }
     }
 
     /// Report or log one entry this instance skipped, as for a plugin that
@@ -372,6 +562,34 @@ impl PmInstance {
             None => Ok(project),
         }
     }
+}
+
+/// Construct core's in-process Cargo supplier.
+///
+/// A configured `[[package-manager]]` named `cargo` still goes through
+/// [`PmInstance::new`] and therefore receives remote authority.
+pub(crate) fn builtin_cargo_instance(workspace: std::sync::Arc<WorkspaceDeps>) -> PmInstance {
+    PmInstance::with_authority(
+        CARGO_PM,
+        false,
+        PluginKind::Package,
+        Box::new(CargoPm::new(workspace)),
+        admission::PackageAuthority::BuiltinCargo,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn resolved_content_for_test(root: &std::path::Path) -> ResolvedContent {
+    let admission = admission::PackageAdmission::new(
+        CARGO_PM.to_string(),
+        admission::PackageAuthority::BuiltinCargo,
+    );
+    let resolution = PackageResolution::new(
+        PackageId::new(CARGO_PM, "test-package", "1.0.0"),
+        PackageSourceClaim::CratesIo,
+        PackageKey::new("test-package-key").unwrap(),
+    );
+    admission.admit_content(resolution, root).unwrap()
 }
 
 /// Whether a directory a package manager gave for `id` is absolute. A relative
@@ -447,16 +665,16 @@ impl PmRegistry {
     }
 
     /// Fetch a package via the instance named in its id.
-    pub async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> Result<FetchedPackage> {
+    pub async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> Result<ResolvedContent> {
         let inst = self.owner(id).ok_or_else(|| {
             anyhow::anyhow!("unknown package manager `{}` in package id `{id}`", id.pm)
         })?;
         let fetched = inst.record_transport_failure("fetch", inst.pm.fetch(id, update).await)?;
         anyhow::ensure!(
-            inst.owns(&fetched.id),
+            inst.owns(fetched.id()),
             "`{}` answered a fetch of `{id}` with `{}`",
             inst.name,
-            fetched.id
+            fetched.id()
         );
         anyhow::ensure!(
             fetched.root.is_absolute(),
@@ -464,7 +682,9 @@ impl PmRegistry {
             inst.name,
             fetched.root.display()
         );
-        Ok(fetched)
+        Ok(inst
+            .admission
+            .admit_content(fetched.package, &fetched.root)?)
     }
 
     /// Union of `list_deps` across the instances — the workspace's full
@@ -477,25 +697,32 @@ impl PmRegistry {
     pub async fn list_deps(&self) -> Vec<PackageId> {
         let mut deps = Vec::new();
         for inst in &self.instances {
-            match inst.pm.list_deps().await {
-                Ok(found) => {
-                    let total = found.len();
-                    let owned: Vec<_> = found.into_iter().filter(|id| inst.owns(id)).collect();
-                    if owned.len() != total {
-                        inst.failure::<()>(
-                            "list_deps",
-                            anyhow::anyhow!(
-                                "dependency listing contains another package manager's ids"
-                            ),
-                        )
-                        .unwrap_or_default();
-                    }
-                    deps.extend(owned);
-                }
-                Err(e) => inst.failure::<()>("list_deps", e).unwrap_or_default(),
+            if let Ok(admitted) = inst.admit_dependencies().await {
+                deps.extend(
+                    admitted
+                        .into_iter()
+                        .map(|dependency| dependency.id().clone()),
+                );
             }
         }
         deps
+    }
+
+    /// Exact admitted dependencies matching `ids`, retaining distinct source
+    /// identities even when their coordinates compare equal.
+    pub(crate) async fn dependency_requests(&self, ids: &[PackageId]) -> Vec<PackageRequest> {
+        let mut requests = Vec::new();
+        for instance in &self.instances {
+            if let Ok(dependencies) = instance.resolved_dependencies(ids).await {
+                requests.extend(
+                    dependencies
+                        .into_iter()
+                        .map(ResolvedDependency::into_package)
+                        .map(PackageRequest::Resolved),
+                );
+            }
+        }
+        requests
     }
 
     /// Each instance's [`ProjectInfo`], by instance name, and why each one
@@ -518,10 +745,28 @@ impl PmRegistry {
     /// out-of-process PM to answer about an id none of them owns, and would let
     /// a PM answer for a package of another ecosystem.
     pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
-        match self.owner(id) {
-            Some(inst) => inst.load_plugin(id, update).await,
+        self.load_plugin_request(&PackageRequest::coordinate(id.clone()), update)
+            .await
+    }
+
+    pub(crate) async fn load_plugin_request(
+        &self,
+        request: &PackageRequest,
+        update: UpdateLevel,
+    ) -> Vec<Plugin> {
+        match self.owner(request.id()) {
+            Some(inst) => {
+                let target = match inst.load_target(request) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        tracing::warn!(instance = %inst.name, error = %error, "refusing package load");
+                        return Vec::new();
+                    }
+                };
+                inst.load_plugin(&target, update).await
+            }
             None => {
-                tracing::debug!(id = %id, "no package manager owns this id");
+                tracing::debug!(id = %request.id(), "no package manager owns this id");
                 Vec::new()
             }
         }
@@ -644,12 +889,7 @@ impl Workspace {
         let deps = WorkspaceDeps::fixture(root.clone(), crates);
         std::sync::Arc::new(Self::new(
             Some(root),
-            PmRegistry::new(vec![PmInstance::new(
-                CARGO_PM,
-                false,
-                PluginKind::Package,
-                Box::new(CargoPm::new(deps)),
-            )]),
+            PmRegistry::new(vec![builtin_cargo_instance(deps)]),
         ))
     }
 
@@ -744,11 +984,86 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn package_id_display_is_colon_tuple() {
         let id = PackageId::new("cargo", "serde", "1.0.210");
         assert_eq!(id.to_string(), "cargo:serde:1.0.210");
+    }
+
+    #[test]
+    fn authority_comes_from_core_construction_not_instance_names() {
+        let configured_cargo = PmInstance::new(
+            CARGO_PM,
+            false,
+            PluginKind::Package,
+            Box::new(InvalidPluginPm),
+        );
+        let configured = configured_cargo
+            .admission
+            .admit_content(resolution(CARGO_PM, "configured"), Path::new("."))
+            .unwrap();
+        assert!(matches!(
+            configured.package().naming_view().authority(),
+            admission::PackageNamingAuthority::Remote
+        ));
+
+        let builtin = builtin_cargo_instance(std::sync::Arc::new(WorkspaceDeps::detached()));
+        let admitted = builtin
+            .admission
+            .admit_content(resolution(CARGO_PM, "builtin"), Path::new("."))
+            .unwrap();
+        assert!(matches!(
+            admitted.package().naming_view().authority(),
+            admission::PackageNamingAuthority::BuiltinCargo
+        ));
+    }
+
+    #[test]
+    fn recommendations_authority_follows_the_core_source_binding() {
+        let recommendations = PmInstance::new(
+            "renamed-recommendations",
+            true,
+            PluginKind::Registry,
+            Box::new(InvalidPluginPm),
+        )
+        .with_source(RegistrySource::Git {
+            url: BUILTIN_RECOMMENDATIONS_URL.to_string(),
+        });
+        let admitted = recommendations
+            .admission
+            .admit_content(
+                resolution("renamed-recommendations", "plugin"),
+                Path::new("."),
+            )
+            .unwrap();
+        assert!(matches!(
+            admitted.package().naming_view().authority(),
+            admission::PackageNamingAuthority::Recommendations
+        ));
+
+        let same_name = PmInstance::new(
+            "symposium-recommendations",
+            true,
+            PluginKind::Registry,
+            Box::new(InvalidPluginPm),
+        )
+        .with_source(RegistrySource::Path {
+            dir: PathBuf::from(MISSING_DIR),
+        });
+        let admitted = same_name
+            .admission
+            .admit_content(
+                resolution("symposium-recommendations", "plugin"),
+                Path::new("."),
+            )
+            .unwrap();
+        assert!(matches!(
+            admitted.package().naming_view().authority(),
+            admission::PackageNamingAuthority::Remote
+        ));
     }
 
     /// A PM that answers with one plugin whose manifest fails validation.
@@ -760,14 +1075,21 @@ mod tests {
     #[cfg(not(windows))]
     const MISSING_DIR: &str = "/nonexistent";
 
-    /// That directory's `broken` entry, `/`-separated for matching against a
-    /// report, which renders it with the platform's separator.
-    fn missing_entry() -> String {
-        PathBuf::from(MISSING_DIR)
-            .join("broken")
-            .display()
-            .to_string()
-            .replace('\\', "/")
+    fn resolution(pm: &str, name: &str) -> PackageResolution {
+        PackageResolution::new(
+            PackageId::any_version(pm, name),
+            PackageSourceClaim::Unknown,
+            PackageKey::new(format!("{pm}:{name}")).unwrap(),
+        )
+    }
+
+    fn unvalidated_plugin(package: PackageResolution, name: &str) -> UnvalidatedPlugin {
+        UnvalidatedPlugin::new(
+            package,
+            std::env::current_dir().unwrap(),
+            symposium_sdk::manifest::RawPluginManifest::parse(&format!("name = \"{name}\""))
+                .unwrap(),
+        )
     }
 
     struct InvalidPluginPm;
@@ -777,23 +1099,23 @@ mod tests {
         fn name(&self) -> &str {
             "stub"
         }
-        async fn active_plugins(&self, _deps: &[PackageId]) -> Result<PluginListing> {
+        async fn active_plugins(&self, _deps: &[PackageResolution]) -> Result<PluginListing> {
             let manifest = symposium_sdk::manifest::RawPluginManifest::parse(
                 "name = \"broken\"\n[[skills]]\n",
             )
             .unwrap();
             Ok(PluginListing::complete(vec![UnvalidatedPlugin::new(
-                PackageId::any_version("stub", "broken"),
-                PathBuf::from(MISSING_DIR).join("broken"),
+                resolution("stub", "broken"),
+                std::env::current_dir().unwrap(),
                 manifest,
             )]))
         }
         async fn load_plugin(
             &self,
-            _id: &PackageId,
+            _target: &PackageLoadTarget,
             _update: UpdateLevel,
-        ) -> Result<Vec<UnvalidatedPlugin>> {
-            Ok(Vec::new())
+        ) -> Result<PluginListing> {
+            Ok(PluginListing::complete(Vec::new()))
         }
     }
 
@@ -802,7 +1124,289 @@ mod tests {
     struct EchoPm {
         name: &'static str,
         answers_as: &'static str,
-        root: &'static str,
+        root: PathBuf,
+    }
+
+    struct ConflictingDepsPm;
+
+    struct DuplicateDepsPm;
+
+    struct InvalidatingDepsPm {
+        list_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        active_called: std::sync::Arc<AtomicBool>,
+    }
+
+    struct MismatchedExactLoadPm;
+
+    struct MovingFetchRootPm {
+        first: PathBuf,
+        second: PathBuf,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for ConflictingDepsPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn load_plugin(
+            &self,
+            _target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            let key = PackageKey::new("conflict").unwrap();
+            Ok(vec![
+                PackageResolution::new(
+                    PackageId::new("cargo", "first", "1.0.0"),
+                    PackageSourceClaim::CratesIo,
+                    key.clone(),
+                ),
+                PackageResolution::new(
+                    PackageId::new("cargo", "second", "1.0.0"),
+                    PackageSourceClaim::CratesIo,
+                    key,
+                ),
+            ])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for DuplicateDepsPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn load_plugin(
+            &self,
+            _target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            let package = PackageResolution::new(
+                PackageId::new("cargo", "duplicate", "1.0.0"),
+                PackageSourceClaim::CratesIo,
+                PackageKey::new("duplicate").unwrap(),
+            );
+            Ok(vec![package.clone(), package])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for InvalidatingDepsPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn active_plugins(&self, _deps: &[PackageResolution]) -> Result<PluginListing> {
+            self.active_called.store(true, Ordering::Relaxed);
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn load_plugin(
+            &self,
+            _target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            let call = self.list_calls.fetch_add(1, Ordering::Relaxed);
+            if call == 0 {
+                return Ok(vec![PackageResolution::new(
+                    PackageId::new("cargo", "valid", "1.0.0"),
+                    PackageSourceClaim::CratesIo,
+                    PackageKey::new("valid").unwrap(),
+                )]);
+            }
+
+            let key = PackageKey::new("conflict").unwrap();
+            Ok(vec![
+                PackageResolution::new(
+                    PackageId::new("cargo", "first", "1.0.0"),
+                    PackageSourceClaim::CratesIo,
+                    key.clone(),
+                ),
+                PackageResolution::new(
+                    PackageId::new("cargo", "second", "1.0.0"),
+                    PackageSourceClaim::CratesIo,
+                    key,
+                ),
+            ])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for MismatchedExactLoadPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn load_plugin(
+            &self,
+            target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            assert!(matches!(target, PackageLoadTarget::Resolved { .. }));
+            Ok(PluginListing::complete(vec![unvalidated_plugin(
+                PackageResolution::new(
+                    PackageId::new("cargo", "other", "1.0.0"),
+                    PackageSourceClaim::CratesIo,
+                    PackageKey::new("other-key").unwrap(),
+                ),
+                "other",
+            )]))
+        }
+
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            Ok(vec![PackageResolution::new(
+                PackageId::new("cargo", "wanted", "1.0.0"),
+                PackageSourceClaim::CratesIo,
+                PackageKey::new("wanted-key").unwrap(),
+            )])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for MovingFetchRootPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn load_plugin(
+            &self,
+            _target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
+            let root = if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.first.clone()
+            } else {
+                self.second.clone()
+            };
+            Ok(FetchedPackage {
+                package: PackageResolution::new(
+                    id.clone(),
+                    PackageSourceClaim::CratesIo,
+                    PackageKey::new("stable-fetch-key").unwrap(),
+                ),
+                root,
+            })
+        }
+    }
+
+    struct AmbiguousDepsPm;
+
+    struct RehydratingPm {
+        list_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        active_saw_exact: std::sync::Arc<AtomicBool>,
+        load_saw_exact: std::sync::Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for AmbiguousDepsPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn active_plugins(&self, deps: &[PackageResolution]) -> Result<PluginListing> {
+            assert_eq!(deps.len(), 2);
+            assert!(
+                deps.iter()
+                    .any(|dep| dep.source() == PackageSourceClaim::Workspace)
+            );
+            assert!(
+                deps.iter()
+                    .any(|dep| dep.source() == PackageSourceClaim::CratesIo)
+            );
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn load_plugin(
+            &self,
+            target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            let PackageLoadTarget::Resolved { key } = target else {
+                panic!("an admitted dependency must load by its exact key")
+            };
+            let (source, name) = match key.as_str() {
+                "workspace:shared" => (PackageSourceClaim::Workspace, "workspace"),
+                "registry:shared" => (PackageSourceClaim::CratesIo, "registry"),
+                _ => panic!("unexpected package key"),
+            };
+            Ok(PluginListing::complete(vec![unvalidated_plugin(
+                PackageResolution::new(
+                    PackageId::new("cargo", "shared", "1.0.0"),
+                    source,
+                    key.clone(),
+                ),
+                name,
+            )]))
+        }
+
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            let id = PackageId::new("cargo", "shared", "1.0.0");
+            Ok(vec![
+                PackageResolution::new(
+                    id.clone(),
+                    PackageSourceClaim::Workspace,
+                    PackageKey::new("workspace:shared").unwrap(),
+                ),
+                PackageResolution::new(
+                    id,
+                    PackageSourceClaim::CratesIo,
+                    PackageKey::new("registry:shared").unwrap(),
+                ),
+            ])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for RehydratingPm {
+        fn name(&self) -> &str {
+            "cargo"
+        }
+
+        async fn active_plugins(&self, deps: &[PackageResolution]) -> Result<PluginListing> {
+            self.active_saw_exact.store(
+                deps.len() == 1 && deps[0].key().as_str() == "cargo:cached",
+                Ordering::Relaxed,
+            );
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn load_plugin(
+            &self,
+            target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> Result<PluginListing> {
+            self.load_saw_exact.store(
+                matches!(target, PackageLoadTarget::Resolved { key } if key.as_str() == "cargo:cached"),
+                Ordering::Relaxed,
+            );
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            self.list_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(vec![PackageResolution::new(
+                PackageId::new("cargo", "cached", "1.0.0"),
+                PackageSourceClaim::CratesIo,
+                PackageKey::new("cargo:cached").unwrap(),
+            )])
+        }
     }
 
     #[async_trait::async_trait]
@@ -812,17 +1416,21 @@ mod tests {
         }
         async fn load_plugin(
             &self,
-            id: &PackageId,
+            target: &PackageLoadTarget,
             _update: UpdateLevel,
-        ) -> Result<Vec<UnvalidatedPlugin>> {
-            Ok(vec![UnvalidatedPlugin::new(
-                PackageId::any_version(self.answers_as, &id.name),
-                PathBuf::from(self.root),
+        ) -> Result<PluginListing> {
+            let name = match target {
+                PackageLoadTarget::Coordinate { id } => id.name.as_str(),
+                PackageLoadTarget::Resolved { .. } => "dep",
+            };
+            Ok(PluginListing::complete(vec![UnvalidatedPlugin::new(
+                resolution(self.answers_as, name),
+                self.root.clone(),
                 symposium_sdk::manifest::RawPluginManifest::parse("").unwrap(),
-            )])
+            )]))
         }
-        async fn list_deps(&self) -> Result<Vec<PackageId>> {
-            Ok(vec![PackageId::any_version(self.answers_as, "dep")])
+        async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
+            Ok(vec![resolution(self.answers_as, "dep")])
         }
     }
 
@@ -839,10 +1447,10 @@ mod tests {
         }
         async fn load_plugin(
             &self,
-            id: &PackageId,
+            _target: &PackageLoadTarget,
             _update: UpdateLevel,
-        ) -> Result<Vec<UnvalidatedPlugin>> {
-            anyhow::bail!("cannot load {id}")
+        ) -> Result<PluginListing> {
+            anyhow::bail!("cannot load package")
         }
         async fn project_info(&self) -> Result<ProjectInfo> {
             Ok(self.project.clone())
@@ -956,7 +1564,10 @@ mod tests {
         );
         assert!(
             ws.pms()
-                .load_plugin(&PackageId::any_version("npm", "widget"), UpdateLevel::None)
+                .load_plugin_request(
+                    &PackageRequest::coordinate(PackageId::any_version("npm", "widget")),
+                    UpdateLevel::None,
+                )
                 .await
                 .is_empty()
         );
@@ -969,7 +1580,7 @@ mod tests {
             EchoPm {
                 name,
                 answers_as,
-                root: MISSING_DIR,
+                root: std::env::current_dir().unwrap(),
             },
         )
     }
@@ -983,13 +1594,16 @@ mod tests {
             EchoPm {
                 name: "npm",
                 answers_as: "npm",
-                root: "relative/dir",
+                root: PathBuf::from("relative/dir"),
             },
         )]);
         assert!(
-            pms.load_plugin(&PackageId::any_version("npm", "widget"), UpdateLevel::None)
-                .await
-                .is_empty()
+            pms.load_plugin_request(
+                &PackageRequest::coordinate(PackageId::any_version("npm", "widget")),
+                UpdateLevel::None,
+            )
+            .await
+            .is_empty()
         );
     }
 
@@ -997,8 +1611,16 @@ mod tests {
     async fn load_plugin_asks_only_the_pm_its_id_names() {
         let pms = PmRegistry::new(vec![echo("cargo", "cargo"), echo("npm", "npm")]);
         let loaded = pms
-            .load_plugin(&PackageId::any_version("cargo", "foo"), UpdateLevel::None)
+            .load_plugin_request(
+                &PackageRequest::coordinate(PackageId::any_version("cargo", "foo")),
+                UpdateLevel::None,
+            )
             .await;
+        assert!(loaded[0].resolved_package().is_some());
+        assert_eq!(
+            loaded[0].resolved_content().unwrap().root(),
+            dunce::canonicalize(std::env::current_dir().unwrap()).unwrap()
+        );
         let ids: Vec<_> = loaded.iter().map(|p| p.canonical.to_string()).collect();
         assert_eq!(ids, vec!["cargo:foo:*"]);
     }
@@ -1010,9 +1632,12 @@ mod tests {
     async fn an_answer_under_another_pms_id_is_dropped() {
         let pms = PmRegistry::new(vec![echo("npm", "cargo")]);
         assert!(
-            pms.load_plugin(&PackageId::any_version("npm", "foo"), UpdateLevel::None)
-                .await
-                .is_empty()
+            pms.load_plugin_request(
+                &PackageRequest::coordinate(PackageId::any_version("npm", "foo")),
+                UpdateLevel::None,
+            )
+            .await
+            .is_empty()
         );
         assert!(pms.list_deps().await.is_empty());
         assert_eq!(
@@ -1029,6 +1654,250 @@ mod tests {
         assert_eq!(pms.failed(), vec!["npm"]);
     }
 
+    #[tokio::test]
+    async fn conflicting_dependency_keys_reject_the_complete_supplier_listing() {
+        let pms = PmRegistry::new(vec![PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(ConflictingDepsPm),
+        )]);
+
+        assert!(pms.list_deps().await.is_empty());
+        assert_eq!(pms.failed(), vec!["cargo"]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_dependency_keys_reject_the_complete_supplier_listing() {
+        let pms = PmRegistry::new(vec![PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(DuplicateDepsPm),
+        )]);
+
+        assert!(pms.list_deps().await.is_empty());
+        assert_eq!(pms.failed(), vec!["cargo"]);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_dependency_refresh_invalidates_the_previous_snapshot() {
+        let list_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let active_called = std::sync::Arc::new(AtomicBool::new(false));
+        let pms = PmRegistry::new(vec![PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(InvalidatingDepsPm {
+                list_calls: list_calls.clone(),
+                active_called: active_called.clone(),
+            }),
+        )]);
+
+        let valid = pms.list_deps().await;
+        assert_eq!(valid, vec![PackageId::new("cargo", "valid", "1.0.0")]);
+        assert!(pms.list_deps().await.is_empty());
+
+        assert!(
+            pms.instances()
+                .next()
+                .unwrap()
+                .active_plugins(&valid)
+                .await
+                .is_empty()
+        );
+        assert!(!active_called.load(Ordering::Relaxed));
+        assert_eq!(list_calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn an_exact_load_rejects_a_plugin_from_another_package_key() {
+        let pms = PmRegistry::new(vec![PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(MismatchedExactLoadPm),
+        )]);
+        let id = pms.list_deps().await.pop().unwrap();
+        let request = pms
+            .dependency_requests(std::slice::from_ref(&id))
+            .await
+            .pop()
+            .unwrap();
+
+        assert!(
+            pms.load_plugin_request(&request, UpdateLevel::None)
+                .await
+                .is_empty()
+        );
+        assert_eq!(pms.failed(), vec!["cargo"]);
+    }
+
+    #[tokio::test]
+    async fn fetch_cannot_move_an_admitted_key_to_another_content_root() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let pms = PmRegistry::new(vec![PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(MovingFetchRootPm {
+                first: first.path().to_path_buf(),
+                second: second.path().to_path_buf(),
+                calls: AtomicUsize::new(0),
+            }),
+        )]);
+        let id = PackageId::new("cargo", "stable", "1.0.0");
+
+        pms.fetch(&id, UpdateLevel::None).await.unwrap();
+        let error = pms.fetch(&id, UpdateLevel::None).await.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "package manager reused one package key for another content root"
+        );
+        assert!(
+            !error
+                .to_string()
+                .contains(&first.path().display().to_string())
+        );
+        assert!(
+            !error
+                .to_string()
+                .contains(&second.path().display().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn equal_dependency_coordinates_retain_each_resolved_identity() {
+        let pms = PmRegistry::new(vec![PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(AmbiguousDepsPm),
+        )]);
+        let deps = pms.list_deps().await;
+        assert_eq!(deps.len(), 2);
+        assert!(
+            pms.instances()
+                .next()
+                .unwrap()
+                .active_plugins(&deps)
+                .await
+                .is_empty()
+        );
+
+        let requests = pms.dependency_requests(&deps).await;
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| matches!(request, PackageRequest::Resolved(_)))
+        );
+        let mut loaded = Vec::new();
+        for request in &requests {
+            let plugins = pms.load_plugin_request(request, UpdateLevel::None).await;
+            assert_eq!(plugins.len(), 1);
+            loaded.push(plugins[0].resolved_package().unwrap().handle());
+        }
+        assert!(loaded[0] != loaded[1]);
+    }
+
+    #[tokio::test]
+    async fn cached_dependency_ids_rehydrate_exact_session_keys_once() {
+        let list_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let active_saw_exact = std::sync::Arc::new(AtomicBool::new(false));
+        let load_saw_exact = std::sync::Arc::new(AtomicBool::new(false));
+        let instance = PmInstance::new(
+            "cargo",
+            false,
+            PluginKind::Package,
+            Box::new(RehydratingPm {
+                list_calls: list_calls.clone(),
+                active_saw_exact: active_saw_exact.clone(),
+                load_saw_exact: load_saw_exact.clone(),
+            }),
+        );
+        let cached_id = PackageId::new("cargo", "cached", "1.0.0");
+
+        assert!(
+            instance
+                .try_active_plugins(std::slice::from_ref(&cached_id))
+                .await
+                .unwrap()
+                .plugins
+                .is_empty()
+        );
+        assert!(active_saw_exact.load(Ordering::Relaxed));
+
+        let pms = PmRegistry::new(vec![instance]);
+        let request = pms
+            .dependency_requests(std::slice::from_ref(&cached_id))
+            .await
+            .pop()
+            .unwrap();
+        assert!(
+            pms.load_plugin_request(&request, UpdateLevel::None)
+                .await
+                .is_empty()
+        );
+        assert!(load_saw_exact.load(Ordering::Relaxed));
+        assert_eq!(list_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn duplicate_plugin_identities_are_rejected_without_dropping_siblings() {
+        let instance = PmInstance::new(
+            "stub",
+            false,
+            PluginKind::Package,
+            Box::new(InvalidPluginPm),
+        );
+        let duplicate = resolution("stub", "package");
+        let listing = instance.validate_listing(PluginListing::complete(vec![
+            unvalidated_plugin(duplicate.clone(), "duplicate"),
+            unvalidated_plugin(duplicate, "duplicate"),
+            unvalidated_plugin(resolution("stub", "sibling"), "sibling"),
+        ]));
+
+        assert_eq!(listing.plugins.len(), 1);
+        assert_eq!(listing.plugins[0].manifest.name, "sibling");
+        assert!(!listing.is_complete());
+    }
+
+    #[test]
+    fn conflicting_plugin_keys_are_rejected_without_dropping_siblings() {
+        let instance = PmInstance::new(
+            "stub",
+            false,
+            PluginKind::Package,
+            Box::new(InvalidPluginPm),
+        );
+        let key = PackageKey::new("conflicting").unwrap();
+        let listing = instance.validate_listing(PluginListing::complete(vec![
+            unvalidated_plugin(
+                PackageResolution::new(
+                    PackageId::any_version("stub", "first"),
+                    PackageSourceClaim::Unknown,
+                    key.clone(),
+                ),
+                "first",
+            ),
+            unvalidated_plugin(
+                PackageResolution::new(
+                    PackageId::any_version("stub", "second"),
+                    PackageSourceClaim::Unknown,
+                    key,
+                ),
+                "second",
+            ),
+            unvalidated_plugin(resolution("stub", "sibling"), "sibling"),
+        ]));
+
+        assert_eq!(listing.plugins.len(), 1);
+        assert_eq!(listing.plugins[0].manifest.name, "sibling");
+        assert!(!listing.is_complete());
+    }
+
     /// The report events emitted while validating the stub's plugin under `kind`.
     async fn reports_for_invalid_plugin(kind: PluginKind) -> Vec<serde_json::Value> {
         use tracing_subscriber::layer::SubscriberExt;
@@ -1038,6 +1907,10 @@ mod tests {
         let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
         let instance = PmInstance::new("stub", false, kind, Box::new(InvalidPluginPm));
         assert!(instance.active_plugins(&[]).await.is_empty());
+        assert!(
+            instance.has_failed(),
+            "an incomplete listing must not authorize cleanup"
+        );
         handle.drain()
     }
 
@@ -1046,7 +1919,12 @@ mod tests {
         let reports = reports_for_invalid_plugin(PluginKind::Registry).await;
         assert_eq!(reports.len(), 1, "{reports:?}");
         let message = reports[0]["message"].as_str().unwrap().replace('\\', "/");
-        assert!(message.contains(&missing_entry()), "{message}");
+        let root = std::env::current_dir()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        assert!(message.contains(&root), "{message}");
     }
 
     /// A package's manifest is its author's problem, and the hook path prints
@@ -1062,7 +1940,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = symposium_install::InstallContext::new(tmp.path().to_path_buf());
         let pm = GitPm::new("reg", "https://github.com/example/reg", ctx).unwrap();
-        let err = pm.active_plugins(&[]).await.unwrap_err();
+        let err = pm.active_plugins(&[]).await.err().unwrap();
         assert!(
             err.to_string().contains("cargo agents plugin sync reg"),
             "{err}"
@@ -1104,7 +1982,8 @@ mod tests {
         let err = PmRegistry::new(vec![])
             .fetch(&id, UpdateLevel::None)
             .await
-            .unwrap_err();
+            .err()
+            .unwrap();
         assert!(err.to_string().contains("unknown package manager `npm`"));
     }
 }

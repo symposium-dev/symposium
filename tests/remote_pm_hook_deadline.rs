@@ -96,7 +96,7 @@ async fn healthy_plugin_answers_despite_a_silent_pm(
   sleep 1.2
   case "$line" in
     *'"initialize"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"silent"}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":2,"name":"silent"}}\n' "$id" ;;
     *)
       printf completed > "$1-completed"
       printf '{"id":%s,"jsonrpc":"2.0","result":{"project":{}}}\n' "$id" ;;

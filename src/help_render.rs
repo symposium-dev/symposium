@@ -244,6 +244,7 @@ mod tests {
             canonical: PackageId::new("test", name, ANY_VERSION),
             agent_plugin_root: None,
             root: std::path::PathBuf::new(),
+            resolved_content: None,
         }
     }
 

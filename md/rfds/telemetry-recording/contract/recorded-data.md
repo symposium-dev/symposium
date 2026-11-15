@@ -206,7 +206,7 @@ This row records one eligible public package used as resolution input during a f
 | `extension_match`   | `public`, `unnamed_only`, `none` | What kind of resolved extension, if any, the package contributed to. |
 | `package_subject`   | scoped id               | Deduplicates this exact coordinate for 30 days.                      |
 
-A package is named only when its package manager reports provenance matching a reviewed public-registry allowlist. Registry URLs themselves are not recorded.
+A package is named only when core admits both the required source claim and the authority of the supplying PM instance. Version 1 requires built-in Cargo authority together with the logical crates.io claim; registry names, URLs, paths, opaque supplier keys, and claims from remote replacements are not recorded and cannot authorize a name.
 
 The version 1 package-name grammar is 1 through 64 ASCII bytes. The first byte is an ASCII letter; the remaining bytes are ASCII letters, digits, `-`, or `_`. Symposium preserves the spelling without case folding or treating hyphens and underscores as equivalent. This stable telemetry grammar does not copy a registry's changing reserved-name list.
 

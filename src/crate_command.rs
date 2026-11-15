@@ -27,6 +27,15 @@ pub async fn dispatch_crate(
     }
 }
 
+fn crate_info(name: &str, version: &str, source: &Path) -> DispatchResult {
+    let output = format!(
+        "Crate: {name}\nVersion: {version}\nSource: {}\n",
+        source.display()
+    );
+    tracing::trace!(%output, "crate-info output");
+    DispatchResult::Ok(output)
+}
+
 /// A crate resolved to its source directory.
 pub struct ResolvedCrate {
     pub name: String,
@@ -50,12 +59,12 @@ pub async fn resolve_crate(
         if let Some(member) = deps
             .member_crates()
             .iter()
-            .find(|m| normalize_crate_name(&m.name) == normalized)
+            .find(|m| normalize_crate_name(m.name()) == normalized)
             && let Some(dir) = &member.path
         {
             return Ok(ResolvedCrate {
-                name: member.name.clone(),
-                version: member.version.to_string(),
+                name: member.name().to_owned(),
+                version: member.version().to_string(),
                 root: dir.clone(),
             });
         }
@@ -66,17 +75,8 @@ pub async fn resolve_crate(
         .fetch(&id, symposium_install::UpdateLevel::Check)
         .await?;
     Ok(ResolvedCrate {
-        name: fetched.id.name,
-        version: fetched.id.version,
-        root: fetched.root,
+        name: fetched.id().name.clone(),
+        version: fetched.id().version.clone(),
+        root: fetched.root().to_path_buf(),
     })
-}
-
-fn crate_info(name: &str, version: &str, source: &Path) -> DispatchResult {
-    let output = format!(
-        "Crate: {name}\nVersion: {version}\nSource: {}\n",
-        source.display()
-    );
-    tracing::trace!(%output, "crate-info output");
-    DispatchResult::Ok(output)
 }

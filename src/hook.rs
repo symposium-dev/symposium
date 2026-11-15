@@ -1602,6 +1602,7 @@ mod tests {
             canonical: PackageId::new("test", "test-plugin", ANY_VERSION),
             agent_plugin_root: None,
             root: PathBuf::new(),
+            resolved_content: None,
         }
     }
 

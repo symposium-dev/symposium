@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::workspace::WorkspaceCrate;
 use anyhow::{Context, Result};
+use symposium_sdk::pm::PackageResolution;
 
 mod probe;
 
@@ -22,12 +23,10 @@ pub fn normalize_crate_name(name: &str) -> String {
 }
 
 /// Result of fetching a crate's sources.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FetchResult {
-    /// The canonical crate name (e.g. `serde_json` even if queried as `serde-json`).
-    pub name: String,
-    /// The exact version that was fetched.
-    pub version: String,
+    /// Cargo's complete resolution fact for the fetched crate.
+    pub package: PackageResolution,
     /// Path to the crate sources on disk.
     pub path: PathBuf,
 }
@@ -68,14 +67,13 @@ impl<'a> RustCrateFetch<'a> {
         if self.version_spec.is_none() {
             let normalized = normalize_crate_name(&self.crate_name);
             if let Some((wc, dir)) = self.workspace.iter().find_map(|wc| {
-                (normalize_crate_name(&wc.name) == normalized)
+                (normalize_crate_name(wc.name()) == normalized)
                     .then(|| wc.source_dir.as_ref().map(|d| (wc, d)))
                     .flatten()
             }) {
-                tracing::debug!(crate_name = %wc.name, path = %dir.display(), "resolved from workspace source");
+                tracing::debug!(crate_name = %wc.name(), path = %dir.display(), "resolved from workspace source");
                 return Ok(FetchResult {
-                    name: wc.name.clone(),
-                    version: wc.version.to_string(),
+                    package: wc.package.clone(),
                     path: dir.clone(),
                 });
             }
@@ -106,9 +104,9 @@ impl<'a> RustCrateFetch<'a> {
         if let Some(wc) = self
             .workspace
             .iter()
-            .find(|wc| normalize_crate_name(&wc.name) == normalized)
+            .find(|wc| normalize_crate_name(wc.name()) == normalized)
         {
-            return (wc.name.clone(), format!("={}", wc.version));
+            return (wc.name().to_string(), format!("={}", wc.version()));
         }
 
         (self.crate_name.clone(), "*".to_string())
@@ -119,12 +117,20 @@ impl<'a> RustCrateFetch<'a> {
 mod tests {
     use super::*;
 
-    fn v(s: &str) -> semver::Version {
-        semver::Version::parse(s).unwrap()
-    }
-
     fn wc(name: &str, version: &str, path: Option<PathBuf>) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.to_string(), v(version), path)
+        let source = if path.is_some() {
+            symposium_sdk::pm::PackageSourceClaim::Path
+        } else {
+            symposium_sdk::pm::PackageSourceClaim::CratesIo
+        };
+        WorkspaceCrate::new(
+            symposium_sdk::pm::PackageResolution::new(
+                symposium_sdk::pm::PackageId::new(symposium_sdk::pm::CARGO_PM, name, version),
+                source,
+                symposium_sdk::pm::PackageKey::new(format!("{name}@{version}")).unwrap(),
+            ),
+            path,
+        )
     }
 
     // -- Path override behaviour ---------------------------------------
@@ -139,8 +145,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.name, "my-crate");
-        assert_eq!(result.version, "0.1.0");
+        assert_eq!(result.package.id().name, "my-crate");
+        assert_eq!(result.package.id().version, "0.1.0");
         assert_eq!(result.path, tmp.path());
     }
 
@@ -155,7 +161,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.name, "my_crate");
+        assert_eq!(result.package.id().name, "my_crate");
         assert_eq!(result.path, tmp.path());
     }
 

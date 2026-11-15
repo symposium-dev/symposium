@@ -7,10 +7,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::UpdateLevel;
 use crate::pm::{
-    CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginKind, PmInstance,
-    UnvalidatedPlugin,
+    CARGO_PM, FetchedPackage, PackageId, PackageKey, PackageLoadTarget, PackageManager,
+    PackageResolution, PackageSourceClaim, PluginInfo, PluginKind, PluginListing, PmInstance,
 };
 use symposium_pm_cargo::sources::normalize_crate_name;
+
+/// A synthetic Cargo workspace record for unit tests.
+pub fn workspace_crate(
+    name: impl Into<String>,
+    version: semver::Version,
+    path: Option<std::path::PathBuf>,
+) -> crate::pm::WorkspaceCrate {
+    let name = name.into();
+    let source = if path.is_some() {
+        crate::pm::PackageSourceClaim::Path
+    } else {
+        crate::pm::PackageSourceClaim::CratesIo
+    };
+    let package = crate::pm::PackageResolution::new(
+        PackageId::new(CARGO_PM, &name, version.to_string()),
+        source,
+        crate::pm::PackageKey::new(format!("fixture:{name}@{version}")).unwrap(),
+    );
+    crate::pm::WorkspaceCrate::new(package, path)
+}
 
 /// A file entry for [`instantiate_fixture`].
 pub struct File<'a>(pub &'a str, pub &'a str);
@@ -53,6 +73,7 @@ pub fn write_fixture_files(root: &Path, files: &[File]) {
 pub struct FakeCargo {
     cached: &'static [&'static str],
     published: &'static [&'static str],
+    dependencies: Vec<PackageResolution>,
     network: Arc<AtomicUsize>,
 }
 
@@ -61,10 +82,19 @@ impl FakeCargo {
         cached: &'static [&'static str],
         published: &'static [&'static str],
     ) -> (PmInstance, Arc<AtomicUsize>) {
+        Self::instance_with_dependencies(cached, published, &[])
+    }
+
+    pub fn instance_with_dependencies(
+        cached: &'static [&'static str],
+        published: &'static [&'static str],
+        dependencies: &[PackageId],
+    ) -> (PmInstance, Arc<AtomicUsize>) {
         let network = Arc::new(AtomicUsize::new(0));
         let pm = FakeCargo {
             cached,
             published,
+            dependencies: dependencies.iter().cloned().map(Self::resolution).collect(),
             network: Arc::clone(&network),
         };
         let instance = PmInstance::new(CARGO_PM, false, PluginKind::Package, Box::new(pm));
@@ -76,6 +106,11 @@ impl FakeCargo {
             .iter()
             .find(|known| normalize_crate_name(known) == normalize_crate_name(name))
             .map(|known| PackageId::any_version(CARGO_PM, *known))
+    }
+
+    fn resolution(id: PackageId) -> PackageResolution {
+        let key = PackageKey::new(format!("{}:{}:{}", id.pm, id.name, id.version)).unwrap();
+        PackageResolution::new(id, PackageSourceClaim::CratesIo, key)
     }
 }
 
@@ -91,13 +126,13 @@ impl PackageManager for FakeCargo {
 
     async fn load_plugin(
         &self,
-        _id: &PackageId,
+        _target: &PackageLoadTarget,
         update: UpdateLevel,
-    ) -> anyhow::Result<Vec<UnvalidatedPlugin>> {
+    ) -> anyhow::Result<PluginListing> {
         if !matches!(update, UpdateLevel::None) {
             self.network.fetch_add(1, Ordering::SeqCst);
         }
-        Ok(Vec::new())
+        Ok(PluginListing::complete(Vec::new()))
     }
 
     async fn search(&self, query: &str) -> anyhow::Result<Vec<PluginInfo>> {
@@ -112,6 +147,10 @@ impl PackageManager for FakeCargo {
             .collect())
     }
 
+    async fn list_deps(&self) -> anyhow::Result<Vec<PackageResolution>> {
+        Ok(self.dependencies.clone())
+    }
+
     /// Cache-only at [`UpdateLevel::None`], as the cargo transport is.
     async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> anyhow::Result<FetchedPackage> {
         let found = match update {
@@ -124,7 +163,7 @@ impl PackageManager for FakeCargo {
         };
         match found {
             Some(id) => Ok(FetchedPackage {
-                id,
+                package: Self::resolution(id),
                 root: std::env::temp_dir(),
             }),
             None => anyhow::bail!("cannot fetch {id}"),

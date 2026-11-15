@@ -323,22 +323,39 @@ pub struct Plugin {
 
     pub root: PathBuf,
 
-    /// The plugin's canonical package identity. Set to the resolved crate id for
-    /// a plugin loaded through a `[[plugins]] source.cargo` chained reference (a
-    /// crate carrying its own manifest). Registry and workspace plugins have no
-    /// real package identity, so this is a placeholder id tagged with the source
-    /// name (registry) or `"local"` (workspace).
+    /// The plugin's canonical package identity. A package plugin keeps its
+    /// resolved coordinate. A registry plugin keeps the registry entry's
+    /// round-trippable subpath id, which may differ from its manifest name; the
+    /// configuration layer derives that separate name-based identity. A
+    /// workspace plugin uses a local placeholder.
     ///
-    /// Keys chained-plugin cycle/diamond detection on its package identity
-    /// ([`PmRegistry::identity`](crate::pm::PmRegistry::identity)). It does
-    /// *not* affect skill identity, which is the `SKILL.md` path hash.
-    ///
-    /// FIXME: the registry/workspace placeholder `pm` tags (`"user-plugins"`,
-    /// `"local"`, …) should become real `path` PM ids once that PM lands.
+    /// Package-plugin cycle/diamond detection uses the admitted handle instead
+    /// of this coordinate. It does *not* affect skill identity, which is the
+    /// `SKILL.md` path hash.
     pub canonical: crate::pm::PackageId,
+
+    /// The admitted package content behind a package-manager plugin.
+    ///
+    /// Workspace plugins have no supplier session and leave this empty. This
+    /// field is private so its id cannot disagree with `canonical`, and its
+    /// canonical root cannot escape through derived diagnostics.
+    pub(crate) resolved_content: Option<crate::pm::ResolvedContent>,
 }
 
 impl Plugin {
+    /// The admitted package behind this plugin, when it came from a package
+    /// manager rather than the workspace loader.
+    pub(crate) fn resolved_package(&self) -> Option<&crate::pm::ResolvedPackage> {
+        self.resolved_content
+            .as_ref()
+            .map(crate::pm::ResolvedContent::package)
+    }
+
+    /// The admitted package and canonical root behind this plugin.
+    pub(crate) fn resolved_content(&self) -> Option<&crate::pm::ResolvedContent> {
+        self.resolved_content.as_ref()
+    }
+
     /// Evaluate the plugin-level predicate set, stamping this plugin's
     /// provenance into the context first, so `workspace-member()` sees the
     /// right plugin's provenance. The stamp carries over to the plugin's
@@ -981,50 +998,57 @@ pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<Plugin> {
 pub(crate) fn entry_plugin(
     root: &Path,
     subpath: &Path,
+    package: crate::pm::PackageResolution,
+) -> Option<Result<UnvalidatedPlugin>> {
+    read_entry(root, subpath).map(|entry| {
+        entry.map(|(base, manifest, agent_plugin)| UnvalidatedPlugin {
+            agent_plugin,
+            ..UnvalidatedPlugin::new(package, base, manifest).with_label_root(root)
+        })
+    })
+}
+
+pub(crate) fn offline_entry_plugin(
+    root: &Path,
+    subpath: &Path,
     source_name: &str,
 ) -> Option<Result<UnvalidatedPlugin>> {
+    read_entry(root, subpath).map(|entry| {
+        entry.and_then(|(base, manifest, agent_plugin)| {
+            let name = manifest.name.clone().unwrap_or_default();
+            let package = crate::pm::PackageResolution::new(
+                PackageId::new(source_name, name, ANY_VERSION),
+                crate::pm::PackageSourceClaim::Path,
+                crate::pm::PackageKey::new(crate::pm::layout::subpath_key(subpath))?,
+            );
+            Ok(UnvalidatedPlugin {
+                agent_plugin,
+                ..UnvalidatedPlugin::new(package, base, manifest).with_label_root(root)
+            })
+        })
+    })
+}
+
+fn read_entry(root: &Path, subpath: &Path) -> Option<Result<(PathBuf, RawPluginManifest, bool)>> {
     let dir = root.join(subpath);
     Some(match crate::pm::layout::classify(&dir)? {
-        crate::pm::layout::EntryKind::Plugin(toml_path) => (|| -> Result<UnvalidatedPlugin> {
+        crate::pm::layout::EntryKind::Plugin(toml_path) => (|| -> Result<_> {
             let content = fs::read_to_string(&toml_path)?;
             let mut manifest = RawPluginManifest::parse(&content)?;
             fill_from_agent_plugin(&mut manifest, &dir);
             let base = toml_path.parent().unwrap_or(&dir).to_path_buf();
-            let name = manifest.name.clone().unwrap_or_default();
-            Ok(UnvalidatedPlugin::new(
-                PackageId::new(source_name, name, ANY_VERSION),
-                base,
-                manifest,
-            )
-            .with_label_root(root))
+            Ok((base, manifest, false))
         })()
         .with_context(|| format!("loading plugin from `{}`", toml_path.display())),
-        crate::pm::layout::EntryKind::AgentPlugin(json_path) => {
-            (|| -> Result<UnvalidatedPlugin> {
-                let manifest = agent_plugin_manifest(&dir)?;
-                let name = manifest.name.clone().unwrap_or_default();
-                Ok(UnvalidatedPlugin {
-                    agent_plugin: true,
-                    ..UnvalidatedPlugin::new(
-                        PackageId::new(source_name, name, ANY_VERSION),
-                        dir.clone(),
-                        manifest,
-                    )
-                    .with_label_root(root)
-                })
-            })()
-            .with_context(|| format!("loading agent plugin from `{}`", json_path.display()))
-        }
-        crate::pm::layout::EntryKind::Skill(skill_md) => (|| -> Result<UnvalidatedPlugin> {
+        crate::pm::layout::EntryKind::AgentPlugin(json_path) => (|| -> Result<_> {
+            let manifest = agent_plugin_manifest(&dir)?;
+            Ok((dir.clone(), manifest, true))
+        })()
+        .with_context(|| format!("loading agent plugin from `{}`", json_path.display())),
+        crate::pm::layout::EntryKind::Skill(skill_md) => (|| -> Result<_> {
             let manifest = standalone_skill_manifest(&skill_md)?;
             let base = skill_md.parent().unwrap_or(&dir).to_path_buf();
-            let name = manifest.name.clone().unwrap_or_default();
-            Ok(UnvalidatedPlugin::new(
-                PackageId::new(source_name, name, ANY_VERSION),
-                base,
-                manifest,
-            )
-            .with_label_root(root))
+            Ok((base, manifest, false))
         })()
         .with_context(|| format!("loading skill from `{}`", skill_md.display())),
     })
@@ -1049,8 +1073,12 @@ fn package_agent_plugin_manifest(root: &Path, name: &str) -> Result<RawPluginMan
 ///
 /// `kind` comes from the instance that answered, never from the plugin, so a PM
 /// cannot elect its own policy.
-pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Result<Plugin> {
-    let package_name = plugin.id.name.clone();
+pub(crate) fn validate_plugin(
+    plugin: UnvalidatedPlugin,
+    resolved_content: Option<crate::pm::ResolvedContent>,
+    kind: PluginKind,
+) -> Result<Plugin> {
+    let package_name = plugin.package.id().name.clone();
     let origin = match kind {
         PluginKind::Registry => ManifestOrigin::Registry,
         PluginKind::Package => ManifestOrigin::Crate {
@@ -1058,7 +1086,7 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
         },
     };
     let UnvalidatedPlugin {
-        id,
+        package,
         root,
         mut manifest,
         label_root,
@@ -1076,7 +1104,8 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
     resolve_plugin_paths(&mut plugin, &root, label_root.as_deref().unwrap_or(&root))
         .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
     Ok(Plugin {
-        canonical: id,
+        canonical: package.id().clone(),
+        resolved_content,
         manifest: plugin,
         // Only the workspace-plugin loader stamps true; nothing a PM offers is
         // a workspace member.
@@ -1358,9 +1387,14 @@ pub async fn resolve_active_plugins(
     // loads once (its hooks don't double-fire, its subcommands aren't a false
     // conflict), while a registry plugin and a crate of the same name stay
     // distinct.
-    let mut visited = std::collections::HashSet::new();
+    // Package plugins already admitted to the active set. The supplier-scoped
+    // handle keeps equal coordinates from distinct resolutions separate, and
+    // the validated name lets one package offer several plugins. We insert
+    // only after the gate passes: a rejected route cannot suppress a later
+    // valid route to the same plugin.
+    let mut settled = std::collections::HashSet::new();
     // Package ids still to resolve through the set.
-    let mut worklist: Vec<crate::pm::PackageId> = Vec::new();
+    let mut worklist: Vec<crate::pm::PackageRequest> = Vec::new();
     let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
     let mut spellings = names.spellings(&sym.config.plugins).await;
 
@@ -1391,24 +1425,37 @@ pub async fn resolve_active_plugins(
     // through here, whether a chained reference, `auto-enable` or `use` named
     // it, so this is the one place a revocation is enforced.
     let audits = crate::audits::AuditIndex::configured(sym);
-    while let Some(id) = worklist.pop() {
-        for plugin in pms.load_plugin(&id, update).await {
-            if visited.insert(pms.identity(&plugin.canonical)) {
-                if withheld(pms, &audits, &plugin).await {
-                    revoked.push(plugin);
-                } else {
-                    names
-                        .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
-                        .await;
-                    record_active(
-                        plugin,
-                        &sym.config.plugins,
-                        &spellings,
-                        ctx,
-                        &mut active,
-                        &mut worklist,
-                    );
+    while let Some(request) = worklist.pop() {
+        for plugin in pms.load_plugin_request(&request, update).await {
+            let identity = plugin
+                .resolved_package()
+                .map(|package| (package.handle(), plugin.manifest.name.clone()));
+            if identity
+                .as_ref()
+                .is_some_and(|identity| settled.contains(identity))
+            {
+                continue;
+            }
+            if withheld(pms, &audits, &plugin).await {
+                revoked.push(plugin);
+                if let Some(identity) = identity {
+                    settled.insert(identity);
                 }
+                continue;
+            }
+            names
+                .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
+                .await;
+            if record_active(
+                plugin,
+                &sym.config.plugins,
+                &spellings,
+                ctx,
+                &mut active,
+                &mut worklist,
+            ) && let Some(identity) = identity
+            {
+                settled.insert(identity);
             }
         }
     }
@@ -1453,8 +1500,8 @@ fn record_active(
     spellings: &crate::config::Spellings,
     ctx: &mut crate::predicate::PredicateContext<'_>,
     active: &mut Vec<Plugin>,
-    worklist: &mut Vec<crate::pm::PackageId>,
-) {
+    worklist: &mut Vec<crate::pm::PackageRequest>,
+) -> bool {
     // `disable` names a plugin whatever offers it. A trusted source is what
     // lets a plugin activate without being asked about, not a claim the user
     // cannot change their mind.
@@ -1466,7 +1513,7 @@ fn record_active(
                 reason: Some("disabled in `[plugins] disable`".into()),
             },
         );
-        return;
+        return false;
     }
     if !plugin.applies(ctx) {
         tracing::debug!(
@@ -1476,7 +1523,7 @@ fn record_active(
                 reason: Some("plugin-level predicates not satisfied".into()),
             },
         );
-        return;
+        return false;
     }
     tracing::debug!(
         report = %crate::report::ReportEvent::PluginConsidered {
@@ -1489,10 +1536,13 @@ fn record_active(
     for edge in &plugin.manifest.chained {
         ctx.set_workspace_member(plugin.workspace_member);
         if edge.predicates.evaluate(ctx) {
-            worklist.push(crate::pm::CargoPm::id_for(&edge.name, None));
+            worklist.push(crate::pm::PackageRequest::coordinate(
+                crate::pm::CargoPm::id_for(&edge.name, None),
+            ));
         }
     }
     active.push(plugin);
+    true
 }
 
 /// Warn when a crate-embedded plugin declares custom predicates. Its skills,
@@ -1614,6 +1664,7 @@ fn workspace_plugin_for_dir(
 
     Ok(Some(Plugin {
         canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
+        resolved_content: None,
         manifest: plugin,
         workspace_member: true,
         agent_plugin_root,
@@ -1646,10 +1697,10 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDi
             .collect(),
     };
     for subpath in subpaths {
-        let Some(plugin) = entry_plugin(dir, &subpath, source_name) else {
+        let Some(plugin) = offline_entry_plugin(dir, &subpath, source_name) else {
             continue;
         };
-        let plugin = plugin.and_then(|p| validate_plugin(p, PluginKind::Registry));
+        let plugin = plugin.and_then(|p| validate_plugin(p, None, PluginKind::Registry));
         tracing::debug!(subpath = %subpath.display(), ok = plugin.is_ok(), "loaded entry");
         plugins.push((subpath, plugin));
     }
@@ -1688,7 +1739,11 @@ fn validate_crate_dir(
     }
     let root = fs::canonicalize(dir)?;
     let fetched = crate::pm::FetchedPackage {
-        id: PackageId::new(source_name, name, ANY_VERSION),
+        package: crate::pm::PackageResolution::new(
+            PackageId::new(source_name, name, ANY_VERSION),
+            crate::pm::PackageSourceClaim::Path,
+            crate::pm::PackageKey::new(format!("{source_name}:{name}"))?,
+        ),
         root: root.clone(),
     };
     let unvalidated = crate::pm::CargoPm::plugin_from_fetched(fetched);
@@ -1698,7 +1753,7 @@ fn validate_crate_dir(
             .defaults
             .as_ref()
             .is_none_or(|defaults| defaults.skills);
-    let mut plugin = validate_plugin(unvalidated, PluginKind::Package)?;
+    let mut plugin = validate_plugin(unvalidated, None, PluginKind::Package)?;
     let default_dir = root.join(CRATE_DEFAULT_SKILLS_PATH);
     if default_group && !default_dir.exists() {
         plugin.manifest.skills.pop();
@@ -1965,6 +2020,7 @@ fn load_plugin_as(
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(Plugin {
         canonical: PackageId::new(source_name, &plugin.name, ANY_VERSION),
+        resolved_content: None,
         manifest: plugin,
         // Registry sources are never workspace members; the workspace-plugin
         // loader is the only place that stamps true.
@@ -2900,9 +2956,9 @@ mod tests {
 
         // A skill that names a dependency: the frontmatter gate is hoisted to
         // the plugin, which takes the skill's declared name and is not dormant.
-        let gated = entry_plugin(tmp.path(), Path::new("gated"), "recs")
+        let gated = offline_entry_plugin(tmp.path(), Path::new("gated"), "recs")
             .expect("the entry is a bare skill")
-            .and_then(|o| validate_plugin(o, PluginKind::Registry))
+            .and_then(|o| validate_plugin(o, None, PluginKind::Registry))
             .unwrap();
         assert_eq!(gated.manifest.name, "gated-skill");
         assert!(!gated.manifest.requires_use);
@@ -2912,9 +2968,9 @@ mod tests {
 
         // A bare skill names no dependency anywhere, so the ordinary dormancy
         // rule leaves it dormant until `use`d.
-        let bare = entry_plugin(tmp.path(), Path::new("bare"), "recs")
+        let bare = offline_entry_plugin(tmp.path(), Path::new("bare"), "recs")
             .expect("the entry is a bare skill")
-            .and_then(|o| validate_plugin(o, PluginKind::Registry))
+            .and_then(|o| validate_plugin(o, None, PluginKind::Registry))
             .unwrap();
         assert_eq!(bare.manifest.name, "bare-skill");
         assert!(bare.manifest.requires_use);
@@ -3648,6 +3704,7 @@ mod tests {
             agent_plugin_root: None,
             root: PathBuf::new(),
             canonical: PackageId::any_version("reg", "gate-less"),
+            resolved_content: None,
         };
         assert!(plugin.manifest.requires_use);
 
@@ -3702,6 +3759,7 @@ mod tests {
             agent_plugin_root: None,
             root: PathBuf::new(),
             canonical: PackageId::new("test", "test", ANY_VERSION),
+            resolved_content: None,
         };
         let deps: Vec<crate::pm::PackageId> = Vec::new();
         let mut c = ctx(&deps);
@@ -5460,6 +5518,7 @@ mod tests {
             agent_plugin_root: None,
             root: PathBuf::new(),
             canonical: PackageId::new("test", plugin_name, ANY_VERSION),
+            resolved_content: None,
         }
     }
 

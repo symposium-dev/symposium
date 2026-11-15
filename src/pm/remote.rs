@@ -31,8 +31,8 @@ use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 use super::{
-    FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing, ProjectInfo,
-    UnvalidatedPlugin,
+    FetchedPackage, PackageId, PackageLoadTarget, PackageManager, PackageResolution, PluginInfo,
+    PluginListing, ProjectInfo,
 };
 
 /// How long a single request may take before the PM is considered dead, unless
@@ -253,16 +253,8 @@ impl RemotePm {
                 return Err(e.context(Unavailable));
             }
         };
-        let value = reply.map_err(|e| {
-            anyhow::anyhow!(
-                "`{}` answered `{method}` with an error: {} (code {})",
-                self.name,
-                e.message,
-                e.code
-            )
-        })?;
-        serde_json::from_value(value)
-            .with_context(|| format!("decoding `{method}` result from `{}`", self.name))
+        let value = reply.map_err(|error| remote_operation_error(&self.name, method, error))?;
+        decode_operation_result(&self.name, method, value)
     }
 
     /// Spawn the binary and complete the `initialize` handshake.
@@ -366,20 +358,61 @@ impl RemotePm {
     /// be had the PM failed to read it itself.
     async fn plugins(&self, method: &str, params: serde_json::Value) -> Result<PluginListing> {
         let answer: PluginListing<serde_json::Value> = self.call(method, Some(params)).await?;
-        let mut errors = answer.errors;
-        let plugins: Vec<UnvalidatedPlugin> = answer
-            .plugins
-            .into_iter()
-            .filter_map(|plugin| match serde_json::from_value(plugin) {
-                Ok(plugin) => Some(plugin),
-                Err(e) => {
-                    errors.push(format!("a plugin from `{method}` does not decode: {e}"));
-                    None
-                }
-            })
-            .collect();
-        Ok(PluginListing { plugins, errors })
+        Ok(decode_plugin_listing(answer))
     }
+}
+
+fn decode_operation_result<R: serde::de::DeserializeOwned>(
+    name: &str,
+    method: &str,
+    value: serde_json::Value,
+) -> Result<R> {
+    serde_json::from_value(value).map_err(|error| {
+        if source_bearing_method(method) {
+            anyhow::anyhow!("`{name}` answered `{method}` with an invalid result")
+        } else {
+            anyhow::Error::new(error).context(format!("decoding `{method}` result from `{name}`"))
+        }
+    })
+}
+
+fn decode_plugin_listing(answer: PluginListing<serde_json::Value>) -> PluginListing {
+    let mut errors =
+        vec!["package manager reported a plugin error".to_string(); answer.errors.len()];
+    let plugins = answer
+        .plugins
+        .into_iter()
+        .filter_map(|plugin| match serde_json::from_value(plugin) {
+            Ok(plugin) => Some(plugin),
+            Err(_) => {
+                errors.push("package manager returned an invalid plugin entry".to_string());
+                None
+            }
+        })
+        .collect();
+    PluginListing { plugins, errors }
+}
+
+fn remote_operation_error(name: &str, method: &str, error: ResponseError) -> anyhow::Error {
+    if source_bearing_method(method) {
+        anyhow::anyhow!(
+            "`{name}` answered `{method}` with error code {}",
+            error.code
+        )
+    } else {
+        anyhow::anyhow!(
+            "`{name}` answered `{method}` with an error: {} (code {})",
+            error.message,
+            error.code
+        )
+    }
+}
+
+fn source_bearing_method(method: &str) -> bool {
+    matches!(
+        method,
+        protocol::ACTIVE_PLUGINS | protocol::LOAD_PLUGIN | protocol::LIST_DEPS | protocol::FETCH
+    )
 }
 
 /// What a PM answered: a result, or an error it reported on purpose.
@@ -429,8 +462,8 @@ async fn request(
         .await
         .with_context(|| format!("`{method}` timed out after {remaining:?}"))??;
 
-    let response: Response =
-        serde_json::from_str(buf.trim()).with_context(|| format!("malformed response: {buf:?}"))?;
+    let response: Response = serde_json::from_str(buf.trim())
+        .with_context(|| format!("malformed response to `{method}`"))?;
     if response.id != id {
         bail!("response id {} does not match request id {id}", response.id);
     }
@@ -485,7 +518,7 @@ impl PackageManager for RemotePm {
         Ok(names.iter().map(|name| known[name].clone()).collect())
     }
 
-    async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {
+    async fn active_plugins(&self, deps: &[PackageResolution]) -> Result<PluginListing> {
         let params = serde_json::to_value(ActivePluginsParams {
             deps: deps.to_vec(),
         })?;
@@ -494,17 +527,17 @@ impl PackageManager for RemotePm {
 
     async fn load_plugin(
         &self,
-        id: &PackageId,
+        target: &PackageLoadTarget,
         update: UpdateLevel,
-    ) -> Result<Vec<UnvalidatedPlugin>> {
+    ) -> Result<PluginListing> {
         let params = serde_json::to_value(LoadPluginParams {
-            id: id.clone(),
+            target: target.clone(),
             update,
         })?;
-        Ok(self.plugins(protocol::LOAD_PLUGIN, params).await?.plugins)
+        self.plugins(protocol::LOAD_PLUGIN, params).await
     }
 
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
         Ok(self
             .call::<ListDepsResult>(protocol::LIST_DEPS, None)
             .await?
@@ -542,5 +575,68 @@ impl PackageManager for RemotePm {
             .call::<RefreshResult>(protocol::REFRESH, Some(params))
             .await?
             .refreshed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_bearing_operation_errors_do_not_retain_supplier_text() {
+        let recognizable = "registry+https://private.example/secret";
+        let error = remote_operation_error(
+            "cargo",
+            protocol::LOAD_PLUGIN,
+            ResponseError {
+                code: error_code::INTERNAL_ERROR,
+                message: recognizable.to_string(),
+            },
+        );
+
+        assert!(!error.to_string().contains(recognizable));
+        assert!(error.to_string().contains("-32603"));
+    }
+
+    #[test]
+    fn source_bearing_decode_errors_do_not_retain_unknown_values() {
+        let recognizable = "private-registry.example/secret";
+        let value = serde_json::json!({
+            "deps": [{
+                "id": {"pm": "cargo", "name": "widget", "version": "1.0.0"},
+                "source": recognizable,
+                "key": "opaque"
+            }]
+        });
+        let error =
+            match decode_operation_result::<ListDepsResult>("cargo", protocol::LIST_DEPS, value) {
+                Ok(_) => panic!("an unknown source claim must not decode"),
+                Err(error) => error,
+            };
+
+        assert!(!error.to_string().contains(recognizable));
+        assert_eq!(
+            error.to_string(),
+            "`cargo` answered `list_deps` with an invalid result"
+        );
+    }
+
+    #[test]
+    fn plugin_decode_and_supplier_errors_are_projected_to_bounded_categories() {
+        let recognizable = "registry+https://private.example/secret";
+        let listing = decode_plugin_listing(PluginListing {
+            plugins: vec![serde_json::json!({"package": {"key": recognizable}})],
+            errors: vec![recognizable.to_string()],
+        });
+
+        assert!(listing.plugins.is_empty());
+        assert_eq!(
+            listing.errors,
+            [
+                "package manager reported a plugin error",
+                "package manager returned an invalid plugin entry"
+            ]
+        );
+        assert!(!format!("{:?}", listing.errors).contains(recognizable));
     }
 }

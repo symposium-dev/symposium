@@ -568,12 +568,13 @@ pub async fn sync(
     let mut to_install: Vec<(String, String, &Path, Option<&Path>)> = Vec::new();
 
     for entry in &applicable {
-        let name = entry.skill.name().to_string();
-        if seen.insert((name.clone(), entry.origin_hash.clone())) {
+        let name = entry.skill().name().to_string();
+        let origin_hash = entry.origin_hash().to_string();
+        if seen.insert((name.clone(), origin_hash.clone())) {
             to_install.push((
                 name,
-                entry.origin_hash.clone(),
-                &entry.skill.path,
+                origin_hash,
+                &entry.skill().path,
                 entry.agent_plugin_root.as_deref(),
             ));
         }

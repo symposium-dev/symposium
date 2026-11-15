@@ -31,7 +31,7 @@ async fn a_timed_out_remote_pm_stops_its_child_processes() {
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":2,"name":"demo"}}}}\n' "$id"
       ;;
     *'"list_deps"'*)
       sh '{}' &
@@ -57,7 +57,7 @@ done
     std::fs::write(&release, "release").unwrap();
     drop(pm);
     assert!(started.exists(), "the remote PM's worker must start");
-    let error = result.expect_err("the remote PM must time out");
+    let error = result.err().expect("the remote PM must time out");
     assert!(format!("{error:#}").contains("timed out"), "{error:#}");
 
     let observation_deadline = Instant::now() + Duration::from_millis(500);
@@ -102,7 +102,7 @@ while IFS= read -r line; do
       fi
       wait ;;
     *'"initialize"'*)
-      printf '{{"id":%s,"jsonrpc":"2.0","result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id" ;;
+      printf '{{"id":%s,"jsonrpc":"2.0","result":{{"protocol_version":2,"name":"demo"}}}}\n' "$id" ;;
   esac
 done
 "#)).unwrap();
@@ -123,7 +123,7 @@ done
             }
         };
         tokio::select! {
-            result = &mut request => panic!("request unexpectedly finished: {result:?}"),
+            _ = &mut request => panic!("request unexpectedly finished"),
             result = tokio::time::timeout(Duration::from_secs(5), started) => result.unwrap(),
         }
         drop(request);
