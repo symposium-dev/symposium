@@ -67,10 +67,12 @@ message. Pi expands slash inputs after input handlers: appending context directl
 to a template can discard it or change positional/default arguments. The bridge's
 template compatibility tests compare against Pi's real expansion behavior.
 
-On Unix, aborting only `cargo-agents` does not stop its plugin children. The Pi
-bridge owns an isolated process group and tears it down on abort, timeout, or
-output overflow. New child process-group ownership (such as PR #388 proposes)
-must coordinate with this boundary; a nested group escapes the outer group kill.
+On Unix, killing only the Pi bridge's outer process group misses the separate
+groups owned by plugin dispatch and installers. The bridge sets
+`SYMPOSIUM_PI_BRIDGE` and sends SIGTERM so the CLI drops pending async work.
+Each subprocess owner must kill its own group on drop. Keep plugin waits async:
+a blocking poll prevents the signal listener from cancelling dispatch. The
+real-CLI cancellation tests cover nested children that ignore SIGTERM.
 
 ## Antigravity footguns
 

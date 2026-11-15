@@ -17,6 +17,29 @@ use symposium::subcommand_dispatch::dispatch_external;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // The Pi bridge requests cooperative shutdown: dropping CLI work lets
+    // each subprocess owner kill its own group, including nested groups.
+    #[cfg(unix)]
+    if env::var_os("SYMPOSIUM_PI_BRIDGE").is_some() {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                return tokio::select! {
+                    biased;
+                    _ = terminate.recv() => ExitCode::FAILURE,
+                    code = run_cli() => code,
+                };
+            }
+            Err(error) => {
+                eprintln!("could not listen for Pi cancellation: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    run_cli().await
+}
+
+async fn run_cli() -> ExitCode {
     let mut sym = config::Symposium::from_environment();
 
     // When invoked as `cargo agents`, cargo passes "agents" as the first arg.

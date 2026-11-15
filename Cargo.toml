@@ -52,7 +52,7 @@ sha2 = "0.10"
 tar = "0.4"
 tempfile = "3.10"
 symposium-sdk = { version = "0.2", path = "symposium-sdk", features = ["clap"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-std", "io-util", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-std", "io-util", "sync", "time", "signal"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }

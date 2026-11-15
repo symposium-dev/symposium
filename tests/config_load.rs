@@ -2,6 +2,8 @@
 
 use std::fs;
 
+use anyhow::Context;
+
 use serde_json::json;
 use symposium::agents::{Agent, McpScope};
 use symposium::config::{AutoUpdate, Symposium};
@@ -9,6 +11,27 @@ use symposium::hook_schema::{HookAgent, HookEvent};
 use symposium::output::Output;
 use symposium::workspace_state::WorkspaceState;
 use symposium_testlib::{TestMode, with_fixture};
+
+fn find_skill(parent: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    for entry in fs::read_dir(parent).ok()? {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        let dir_name = entry.file_name();
+        let dir_name = dir_name.to_string_lossy();
+        if (dir_name == name || dir_name.starts_with(&format!("{name}-")))
+            && path.join("SKILL.md").is_file()
+        {
+            return Some(path);
+        }
+        if let Some(skill) = find_skill(&path, name) {
+            return Some(skill);
+        }
+    }
+    None
+}
 
 #[tokio::test]
 async fn failed_config_load_preserves_installations_and_recovers_after_repair() {
@@ -47,15 +70,20 @@ async fn failed_config_load_preserves_installations_and_recovers_after_repair() 
                         };
                         let mcp_scope = if scope == "global" { McpScope::User } else { McpScope::Project };
                         let mcp_path = agent.mcp_config_path(mcp_scope, &root, &ctx.sym);
-                        let skill = agent.project_skill_dir(&root, "ws-hello");
+                        // Claude now receives compiled plugins; skills can also
+                        // have origin hashes. Find the installed skill in either layout.
+                        let parent = agent.project_skill_dir(&root, "ws-hello").parent().unwrap().to_path_buf();
+                        let skill = find_skill(&parent, "ws-hello").expect("installed workspace skill");
+                        let installation = skill.ancestors().find(|dir| dir.join(".symposium").is_file())
+                            .expect("managed installation").to_path_buf();
                         let personal = agent.project_skill_dir(&root, "personal");
                         fs::create_dir_all(&personal)?;
                         fs::write(personal.join("SKILL.md"), "user-managed skill")?;
                         let paths = [
                             hook_path.clone(), mcp_path.clone(), skill.join("SKILL.md"),
-                            skill.join(".symposium"), personal.join("SKILL.md"),
+                            installation.join(".symposium"), personal.join("SKILL.md"),
                         ];
-                        let snapshots = paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?;
+                        let snapshots = paths.iter().map(|path| fs::read(path).with_context(|| format!("reading {} for {agent:?}/{scope}", path.display()))).collect::<Result<Vec<_>, _>>()?;
 
                         fs::remove_file(&config_path)?;
                         if let Some(contents) = contents {
@@ -70,7 +98,7 @@ async fn failed_config_load_preserves_installations_and_recovers_after_repair() 
                             let error = ctx.symposium(&["sync"]).await.expect_err(damage);
                             assert!(format!("{error:#}").contains("config.toml"));
                         }
-                        assert!(symposium::sync::register_hooks(&ctx.sym, &Output::quiet()).await.is_err());
+                        assert!(symposium::sync::register_hooks(&ctx.sym, &Output::quiet()).is_err());
                         assert!(ctx.symposium(&["init", "--remove-agent", agent.config_name()]).await.is_err());
                         assert!(ctx.sym.save_config().is_err());
 
