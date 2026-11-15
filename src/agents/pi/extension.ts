@@ -30,21 +30,32 @@ export function runHook(
       return;
     }
     // Do not use a shell: prompts and tool inputs are untrusted text. Unix
-    // children inherit this isolated group, including plugin/install commands.
+    // children normally inherit this group; Symposium also owns nested groups.
     const child = spawn(command, ["hook", "pi", event], {
       cwd, windowsHide: true, detached: process.platform !== "win32",
+      env: { ...process.env, SYMPOSIUM_PI_BRIDGE: "1" },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let failure: string | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const stop = (reason: string) => {
       if (failure) return;
       failure = reason;
-      // Signal once while we own the live leader. Never kill a recorded PID
-      // later, after Node has reaped it and the OS could reuse it.
+      // Signal only while we own the live leader. Never kill a recorded PID
+      // after Node has reaped it and the OS could reuse it.
       if (child.pid && child.exitCode === null && child.signalCode === null) {
         try {
           if (process.platform === "win32") child.kill();
-          else process.kill(-child.pid, "SIGKILL");
+          else {
+            // Let Rust drop its subprocess owners before killing the outer
+            // group. A bounded fallback handles old or unresponsive binaries.
+            child.kill("SIGTERM");
+            killTimer = setTimeout(() => {
+              if (child.exitCode === null && child.signalCode === null) {
+                try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+              }
+            }, 1000);
+          }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
             failure += `; could not stop hook: ${error}`;
@@ -74,6 +85,7 @@ export function runHook(
     child.on("error", error => { failure ??= error.message; });
     child.on("close", (code, exitSignal) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       signal?.removeEventListener("abort", abort);
       if (failure) return fail(failure);
       if (code !== 0) {

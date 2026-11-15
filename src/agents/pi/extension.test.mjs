@@ -360,6 +360,29 @@ test("cancelling a running hook returns without a warning", async (t) => {
   assert.deepEqual(warnings, []);
 });
 
+test("cancellation escalates when the hook ignores SIGTERM", {
+  skip: process.platform === "win32",
+}, async t => {
+  const root = temp(t);
+  writeFileSync(join(root, "hook"), `
+    const fs = require("node:fs");
+    process.on("SIGTERM", () => {});
+    fs.writeFileSync("started", "");
+    setInterval(() => {}, 1000);
+  `);
+  const controller = new AbortController();
+  const pending = runHook("pre-tool-use", {}, root, process.execPath, controller.signal, 5000)
+    .then(value => ({ value }), error => ({ error }));
+  t.after(async () => { controller.abort(); await pending; });
+  const deadline = Date.now() + 3000;
+  while (!existsSync(join(root, "started")) && Date.now() < deadline) await sleep(5);
+  assert.ok(existsSync(join(root, "started")));
+  const started = Date.now();
+  controller.abort();
+  assert.match((await pending).error.message, /aborted/);
+  assert.ok(Date.now() - started < 3000, "SIGKILL fallback must bound cancellation");
+});
+
 test("cancelling one dispatch leaves a concurrent dispatch running", async t => {
   const first = temp(t);
   const second = temp(t);

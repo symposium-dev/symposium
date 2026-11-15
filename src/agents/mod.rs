@@ -194,6 +194,7 @@ impl Agent {
             Agent::Goose => goose_config_dir(sym),
             Agent::Kiro => home.join(".kiro"),
             Agent::OpenCode => xdg_config_dir(sym).join("opencode"),
+            Agent::Pi => pi::agent_dir(sym),
         }
     }
 
@@ -253,9 +254,12 @@ impl Agent {
 
     pub(crate) fn reads_vendor_neutral_skills(&self) -> bool {
         match self {
-            Agent::Antigravity | Agent::Codex | Agent::Copilot | Agent::Goose | Agent::OpenCode => {
-                true
-            }
+            Agent::Antigravity
+            | Agent::Codex
+            | Agent::Copilot
+            | Agent::Goose
+            | Agent::OpenCode
+            | Agent::Pi => true,
             Agent::Claude | Agent::Kiro => false,
         }
     }
@@ -503,7 +507,7 @@ impl Agent {
                 .unwrap_or_else(|| sym.home_dir().to_path_buf())
                 .join(".agents")
                 .join("plugins"),
-            Agent::Kiro | Agent::OpenCode => return None,
+            Agent::Kiro | Agent::OpenCode | Agent::Pi => return None,
         };
         Some(plugin_registration::deliver_copies(
             sym,
@@ -1513,10 +1517,7 @@ mod tests {
                 if agent == Agent::Pi {
                     assert!(!tmp.path().join(hooks).exists(), "{agent:?} {env:?}");
                 } else {
-                    assert!(
-                        !read(hooks).contains("symposium hook"),
-                        "{agent:?} {env:?}"
-                    );
+                    assert!(!read(hooks).contains("symposium hook"), "{agent:?} {env:?}");
                 }
             }
             assert!(!read(mcp).contains("symposium"), "{agent:?} {env:?}");

@@ -32,17 +32,21 @@ hook pi <event>` with JSON on stdin, using `spawn` without a shell. Prompts and
 tool inputs are not shell arguments. Each process has a 10-minute timeout and a
 1 MiB output limit. All events use this timeout because tools install lazily when
 their hook first fires; session-start refresh does not install missing tools.
-On Unix, the bridge starts the CLI in an isolated process group. Cancellation,
-timeout, and stdout/stderr overflow kill that group, including inherited plugin
-and installation children, then wait for the CLI to close. SIGKILL prevents a
-child that ignores SIGTERM from continuing side effects. No delayed cleanup
-signals a saved PID after its leader has exited. Successful hooks are not killed.
-Windows retains host-process cancellation; descendant teardown is not claimed.
+On Unix, the bridge starts the CLI in an isolated process group and sets
+`SYMPOSIUM_PI_BRIDGE=1`. Cancellation, timeout, and stdout/stderr overflow send
+SIGTERM to the CLI. The shared entry point in `src/binary.rs` installs the signal
+listener for both `cargo-agents` and `symposium`. It drops pending work; plugin dispatch uses
+an async wait and a drop guard that kills and reaps its own process group.
+Installers retain their own cancellation guards. This preserves upstream's
+per-plugin deadlines without letting nested process groups escape Pi cancellation,
+including children that ignore SIGTERM.
 
-This ownership must be reconciled with PR #388 before combining the changes:
-its proposed separate plugin process groups would no longer belong to the
-bridge's group. Processes that deliberately detach are not covered by this
-process-group mechanism.
+After one second, an unresponsive CLI's outer group receives SIGKILL. This
+fallback cannot guarantee cleanup of detached groups in older or blocked binaries.
+The timer is cleared on close and never signals a leader Node has already reaped.
+Successful hooks are not killed. Windows retains host-process cancellation;
+descendant teardown is not claimed. Processes that deliberately detach are not
+covered by this process-group mechanism.
 
 ## Event mapping and wire format
 
