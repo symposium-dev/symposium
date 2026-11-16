@@ -95,8 +95,11 @@ Removes the entry in the matching scope: without `--global` the entry recorded
 for the current workspace, with it the unscoped one. A scope mismatch (or no
 entry at all) is an error rather than a silent success. The name is matched
 the way `use` matches it, so either spelling of a crate removes its entry. The
-sync that follows reaps the plugin's installed skills. Outside a workspace,
-`--remove --global` removes what was installed for you.
+sync that follows reaps the plugin's installed skills and unregisters the MCP
+servers symposium registered for it, from your user-level agent files and this
+workspace's, unless a plugin still enabled declares a server of the same name.
+Outside a workspace, `--remove --global` removes what was installed for you,
+MCP servers included.
 
 ## Example
 

@@ -475,6 +475,15 @@ pub struct Synced {
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> Result<Synced> {
+    sync_disabling(sym, ws, update, &[]).await
+}
+
+pub(crate) async fn sync_disabling(
+    sym: &Symposium,
+    ws: &Arc<Workspace>,
+    update: UpdateLevel,
+    disabled: &[plugins::Plugin],
+) -> Result<Synced> {
     ensure_config_readable(sym)?;
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
@@ -824,7 +833,14 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // default), even while the cleanup below is held back. The names come
     // from its manifest, with no predicate evaluated; a name an active plugin
     // still declares stays, since the entry may now be that plugin's.
-    unregister_withdrawn_mcp_servers(sym, &revoked, &active, out);
+    unregister_withdrawn_mcp_servers(sym, &revoked, &active, |_, _| true, out);
+    let in_reach = |agent: Agent, file: &Path| {
+        file.starts_with(&project_root)
+            || file == agent.mcp_config_path(crate::agents::McpScope::User, &project_root, sym)
+    };
+    if !skip_cleanup {
+        unregister_withdrawn_mcp_servers(sym, disabled, &active, in_reach, out);
+    }
 
     // Stale-skill cleanup: scan every agent's skills parent directory (across
     // all known agents, so we also clean up after agents removed from config)
@@ -892,15 +908,7 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
             }
         }
     }
-    unregister_unconfigured_mcp_servers(
-        sym,
-        &agent_names,
-        |agent, file| {
-            file.starts_with(&project_root)
-                || file == agent.mcp_config_path(crate::agents::McpScope::User, &project_root, sym)
-        },
-        out,
-    );
+    unregister_unconfigured_mcp_servers(sym, &agent_names, in_reach, out);
     if !skip_cleanup {
         unregister_user_plugins(sym);
         unregister_project_plugins(sym, &project_root);
@@ -930,6 +938,7 @@ pub(crate) async fn sync_user_plugins(
     sym: &Symposium,
     ws: &Arc<Workspace>,
     update: UpdateLevel,
+    disabled: &[plugins::Plugin],
 ) -> Result<()> {
     ensure_config_readable(sym)?;
     let here = ws.start().context("no directory to resolve from")?;
@@ -981,9 +990,13 @@ pub(crate) async fn sync_user_plugins(
             register_mcp_servers(sym, agent, user, here, &mcp_servers, out);
         }
     }
-    unregister_withdrawn_mcp_servers(sym, &revoked, &active, out);
+    unregister_withdrawn_mcp_servers(sym, &revoked, &active, |_, _| true, out);
     if !skip_cleanup {
         unregister_user_plugins(sym);
+        let user_file = |agent: Agent, file: &Path| {
+            file == agent.mcp_config_path(crate::agents::McpScope::User, here, sym)
+        };
+        unregister_withdrawn_mcp_servers(sym, disabled, &active, user_file, out);
     }
     if !compiled.plugins.is_empty() && !left_out.is_empty() {
         tracing::info!(
@@ -1231,6 +1244,7 @@ fn unregister_withdrawn_mcp_servers(
     sym: &Symposium,
     withdrawn: &[plugins::Plugin],
     active: &[plugins::Plugin],
+    in_reach: impl Fn(Agent, &Path) -> bool,
     out: &Output,
 ) {
     let declared = |plugins: &[plugins::Plugin]| -> BTreeSet<String> {
@@ -1248,7 +1262,9 @@ fn unregister_withdrawn_mcp_servers(
     if !withdrawn.is_empty() {
         unregister_recorded_mcp_servers(
             sym,
-            |_, registration| withdrawn.contains(&registration.name),
+            |agent, registration| {
+                withdrawn.contains(&registration.name) && in_reach(agent, &registration.file)
+            },
             out,
         );
     }

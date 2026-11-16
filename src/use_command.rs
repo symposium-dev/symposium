@@ -65,13 +65,7 @@ async fn use_in(
     // enabled by configuration, so there is nothing to record. The exceptions
     // are a dormant plugin, for which `use` is exactly the wake-up call, and
     // `--global`, which also installs the plugin for the user.
-    let mut registry_plugin = None;
-    for plugin in &registry.plugins {
-        if pms.identity(&plugin.canonical).await? == id {
-            registry_plugin = Some(plugin);
-            break;
-        }
-    }
+    let registry_plugin = registry_plugin_of(pms, &registry.plugins, &id).await?;
     let dormant = registry_plugin.is_some_and(|p| p.manifest.requires_use);
     let already_trusted = registry_plugin.is_some() && !dormant && !global;
     if already_trusted {
@@ -142,7 +136,7 @@ async fn use_in(
     if workspace_root.is_some() {
         crate::sync::sync(sym, deps, update).await?;
     } else {
-        crate::sync::sync_user_plugins(sym, deps, update).await?;
+        crate::sync::sync_user_plugins(sym, deps, update, &[]).await?;
     }
     Ok(())
 }
@@ -164,10 +158,14 @@ pub async fn remove_plugin(
     let workspace_root = deps.root().await.map(Path::to_path_buf);
     let pms = deps.pms();
     let registry = crate::plugins::load_registry(sym).await;
-    let id = pms
-        .identify(&registry.plugins, name, UpdateLevel::Check)
+    let found = pms
+        .find(&registry.plugins, name, UpdateLevel::Check)
         .await
         .ok();
+    let id = match &found {
+        Some(found) => pms.identity(found).await.ok(),
+        None => None,
+    };
 
     let used = std::mem::take(&mut sym.config.plugins.used);
     let before = used.len();
@@ -196,12 +194,37 @@ pub async fn remove_plugin(
         },
     );
 
+    let registry_plugin = match &id {
+        Some(id) => registry_plugin_of(pms, &registry.plugins, id)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let disabled = match (registry_plugin, &found) {
+        (Some(plugin), _) => vec![plugin.clone()],
+        (None, Some(found)) => pms.load_plugin(found, UpdateLevel::None).await,
+        (None, None) => Vec::new(),
+    };
     if workspace_root.is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+        crate::sync::sync_disabling(sym, &deps, update, &disabled).await?;
     } else {
-        crate::sync::sync_user_plugins(sym, &deps, update).await?;
+        crate::sync::sync_user_plugins(sym, &deps, update, &disabled).await?;
     }
     Ok(())
+}
+
+async fn registry_plugin_of<'a>(
+    pms: &PmRegistry,
+    plugins: &'a [Plugin],
+    id: &PackageId,
+) -> Result<Option<&'a Plugin>> {
+    for plugin in plugins {
+        if pms.identity(&plugin.canonical).await? == *id {
+            return Ok(Some(plugin));
+        }
+    }
+    Ok(None)
 }
 
 fn in_scope(entry: &UseEntry, global: bool, workspace_root: Option<&Path>) -> bool {

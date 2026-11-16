@@ -753,6 +753,89 @@ async fn use_global_outside_a_workspace_registers_mcp_servers_for_the_user() {
                 .filter(|path| installed.get(*path) != reinstalled.get(*path))
                 .collect();
             assert!(changed.is_empty(), "the second run changed {changed:#?}");
+
+            ctx.symposium(&["use", "--global", "--remove", "facet-kit"])
+                .await?;
+            for (agent, count) in registrations_of_facet_kit(&ctx) {
+                assert_eq!(count, 0, "{agent}");
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_remove_unregisters_the_mcp_servers_of_the_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0", "workspace-empty0"],
+        async |mut ctx| {
+            let own_entry = project_mcp_entry(&ctx);
+            let mut init = vec!["init", "--hook-scope", "global"];
+            for (agent, _) in user_mcp_files(&ctx) {
+                init.extend(["--add-agent", agent]);
+            }
+            ctx.symposium(&init).await?;
+            fetch_facet_review(&ctx);
+
+            for scope in [&[][..], &["--global"]] {
+                ctx.symposium(&[&["use", "facet-kit"][..], scope].concat())
+                    .await?;
+                for (agent, count) in registrations_of_facet_kit(&ctx) {
+                    assert_eq!(count, 1, "{agent} {scope:?}");
+                }
+                ctx.symposium(&[&["use", "--remove", "facet-kit"][..], scope].concat())
+                    .await?;
+                for (agent, count) in registrations_of_facet_kit(&ctx) {
+                    assert_eq!(count, 0, "{agent} {scope:?}");
+                }
+            }
+            assert_eq!(project_mcp_entry(&ctx), own_entry);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+fn project_mcp_entry(ctx: &TestContext) -> String {
+    let file = ctx.workspace_root.as_ref().unwrap().join(".mcp.json");
+    if !file.exists() {
+        std::fs::write(
+            &file,
+            r#"{"mcpServers":{"facet-kit-server":{"command":"mine"}}}"#,
+        )
+        .unwrap();
+    }
+    std::fs::read_to_string(file).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_remove_unregisters_the_mcp_servers_of_a_nested_registry_entry() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0"],
+        async |mut ctx| {
+            let entry = ctx.sym.config_dir().join("plugins/tools/widget");
+            std::fs::create_dir_all(&entry)?;
+            std::fs::write(
+                entry.join("Symposium.toml"),
+                "name = \"widget\"\n\n[[mcp_servers]]\nname = \"widget-server\"\n\
+                 command = \"/usr/bin/true\"\nargs = []\nenv = []\n",
+            )?;
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+            let claude = ctx.sym.home_dir().join(".claude.json");
+            let registered = || std::fs::read_to_string(&claude).unwrap_or_default();
+
+            ctx.symposium(&["use", "--global", "widget"]).await?;
+            assert!(registered().contains("widget-server"), "{}", registered());
+            ctx.symposium(&["use", "--global", "--remove", "widget"])
+                .await?;
+
+            assert!(!registered().contains("widget-server"), "{}", registered());
             Ok(())
         },
     )
