@@ -303,6 +303,7 @@ pub async fn run(
             // never reaches here at all.
             discovery::prompt_for_consent(sym, &deps, out).await?;
             sync::sync(sym, &deps, update).await?;
+            hook::install_hook_sources(sym, &deps, update).await;
             Ok(())
         }
 

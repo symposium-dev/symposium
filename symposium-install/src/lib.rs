@@ -285,6 +285,18 @@ async fn query_crate_binaries(
     Ok((version, version_info.version.bin_names))
 }
 
+/// Why a cargo source was built from source rather than installed as a
+/// prebuilt binary.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceBuild {
+    /// `cargo-binstall` is not installed.
+    BinstallMissing,
+    /// `cargo binstall` found no prebuilt binary for this platform.
+    NoPrebuiltBinary,
+}
+
 /// Install a crate using cargo binstall (fast) or cargo install (fallback).
 ///
 /// `cache_dir` is `Some` for scoped installs (passed via `--root`) and `None`
@@ -297,7 +309,7 @@ async fn install_cargo_crate(
     cache_dir: Option<PathBuf>,
     git: Option<String>,
     force: bool,
-) -> Result<()> {
+) -> Result<Option<SourceBuild>> {
     use std::fs;
 
     let cache_dir = cache_dir.as_deref();
@@ -328,7 +340,12 @@ async fn install_cargo_crate(
 
     // Try cargo binstall first (faster, uses prebuilt binaries).
     tracing::info!("Attempting cargo binstall for {}", crate_spec);
-    let mut binstall_args: Vec<&str> = vec!["binstall", "--no-confirm"];
+    let mut binstall_args: Vec<&str> = vec![
+        "binstall",
+        "--no-confirm",
+        "--disable-strategies",
+        "compile",
+    ];
     if force {
         binstall_args.push("--force");
     }
@@ -348,28 +365,33 @@ async fn install_cargo_crate(
         _ => None,
     };
 
-    match binstall_result {
+    let source_build = match binstall_result {
         Ok(output) if output.status.success() => {
             tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
             if binary_path.is_none() {
-                return Ok(());
+                return Ok(None);
             }
             if let Some(bin) = binary_path.as_ref()
                 && bin.exists()
             {
-                return Ok(());
+                return Ok(None);
             }
+            SourceBuild::NoPrebuiltBinary
         }
         Ok(output) => {
-            tracing::debug!(
-                "cargo binstall failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::debug!("cargo binstall failed: {}", stderr);
+            if stderr.contains("no such command: `binstall`") {
+                SourceBuild::BinstallMissing
+            } else {
+                SourceBuild::NoPrebuiltBinary
+            }
         }
         Err(e) => {
             tracing::debug!("cargo binstall not available: {}", e);
+            SourceBuild::BinstallMissing
         }
-    }
+    };
 
     tracing::info!("Falling back to cargo install for {}", crate_spec);
     let mut args: Vec<&str> = vec!["install"];
@@ -398,7 +420,7 @@ async fn install_cargo_crate(
     }
 
     tracing::info!("Successfully installed {} via cargo install", crate_spec);
-    Ok(())
+    Ok(Some(source_build))
 }
 
 async fn cargo_output(
@@ -475,6 +497,7 @@ struct AcquiredCargo {
     cache_dir: Option<PathBuf>,
     /// The resolved binary name, when known.
     resolved_executable: Option<String>,
+    built_from_source: Option<SourceBuild>,
 }
 
 /// Acquire a cargo installation: install if missing.
@@ -500,7 +523,7 @@ async fn acquire_cargo(
         let resolved = executable_hint
             .expect("validate_installation enforces `executable` for cargo + global")
             .to_string();
-        install_cargo_crate(
+        let built_from_source = install_cargo_crate(
             ctx,
             &cargo.crate_name,
             cargo.version.as_deref().unwrap_or(""),
@@ -513,6 +536,7 @@ async fn acquire_cargo(
         return Ok(AcquiredCargo {
             cache_dir: None,
             resolved_executable: Some(resolved),
+            built_from_source,
         });
     }
 
@@ -552,10 +576,11 @@ async fn acquire_cargo(
             (None, _) => false,
         };
 
+        let mut built_from_source = None;
         if !probe.exists() || matches!(update, UpdateLevel::Fetch) || sha_changed {
             // `--force` only needed to overwrite an existing install.
             let overwrite = probe.exists();
-            install_cargo_crate(
+            built_from_source = install_cargo_crate(
                 ctx,
                 &cargo.crate_name,
                 cargo.version.as_deref().unwrap_or(""),
@@ -577,6 +602,7 @@ async fn acquire_cargo(
         return Ok(AcquiredCargo {
             cache_dir: Some(cache_dir),
             resolved_executable: Some(resolved),
+            built_from_source,
         });
     }
 
@@ -593,6 +619,7 @@ async fn acquire_cargo(
         return Ok(AcquiredCargo {
             cache_dir: Some(cache_dir),
             resolved_executable: resolved,
+            built_from_source: None,
         });
     }
 
@@ -621,8 +648,9 @@ async fn acquire_cargo(
     // reinstall of the same version.
     let force = matches!(update, UpdateLevel::Fetch);
     let already = probe_path.as_ref().is_some_and(|p| p.exists());
+    let mut built_from_source = None;
     if !already || force {
-        install_cargo_crate(
+        built_from_source = install_cargo_crate(
             ctx,
             &cargo.crate_name,
             &version,
@@ -644,6 +672,7 @@ async fn acquire_cargo(
     Ok(AcquiredCargo {
         cache_dir: Some(cache_dir),
         resolved_executable: resolved,
+        built_from_source,
     })
 }
 
@@ -747,6 +776,8 @@ pub struct AcquiredSource {
     /// Layout discriminator — cargo binaries live under `<base>/bin/`,
     /// github paths live under `<base>/` directly.
     pub kind: AcquiredKind,
+    /// Why this acquisition built a cargo source from source, when it did.
+    pub built_from_source: Option<SourceBuild>,
 }
 
 /// How an [`AcquiredSource`] was obtained.
@@ -819,12 +850,14 @@ pub async fn acquire_source(
                 base: acquired.cache_dir,
                 resolved_executable: acquired.resolved_executable,
                 kind: AcquiredKind::Cargo,
+                built_from_source: acquired.built_from_source,
             })
         }
         Source::Github(g) => Ok(AcquiredSource {
             base: Some(acquire_github(ctx, g, update).await?),
             resolved_executable: None,
             kind: AcquiredKind::Github,
+            built_from_source: None,
         }),
     }
 }
@@ -882,6 +915,17 @@ fn source_is_cached(ctx: &InstallContext, source: &Source, executable_hint: Opti
             .cache_path_for_url(&g.url)
             .is_some_and(|p| p.exists()),
     }
+}
+
+/// Whether `source` belongs in this cache and is not there yet. Always false
+/// for a `global` cargo source, which is installed outside it.
+pub fn source_is_missing(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> bool {
+    !matches!(source, Source::Cargo(cargo) if cargo.global)
+        && !source_is_cached(ctx, source, executable_hint)
 }
 
 /// Whether acquiring `source` failed within the last day and it is still not

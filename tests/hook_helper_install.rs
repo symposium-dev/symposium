@@ -52,6 +52,21 @@ fn installing_then_hanging_cargo(ctx: &TestContext) -> String {
     mock_cargo(ctx, &format!("{INSTALL}{HANG}"))
 }
 
+const NO_BINSTALL: &str = "if [ \"$1\" = binstall ]; then\n\
+                           echo 'error: no such command: `binstall`' >&2\n\
+                           exit 101\n\
+                           fi\n";
+
+const BINSTALL_WITHOUT_PREBUILT: &str = "if [ \"$1\" = binstall ]; then\n\
+                                         case \" $* \" in *' --disable-strategies compile '*)\n\
+                                         echo 'Fallback to cargo-install is disabled' >&2\n\
+                                         exit 94;;\n\
+                                         esac\n\
+                                         shift; set -- install \"$@\"\n\
+                                         fi\n";
+
+const BINSTALL_PREBUILT: &str = "if [ \"$1\" = binstall ]; then shift; set -- install \"$@\"; fi\n";
+
 fn cargo_calls(ctx: &TestContext) -> Vec<String> {
     std::fs::read_to_string(ctx.tempdir.join("cargo-calls"))
         .unwrap_or_default()
@@ -279,6 +294,292 @@ async fn overrun_installs_of_two_sources_of_one_crate_are_each_attempted_once() 
                 started.elapsed()
             );
             assert_eq!(failure_records(&ctx).len(), 2);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn installation_events<F>(f: F) -> Vec<serde_json::Value>
+where
+    F: AsyncFnOnce(),
+{
+    use symposium::report::{ReportLayer, ReportMode};
+    use tracing_subscriber::layer::SubscriberExt;
+
+    symposium_testlib::install_tracing_baseline();
+    let (layer, handle) = ReportLayer::new(ReportMode::Json, tracing::Level::INFO);
+    let subscriber = tracing_subscriber::registry().with(layer);
+    let guard = tracing::subscriber::set_default(subscriber);
+    f().await;
+    drop(guard);
+    handle
+        .drain()
+        .into_iter()
+        .filter(|event| {
+            event["kind"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("installation_"))
+        })
+        .collect()
+}
+
+async fn installation_reports<F>(f: F) -> Vec<String>
+where
+    F: AsyncFnOnce(),
+{
+    installation_events(f)
+        .await
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .map(str::to_string)
+        .collect()
+}
+
+async fn installation_texts<F>(f: F) -> Vec<String>
+where
+    F: AsyncFnOnce(),
+{
+    installation_events(f)
+        .await
+        .into_iter()
+        .map(|event| {
+            serde_json::from_value::<symposium::report::ReportEvent>(event)
+                .unwrap()
+                .format_human()
+        })
+        .collect()
+}
+
+const STARTED: &str = "installing helper for the hooks of plugin helper-kit; without a prebuilt \
+                       binary it is built from source, which can take minutes";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_says_why_a_helper_was_built_from_source_without_cargo_binstall() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo(&ctx, &format!("{NO_BINSTALL}{INSTALL}")));
+
+            let texts = installation_texts(async || {
+                ctx.symposium(&["sync"]).await.unwrap();
+            })
+            .await;
+            assert_eq!(
+                texts,
+                [
+                    STARTED,
+                    "installed helper for the hooks of plugin helper-kit, built from source \
+                     because cargo-binstall is not installed; after `cargo install \
+                     cargo-binstall` plugins that publish prebuilt binaries install in seconds",
+                ]
+            );
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_says_why_a_helper_was_built_from_source_with_cargo_binstall() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo(
+                &ctx,
+                &format!("{BINSTALL_WITHOUT_PREBUILT}{INSTALL}"),
+            ));
+
+            let texts = installation_texts(async || {
+                ctx.symposium(&["sync"]).await.unwrap();
+            })
+            .await;
+            assert_eq!(
+                texts,
+                [
+                    STARTED,
+                    "installed helper for the hooks of plugin helper-kit, built from source \
+                     because the plugin publishes no prebuilt binary for this platform",
+                ]
+            );
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_mentions_no_source_build_when_cargo_binstall_installs_the_helper() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo(&ctx, &format!("{BINSTALL_PREBUILT}{INSTALL}")));
+
+            let texts = installation_texts(async || {
+                ctx.symposium(&["sync"]).await.unwrap();
+            })
+            .await;
+            assert_eq!(
+                texts,
+                [
+                    STARTED,
+                    "installed helper for the hooks of plugin helper-kit"
+                ]
+            );
+            assert_eq!(cargo_calls(&ctx), ["binstall"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_installs_the_helper_and_a_second_sync_does_nothing() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&installing_cargo(&ctx));
+
+            let first = installation_reports(async || {
+                ctx.symposium(&["sync"]).await.unwrap();
+            })
+            .await;
+            assert_eq!(first, ["installation_started", "installation_installed"]);
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+
+            let second = installation_reports(async || {
+                ctx.symposium(&["sync"]).await.unwrap();
+            })
+            .await;
+            assert!(second.is_empty(), "{second:?}");
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+
+            let event = pre_tool_use(&mut ctx).await?;
+            assert!(event.has_context_containing(HELPER_CONTEXT), "{event:#?}");
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_installs_the_helper_a_hook_could_not() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&failing_cargo(&ctx));
+            pre_tool_use(&mut ctx).await?;
+            assert_eq!(failure_records(&ctx).len(), 1);
+
+            ctx.set_mock_cargo(&installing_cargo(&ctx));
+            ctx.symposium(&["sync"]).await?;
+            assert!(failure_records(&ctx).is_empty());
+
+            let event = pre_tool_use(&mut ctx).await?;
+            assert!(event.has_context_containing(HELPER_CONTEXT), "{event:#?}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_reports_a_failed_install_and_succeeds() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&failing_cargo(&ctx));
+
+            let reports = installation_reports(async || {
+                ctx.symposium(&["sync"]).await.unwrap();
+            })
+            .await;
+            assert_eq!(reports, ["installation_started", "installation_failed"]);
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+
+            pre_tool_use(&mut ctx).await?;
+            assert_eq!(
+                cargo_calls(&ctx),
+                ["binstall", "install"],
+                "a hook event started the installer again"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_installs_the_helper_of_the_plugin_it_enables() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            let manifest = ctx
+                .sym
+                .config_dir()
+                .join("plugins/helper-kit/Symposium.toml");
+            let dormant = std::fs::read_to_string(&manifest)?.replace("depends-on = [\"*\"]\n", "");
+            std::fs::write(&manifest, dormant)?;
+            ctx.set_mock_cargo(&installing_cargo(&ctx));
+
+            let reports = installation_reports(async || {
+                ctx.symposium(&["use", "helper-kit"]).await.unwrap();
+            })
+            .await;
+            assert_eq!(reports, ["installation_started", "installation_installed"]);
+
+            let event = pre_tool_use(&mut ctx).await?;
+            assert!(event.has_context_containing(HELPER_CONTEXT), "{event:#?}");
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_global_outside_a_workspace_installs_the_helper() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            std::fs::remove_file(ctx.tempdir.join("Cargo.toml"))?;
+            ctx.workspace_root = None;
+            let manifest = ctx
+                .sym
+                .config_dir()
+                .join("plugins/helper-kit/Symposium.toml");
+            let gated = std::fs::read_to_string(&manifest)?
+                .replace("depends-on = [\"*\"]", "depends-on = [\"tokio\"]");
+            std::fs::write(&manifest, gated)?;
+            ctx.set_mock_cargo(&installing_cargo(&ctx));
+
+            let reports = installation_reports(async || {
+                ctx.symposium(&["use", "--global", "helper-kit"])
+                    .await
+                    .unwrap();
+            })
+            .await;
+            assert_eq!(reports, ["installation_started", "installation_installed"]);
+            assert_eq!(cargo_calls(&ctx), ["binstall", "install"]);
             Ok(())
         },
     )

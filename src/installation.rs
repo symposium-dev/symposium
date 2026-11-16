@@ -13,7 +13,8 @@ use anyhow::{Result, bail};
 use crate::config::Symposium;
 use crate::plugins::Installation;
 use symposium_install::{
-    Runnable, acquire_source, clear_failure, failure_recorded, make_executable, record_failure,
+    Runnable, SourceBuild, acquire_source, clear_failure, failure_recorded, make_executable,
+    record_failure,
 };
 
 /// Run a list of post-install shell commands sequentially. Stops at the first
@@ -80,6 +81,7 @@ pub struct AcquiredInstallation {
     /// What this installation resolves to at spawn time, or `None` when the
     /// installation has nothing runnable (pure setup).
     pub runnable: Option<AcquiredRunnable>,
+    pub built_from_source: Option<SourceBuild>,
 }
 
 /// How `Command::new` should be invoked for an installation that resolved
@@ -126,7 +128,7 @@ pub async fn acquire_installation(
             };
             if deadline.is_some() && failure_recorded(&context, source, exec_choice) {
                 bail!(
-                    "`{}` is not installed: an earlier attempt failed or ran past the hook time budget",
+                    "`{}` is not installed: an earlier attempt failed or ran past the hook time budget; `symposium sync` installs it",
                     installation.name
                 );
             }
@@ -194,6 +196,18 @@ pub async fn acquire_installation(
         name: installation.name.clone(),
         base: acquired.as_ref().and_then(|a| a.base.clone()),
         runnable,
+        built_from_source: acquired.as_ref().and_then(|a| a.built_from_source),
+    })
+}
+
+pub fn source_is_missing(
+    sym: &Symposium,
+    installation: &Installation,
+    override_executable: Option<&str>,
+) -> bool {
+    installation.source.as_ref().is_some_and(|source| {
+        let executable = installation.executable.as_deref().or(override_executable);
+        symposium_install::source_is_missing(&sym.install_context(), source, executable)
     })
 }
 
