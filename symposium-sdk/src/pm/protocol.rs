@@ -24,7 +24,6 @@ use super::{PackageId, PluginInfo, ProjectInfo, UnvalidatedPlugin};
 /// no plugins.
 pub const PROTOCOL_VERSION: u32 = 1;
 
-pub const CANONICAL_NAMES: &str = "canonical_names";
 pub const INITIALIZE: &str = "initialize";
 pub const ACTIVE_PLUGINS: &str = "active_plugins";
 pub const LOAD_PLUGIN: &str = "load_plugin";
@@ -33,6 +32,8 @@ pub const PROJECT_INFO: &str = "project_info";
 pub const SEARCH: &str = "search";
 pub const FETCH: &str = "fetch";
 pub const REFRESH: &str = "refresh";
+pub const CANONICAL_NAME: &str = "canonical_name";
+pub const CANONICAL_NAMES: &str = "canonical_names";
 
 /// Sent once, before any other method.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,13 +57,6 @@ pub struct InitializeResult {
     pub protocol_version: u32,
     /// The name this PM owns: the `pm` component of every id it mints.
     pub name: String,
-}
-
-/// Names to normalize, and their canonical forms in the same order.
-/// Every PM must support this operation; exact-name PMs return the input names.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CanonicalNames {
-    pub names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +101,18 @@ pub struct RefreshParams {
 pub struct RefreshResult {
     /// Whether a remote source was pulled.
     pub refreshed: bool,
+}
+
+/// Names to normalize and their canonical forms, in the same order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalNames {
+    pub names: Vec<String>,
+}
+
+/// The params and the result of the single-name convenience method.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalName {
+    pub name: String,
 }
 
 /// Unvalidated plugins, the result shape of `load_plugin`. `active_plugins`

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
-use crate::config::{Symposium, UseEntry};
+use crate::config::{PluginRef, Symposium, UseEntry};
 use crate::plugins::{Plugin, PluginSource};
 use crate::pm::{PackageId, PluginKind};
 use crate::report::ReportEvent;
@@ -32,12 +32,14 @@ pub async fn try_plugin(
         bail!("plugin name `{name}` cannot be used as a directory name");
     }
     let named = PackageId::any_version(USER_PLUGINS, &name);
-    if sym
-        .config
-        .plugins
-        .is_disabled(&sym.detached_managers(), &named)
-        .await
-    {
+    let pms = sym.detached_managers();
+    sym.config.plugins.validate_disable_managers(&pms)?;
+    let names = crate::discovery::Names::new(&[], &[], &pms);
+    let mut spellings = names.spellings(&sym.config.plugins).await;
+    names
+        .spell(&sym.config.plugins, &named, &mut spellings)
+        .await;
+    if sym.config.plugins.is_disabled(&named, &spellings) {
         bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to try it");
     }
 
@@ -61,8 +63,15 @@ pub async fn try_plugin(
         ),
     }
 
-    let entry = UseEntry::Global(name.clone());
-    if plugin.manifest.requires_use && !sym.config.plugins.used.contains(&entry) {
+    let entry = UseEntry::global(PluginRef::new(USER_PLUGINS, &name));
+    if plugin.manifest.requires_use
+        && !sym
+            .config
+            .plugins
+            .used
+            .iter()
+            .any(|used| used.is_global() && used.plugin.matches(&named))
+    {
         sym.config.plugins.used.push(entry);
         sym.save_config().context("failed to write user config")?;
         crate::state::record_trial_use(sym.config_dir(), &name);
@@ -95,8 +104,10 @@ pub async fn remove_trial(
     let _ = fs::remove_dir(&plugins_dir);
 
     if crate::state::trial_uses(sym.config_dir()).contains(&name) {
-        let entry = UseEntry::Global(name.clone());
-        sym.config.plugins.used.retain(|used| *used != entry);
+        let entry = UseEntry::global(PluginRef::new(USER_PLUGINS, &name));
+        sym.config.plugins.used.retain(|used| {
+            *used != entry && !(used.is_global() && used.plugin.pm.is_none() && used.name() == name)
+        });
         sym.save_config().context("failed to write user config")?;
         crate::state::forget_trial_use(sym.config_dir(), &name);
     }
@@ -265,7 +276,10 @@ fn load_plugin_dir(dir: &Path) -> Result<Plugin> {
 async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) {
     let name = &plugin.manifest.name;
     let mut deps = std::collections::BTreeSet::new();
-    plugin.manifest.predicates.collect_dep_names(&mut deps);
+    plugin
+        .manifest
+        .predicates
+        .collect_dep_names("cargo", &mut deps);
     let deps: Vec<String> = deps.iter().map(|dep| format!("`{dep}`")).collect();
     if deps.is_empty() {
         info(format!(

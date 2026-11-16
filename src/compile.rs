@@ -9,7 +9,7 @@ use serde_json::json;
 use symposium_install::UpdateLevel;
 
 use crate::agents::CompiledPlugin;
-use crate::config::{PluginsConfig, Symposium, UseEntry};
+use crate::config::{PluginRef, PluginsConfig, Symposium};
 use crate::plugins::{Plugin, PluginRegistry};
 use crate::pm::{PackageId, PmRegistry};
 use crate::predicate::PredicateContext;
@@ -30,24 +30,20 @@ async fn globally_used(
     config: &PluginsConfig,
     pms: &PmRegistry,
     plugins: &[Plugin],
-) -> Vec<PackageId> {
+    deps: &[PackageId],
+) -> Vec<PluginRef> {
+    let names = crate::discovery::Names::new(plugins, deps, pms);
     let mut used = Vec::new();
-    for entry in &config.used {
-        if let UseEntry::Global(name) = entry
-            && let Ok(id) = pms.identify(plugins, name, UpdateLevel::None).await
-        {
-            used.push(id);
+    for entry in config.used.iter().filter(|entry| entry.is_global()) {
+        if let Some(plugin) = crate::use_command::resolved_entry(&names, pms, entry).await {
+            used.push(plugin);
         }
     }
     used
 }
 
-async fn installs_globally(pms: &PmRegistry, used: &[PackageId], plugin: &Plugin) -> bool {
-    !plugin.workspace_member
-        && pms
-            .identity(&plugin.canonical)
-            .await
-            .is_ok_and(|id| used.contains(&id))
+fn installs_globally(used: &[PluginRef], plugin: &Plugin) -> bool {
+    !plugin.workspace_member && used.iter().any(|entry| entry.matches(&plugin.canonical))
 }
 
 pub(crate) fn is_plugin_dir(dir: &Path) -> bool {
@@ -72,14 +68,24 @@ pub(crate) async fn global_plugins(
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
 ) -> Vec<PluginSkills> {
-    let used = globally_used(&sym.config.plugins, pms, &registry.plugins).await;
+    let used = globally_used(&sym.config.plugins, pms, &registry.plugins, ctx.deps).await;
+    let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
+    let mut spellings = names.spellings(&sym.config.plugins).await;
     let inactive = registry
         .plugins
         .iter()
         .filter(|plugin| !active.iter().any(|a| a.canonical == plugin.canonical));
     let mut plugins = Vec::new();
     for plugin in active.iter().chain(inactive) {
-        if installs_globally(pms, &used, plugin).await {
+        names
+            .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
+            .await;
+        if installs_globally(&used, plugin)
+            && !sym
+                .config
+                .plugins
+                .is_disabled(&plugin.canonical, &spellings)
+        {
             plugins.push(plugin.clone());
         }
     }

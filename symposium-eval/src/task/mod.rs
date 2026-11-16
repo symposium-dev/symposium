@@ -204,10 +204,6 @@ impl Task {
     }
 
     /// The plugin hooks that must leave a successful record, each with its event.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the runner decides these later in RFD step 4")
-    )]
     pub(crate) fn expected_hooks(&self) -> &[ExpectedHook] {
         &self.expected_hooks
     }

@@ -111,8 +111,8 @@ async fn a_used_crate_that_is_not_a_dependency_can_be_revoked() {
     with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
         ctx.symposium(&["init", "--add-agent", "claude"]).await?;
         ctx.sym.config.plugins.used = vec![
-            UseEntry::Global("crate-x".into()),
-            UseEntry::Global("crate-y".into()),
+            UseEntry::global("crate-x".into()),
+            UseEntry::global("crate-y".into()),
         ];
 
         // Without a revocation the cached crate loads.

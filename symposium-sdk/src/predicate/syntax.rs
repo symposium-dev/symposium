@@ -12,9 +12,11 @@
 //! Two surface syntaxes lower to the same tree:
 //!
 //! - The `depends-on` field uses **dependency-atom** syntax (`serde`,
-//!   `serde>=1.0`, `*`) and lowers to `depends-on(...)` / `depends-on(*)`
-//!   predicates, OR-combined into a single `any(...)` that is appended to the
-//!   same predicate list.
+//!   `serde>=1.0`, `npm:react`, `*`) and lowers to `depends-on(...)` /
+//!   `depends-on(*)` predicates, OR-combined into a single `any(...)` that is
+//!   appended to the same predicate list. An atom may name the package manager
+//!   its dependency comes from (`npm:react`); without one it matches a
+//!   dependency of that name from any package manager.
 //! - The `predicates` field uses **function-call** syntax:
 //!   - `depends-on(<atom>)` — a workspace dependency is present (and its version
 //!     satisfies the optional requirement); `depends-on(*)` matches any workspace.
@@ -47,11 +49,44 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
     "all",
 ];
 
+/// A dependency atom: `[<pm>:]<name>[<req>]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dependency {
+    /// The package manager the dependency comes from, or `None` for any.
+    pub pm: Option<String>,
+    pub name: String,
+    pub version: Option<semver::VersionReq>,
+}
+
+impl Dependency {
+    /// A dependency on `name` from any package manager, at any version.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            pm: None,
+            name: name.into(),
+            version: None,
+        }
+    }
+}
+
+impl std::fmt::Display for Dependency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(pm) = &self.pm {
+            write!(f, "{pm}:")?;
+        }
+        f.write_str(&self.name)?;
+        if let Some(req) = &self.version {
+            write!(f, "{req}")?;
+        }
+        Ok(())
+    }
+}
+
 /// A single predicate node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Predicate {
-    /// `depends-on(<name>)` / `depends-on(<name><req>)` — a workspace dep matches.
-    DependsOn(String, Option<semver::VersionReq>),
+    /// `depends-on(<atom>)`: a workspace dependency matches.
+    DependsOn(Dependency),
     /// `depends-on(*)` / bare `*` — matches any workspace (even with zero deps).
     DependsOnWildcard,
     /// `shell(<command>)` — passes when `sh -c <command>` exits 0.
@@ -80,7 +115,7 @@ impl Predicate {
     /// anywhere (including inside combinators and negations).
     pub fn references_dep(&self, name: &str) -> bool {
         match self {
-            Predicate::DependsOn(n, _) => n == name,
+            Predicate::DependsOn(dep) => dep.name == name,
             Predicate::Not(p) => p.references_dep(name),
             Predicate::Any(v) | Predicate::All(v) => v.iter().any(|p| p.references_dep(name)),
             Predicate::Custom { .. } => false,
@@ -113,20 +148,22 @@ impl Predicate {
         }
     }
 
-    /// Collect every dependency name referenced anywhere in this predicate.
+    /// Collect every dependency name referenced anywhere in this predicate
+    /// that could come from package manager `pm`: an atom naming `pm`, or
+    /// naming none.
     ///
-    /// Used for crates.io existence validation, so it ignores tree position
-    /// (a dependency named under `not(...)` is still validated). Custom
-    /// predicates are a no-op — their names are dynamic.
-    pub fn collect_dep_names(&self, out: &mut std::collections::BTreeSet<String>) {
+    /// Used for existence validation against `pm`'s registry, so it ignores
+    /// tree position (a dependency named under `not(...)` is still validated).
+    /// Custom predicates are a no-op — their names are dynamic.
+    pub fn collect_dep_names(&self, pm: &str, out: &mut std::collections::BTreeSet<String>) {
         match self {
-            Predicate::DependsOn(name, _) => {
-                out.insert(name.clone());
+            Predicate::DependsOn(dep) if dep.pm.as_deref().is_none_or(|p| p == pm) => {
+                out.insert(dep.name.clone());
             }
-            Predicate::Not(p) => p.collect_dep_names(out),
+            Predicate::Not(p) => p.collect_dep_names(pm, out),
             Predicate::Any(v) | Predicate::All(v) => {
                 for p in v {
-                    p.collect_dep_names(out);
+                    p.collect_dep_names(pm, out);
                 }
             }
             Predicate::Custom { .. } => {}
@@ -176,9 +213,9 @@ impl PredicateSet {
         self.predicates.is_empty()
     }
 
-    pub fn collect_dep_names(&self, out: &mut std::collections::BTreeSet<String>) {
+    pub fn collect_dep_names(&self, pm: &str, out: &mut std::collections::BTreeSet<String>) {
         for p in &self.predicates {
-            p.collect_dep_names(out);
+            p.collect_dep_names(pm, out);
         }
     }
 
@@ -214,7 +251,7 @@ enum RawDependsOnList {
 }
 
 impl DependsOnList {
-    /// Parse comma-separated dependency atoms (`serde, tokio>=1.0, *`).
+    /// Parse comma-separated dependency atoms (`serde, tokio>=1.0, npm:react, *`).
     ///
     /// Commas inside balanced parentheses are preserved so that custom
     /// predicates like `battery_pack(a, b)` are not split incorrectly.
@@ -260,8 +297,7 @@ impl serde::Serialize for DependsOnList {
 /// panicking.
 fn dep_atom_string(p: &Predicate) -> String {
     match p {
-        Predicate::DependsOn(name, None) => name.clone(),
-        Predicate::DependsOn(name, Some(req)) => format!("{name}{req}"),
+        Predicate::DependsOn(dep) => dep.to_string(),
         Predicate::DependsOnWildcard => "*".to_string(),
         other => other.to_string(),
     }
@@ -415,7 +451,7 @@ fn split_top_level(input: &str) -> Vec<String> {
     out
 }
 
-// --- dependency-atom parsing (`serde`, `serde>=1.0`, `*`) ---
+// --- dependency-atom parsing (`serde`, `serde>=1.0`, `npm:react`, `*`) ---
 
 /// Parse a single dependency atom into a `DependsOn` / `DependsOnWildcard`
 /// predicate.
@@ -464,18 +500,30 @@ impl<'a> AtomParser<'a> {
         self.skip_whitespace();
         let start = self.pos;
 
-        // Consume dependency name: [a-zA-Z0-9_-]+
+        // Consume `[<pm>:]<name>`, each [a-zA-Z0-9_-]+
         while self.pos < self.input.len() {
             let c = self.input.as_bytes()[self.pos];
-            if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' {
+            if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b':' {
                 self.pos += 1;
             } else {
                 break;
             }
         }
 
-        let name = &self.input[start..self.pos];
-        if name.is_empty() {
+        let atom = &self.input[start..self.pos];
+        let (pm, name) = match atom.split_once(':') {
+            Some((pm, name)) => (Some(pm), name),
+            None => (None, atom),
+        };
+        if let Some(pm) = pm
+            && (pm.is_empty()
+                || !pm
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'))
+        {
+            bail!("{pm:?} in {atom:?} is not a package manager name");
+        }
+        if name.is_empty() || name.contains(':') {
             bail!(
                 "expected dependency name at position {}: {:?}",
                 start,
@@ -523,7 +571,11 @@ impl<'a> AtomParser<'a> {
             None
         };
 
-        Ok(Predicate::DependsOn(name.to_string(), version_req))
+        Ok(Predicate::DependsOn(Dependency {
+            pm: pm.map(str::to_string),
+            name: name.to_string(),
+            version: version_req,
+        }))
     }
 }
 
@@ -559,8 +611,7 @@ impl<'de> serde::Deserialize<'de> for PredicateSet {
 impl std::fmt::Display for Predicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Predicate::DependsOn(name, None) => write!(f, "depends-on({name})"),
-            Predicate::DependsOn(name, Some(req)) => write!(f, "depends-on({name}{req})"),
+            Predicate::DependsOn(dep) => write!(f, "depends-on({dep})"),
             Predicate::DependsOnWildcard => write!(f, "depends-on(*)"),
             Predicate::Shell(cmd) => write!(f, "shell({cmd})"),
             Predicate::PathExists(arg) => write!(f, "path_exists({arg})"),
@@ -592,6 +643,7 @@ mod tests {
         for input in [
             "depends-on(serde)",
             "depends-on(serde>=1.0.0)",
+            "depends-on(npm:react^18)",
             "depends-on(*)",
             "shell(which cargo-nextest)",
             "path_exists(build.rs)",
@@ -625,6 +677,28 @@ mod tests {
     #[test]
     fn depends_on_accepts_a_bare_string() {
         let list: DependsOnList = serde_json::from_str(r#""serde""#).unwrap();
-        assert_eq!(list.0, vec![Predicate::DependsOn("serde".into(), None)]);
+        assert_eq!(
+            list.0,
+            vec![Predicate::DependsOn(Dependency::named("serde"))]
+        );
+    }
+
+    /// An atom may name its package manager, before a `:`.
+    #[test]
+    fn an_atom_may_name_its_package_manager() {
+        let dep = |atom: &str| match parse_dep_atom(atom).unwrap() {
+            Predicate::DependsOn(dep) => dep,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(dep("serde").pm, None);
+        let react = dep("npm:react>=18");
+        assert_eq!(react.pm.as_deref(), Some("npm"));
+        assert_eq!(react.name, "react");
+        assert!(react.version.is_some());
+
+        // A `:` with nothing on either side, or more than one.
+        assert!(parse_dep_atom(":serde").is_err());
+        assert!(parse_dep_atom("npm:").is_err());
+        assert!(parse_dep_atom("npm:a:b").is_err());
     }
 }

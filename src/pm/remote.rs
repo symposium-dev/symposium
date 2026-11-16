@@ -174,7 +174,8 @@ pub struct RemotePm {
     /// in flight, so a request abandoned midway leaves the PM marked unusable
     /// rather than a connection whose next read is the abandoned answer.
     state: Mutex<Option<Result<Connection, String>>>,
-    names: Mutex<BTreeMap<String, String>>,
+    /// The PM's answers to batched normalization requests, reused per connection.
+    canonical: std::sync::Mutex<BTreeMap<String, String>>,
 }
 
 impl RemotePm {
@@ -183,7 +184,7 @@ impl RemotePm {
             name: name.into(),
             command,
             state: Mutex::new(None),
-            names: Mutex::new(BTreeMap::new()),
+            canonical: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -446,29 +447,42 @@ impl PackageManager for RemotePm {
         &self.name
     }
 
+    async fn canonical_name(&self, name: &str) -> Result<String> {
+        Ok(self.canonical_names(&[name.to_string()]).await?.remove(0))
+    }
+
     async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
-        let mut cache = self.names.lock().await;
-        let missing: Vec<_> = names
-            .iter()
-            .filter(|name| !cache.contains_key(*name))
-            .cloned()
-            .collect();
+        let missing: Vec<String> = {
+            let known = self.canonical.lock().unwrap();
+            names
+                .iter()
+                .filter(|name| !known.contains_key(*name))
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
         if !missing.is_empty() {
-            let answer: CanonicalNames = self
-                .call(
-                    protocol::CANONICAL_NAMES,
-                    Some(serde_json::to_value(CanonicalNames {
-                        names: missing.clone(),
-                    })?),
-                )
-                .await?;
+            let params = serde_json::to_value(CanonicalNames {
+                names: missing.clone(),
+            })?;
+            let canonical = self
+                .call::<CanonicalNames>(protocol::CANONICAL_NAMES, Some(params))
+                .await?
+                .names;
             anyhow::ensure!(
-                answer.names.len() == missing.len(),
-                "invalid canonical_names response length"
+                canonical.len() == missing.len(),
+                "canonical_names returned {} names for {} inputs",
+                canonical.len(),
+                missing.len()
             );
-            cache.extend(missing.into_iter().zip(answer.names));
+            self.canonical
+                .lock()
+                .unwrap()
+                .extend(missing.into_iter().zip(canonical));
         }
-        Ok(names.iter().map(|name| cache[name].clone()).collect())
+        let known = self.canonical.lock().unwrap();
+        Ok(names.iter().map(|name| known[name].clone()).collect())
     }
 
     async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {

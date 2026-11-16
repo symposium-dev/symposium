@@ -224,17 +224,23 @@ pub trait PackageManager: Send + Sync {
     /// `name` in the form in which two of this PM's names for the same package
     /// compare equal. Exact unless the ecosystem says otherwise: cargo treats
     /// `widget-lib` and `widget_lib` as one crate.
-    fn canonical_name(&self, name: &str) -> String {
-        name.to_string()
+    ///
+    /// PMs should return canonical names in their ids. Lookup compares exact
+    /// ids first, then normalizes user input. A PM returning a consistent
+    /// display spelling can still be matched through batched normalization.
+    async fn canonical_name(&self, name: &str) -> Result<String> {
+        Ok(name.to_string())
     }
 
-    /// Normalize a batch of names under this PM's rules, preserving order and
-    /// length. Remote implementations ask their process; failures must never
-    /// be interpreted as names comparing unequal (which could bypass disable).
-    /// Names need not refer to installed or existing packages. Normalization
-    /// must be idempotent and stable for the PM's lifetime so clients may cache it.
+    /// Normalize a batch in input order. Remote clients use the existing
+    /// `canonical_names` wire method so comparison does not need one round
+    /// trip per dependency. An implementation may override this for bulk work.
     async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
-        Ok(names.iter().map(|name| self.canonical_name(name)).collect())
+        let mut canonical = Vec::with_capacity(names.len());
+        for name in names {
+            canonical.push(self.canonical_name(name).await?);
+        }
+        Ok(canonical)
     }
 
     /// The plugins this PM activates for the workspace's dependency set. A

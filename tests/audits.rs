@@ -121,7 +121,7 @@ fn grants() -> Vec<Grant> {
             sym.config.plugins.auto_enable = vec!["crate-d".into()];
         }),
         ("use", |sym| {
-            sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            sym.config.plugins.used = vec![UseEntry::global("crate-d".into())];
         }),
         ("none", |_| {}),
     ]
@@ -352,7 +352,7 @@ async fn the_session_start_hint_says_whether_a_candidate_is_audited() {
             .expect("session-start should produce additionalContext");
         assert!(
             context.contains(
-                "not enabled yet: crate-d (audited by the `symposium-audits` list). \
+                "not enabled yet: cargo:crate-d (audited by the `symposium-audits` list). \
                  They stay off until the user consents, audited or not"
             ),
             "{context}"
@@ -501,7 +501,7 @@ async fn a_revocation_removes_installed_skills_even_when_a_registry_is_unreadabl
         with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             let skills = skill_dirs(&ctx);
-            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            ctx.sym.config.plugins.used = vec![UseEntry::global("crate-d".into())];
             ctx.symposium(&["sync"]).await?;
             assert_eq!(installed(&skills, "d-guidance").len(), 1);
 
@@ -584,7 +584,7 @@ async fn retiring_a_revoked_crate_runs_none_of_its_predicates() {
                     1,
                 ),
             )?;
-            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            ctx.sym.config.plugins.used = vec![UseEntry::global("crate-d".into())];
             ctx.symposium(&["sync"]).await?;
             assert_eq!(installed(&skills, "d-guidance").len(), 1);
             // The predicates do run while the crate is active: the markers
@@ -635,7 +635,7 @@ async fn a_revocation_unregisters_the_crates_mcp_servers_at_user_scope() {
                 "[[mcp_servers]]\nname = \"d-server\"\ncommand = \"/usr/bin/true\"\n\
                  args = []\nenv = []\n",
             )?;
-            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            ctx.sym.config.plugins.used = vec![UseEntry::global("crate-d".into())];
             ctx.symposium(&["sync"]).await?;
 
             let file = ctx.sym.home_dir().join(".claude.json");
@@ -742,7 +742,7 @@ async fn content_in_the_list_is_never_loaded_as_a_plugin() {
     with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
         ctx.symposium(&["init", "--add-agent", "claude"]).await?;
         let skills = skill_dirs(&ctx);
-        ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+        ctx.sym.config.plugins.used = vec![UseEntry::global("crate-d".into())];
         write_audits(
             &mut ctx.sym,
             "crate-d",
