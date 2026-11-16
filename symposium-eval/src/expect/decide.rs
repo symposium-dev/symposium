@@ -14,7 +14,7 @@ use super::installed::{self, SkillInstall};
 use super::log::{CallEvidence, Counted};
 use super::sync::{self, SyncEvidence};
 use super::{SkillUse, Verdict, hooks, trace};
-use crate::client::{HookEvent, HookEvidence, ToolActivity};
+use crate::client::{HookEvent, HookEvidence, InstalledSkill, ToolActivity};
 use crate::run::client::Client;
 use crate::run::{Configuration, Trial};
 use crate::task::{ExpectedHook, SkillName, Task};
@@ -162,6 +162,20 @@ fn skills_dir(trial: &Trial, client: Client) -> PathBuf {
     trial.project().join(client.skill_dir())
 }
 
+/// Where `client` would install each skill `task` names, for the adapter to look for its
+/// loads. A trial starts with no skills, and each name has one provider, so sync installs
+/// it under its own name.
+pub(crate) fn installed_skills(trial: &Trial, client: Client, task: &Task) -> Vec<InstalledSkill> {
+    let skills = skills_dir(trial, client);
+    task.expected_skills()
+        .names()
+        .map(|name| InstalledSkill {
+            name: name.clone(),
+            skill_md: skills.join(name.as_str()).join("SKILL.md"),
+        })
+        .collect()
+}
+
 /// Decides each expectation in `facts`, with the concerns `outside` raises about its
 /// evidence.
 pub(crate) fn decide(
@@ -248,13 +262,12 @@ mod tests {
 
     use super::*;
     use crate::client::{FileMutation, HookRun, HookRuns, ObservedPath, ToolResult};
-    use crate::evals::Evals;
     use crate::expect::config::{Change, Root};
     use crate::expect::crosscheck::Reason;
     use crate::expect::installed::{InstallAssertion, InstallEvidence};
     use crate::run::setup::SYMPOSIUM_CONFIG;
     use crate::run::test_support::{self, Host};
-    use crate::task::{HookName, TaskName};
+    use crate::task::HookName;
 
     const OBSERVED: &[HookEvent] = &[HookEvent::SessionStart, HookEvent::Stop];
 
@@ -522,11 +535,11 @@ mod tests {
         use crate::expect::config::Snapshot;
 
         let host = Host::new();
-        let evals = Evals::in_repository();
-        let task = Task::load(&evals, &TaskName::new("formatting").unwrap()).unwrap();
-        let trial = host
-            .batch()
-            .create_trial(1, Configuration::Symposium, &evals, &task)
+        let batch = host.batch();
+        let inputs = test_support::inputs(&batch, "formatting");
+        let task = inputs.task();
+        let trial = batch
+            .create_trial(1, Configuration::Symposium, &inputs)
             .unwrap();
         let snapshot = Snapshot::take(&trial.home(), &trial.project(), Client::ClaudeCode);
         let settings = trial.project().join(".claude/settings.local.json");
@@ -555,7 +568,7 @@ mod tests {
 
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../evals/plugins/format-on-stop/skills/rust-formatting");
-        let facts = gather(symposium(&trial), Client::ClaudeCode, &task, |_| {
+        let facts = gather(symposium(&trial), Client::ClaudeCode, task, |_| {
             Some(source.clone())
         });
         assert_eq!(facts.installs[0].evidence, InstallEvidence::Matching);
@@ -570,13 +583,37 @@ mod tests {
     }
 
     #[test]
+    fn each_named_skill_is_looked_for_where_sync_installs_it() {
+        let host = Host::new();
+        let batch = host.batch();
+        let inputs = test_support::inputs(&batch, "formatting");
+        let task = inputs.task();
+        let trial = batch
+            .create_trial(1, Configuration::Symposium, &inputs)
+            .unwrap();
+
+        let skills = installed_skills(&trial, Client::ClaudeCode, task);
+
+        let skill_md = [".claude", "skills", "rust-formatting", "SKILL.md"]
+            .iter()
+            .fold(trial.project(), |path, part| path.join(part));
+        assert_eq!(
+            skills,
+            [InstalledSkill {
+                name: SkillName::new("rust-formatting").unwrap(),
+                skill_md,
+            }]
+        );
+    }
+
+    #[test]
     fn a_stop_hook_is_gathered_by_its_first_record() {
         let host = Host::new();
-        let evals = Evals::in_repository();
-        let task = Task::load(&evals, &TaskName::new("formatting").unwrap()).unwrap();
-        let trial = host
-            .batch()
-            .create_trial(1, Configuration::Symposium, &evals, &task)
+        let batch = host.batch();
+        let inputs = test_support::inputs(&batch, "formatting");
+        let task = inputs.task();
+        let trial = batch
+            .create_trial(1, Configuration::Symposium, &inputs)
             .unwrap();
         let record = |exit_code: u8| {
             serde_json::json!({ "hook": "format-on-stop", "exit_code": exit_code }).to_string()
@@ -587,7 +624,7 @@ mod tests {
         )
         .unwrap();
 
-        let facts = gather(symposium(&trial), Client::ClaudeCode, &task, |_| None);
+        let facts = gather(symposium(&trial), Client::ClaudeCode, task, |_| None);
 
         assert_eq!(facts.hooks[0].hook.event, HookEvent::Stop);
         assert_eq!(facts.hooks[0].evidence, CallEvidence::Failed);

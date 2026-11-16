@@ -13,10 +13,12 @@
 mod checks;
 mod error;
 mod hooks;
+mod manifest;
 mod name;
 mod pattern;
 mod protected;
 mod schema;
+mod skills;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -34,6 +36,7 @@ pub(crate) use name::{
 };
 pub(crate) use pattern::EditablePattern;
 pub(crate) use protected::is_protected;
+pub(crate) use skills::SkillSource;
 
 use crate::evals::Evals;
 use crate::tree::{self, EntryKind};
@@ -64,15 +67,12 @@ pub(crate) struct Task {
     checks: Vec<CheckName>,
     expected_hooks: Vec<ExpectedHook>,
     expected_skills: SkillExpectations,
+    skill_sources: Vec<SkillSource>,
 }
 
 /// The four skill lists with `used` resolved; no skill is in two lists that contradict
 /// each other.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the runner reads these later in RFD step 4")
-)]
 pub(crate) struct SkillExpectations {
     installed: Vec<SkillName>,
     not_installed: Vec<SkillName>,
@@ -108,6 +108,21 @@ impl SkillExpectations {
     /// Skills the agent must not load.
     pub(crate) fn not_used(&self) -> &[SkillName] {
         &self.not_used
+    }
+
+    /// Every skill the lists name, once each, in list order.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &SkillName> {
+        let lists = [
+            &self.installed,
+            &self.not_installed,
+            &self.used,
+            &self.not_used,
+        ];
+        let mut seen = BTreeSet::new();
+        lists
+            .into_iter()
+            .flatten()
+            .filter(move |skill| seen.insert(*skill))
     }
 
     /// Expectations that only assert use.
@@ -176,6 +191,18 @@ impl Task {
         &self.expected_skills
     }
 
+    /// The directory in `evals/` that provides `skill`, when one does.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the runner decides these later in RFD step 4")
+    )]
+    pub(crate) fn skill_source(&self, skill: &SkillName) -> Option<&Path> {
+        self.skill_sources
+            .iter()
+            .find(|source| source.name == *skill)
+            .map(|source| source.dir.as_path())
+    }
+
     /// The plugin hooks that must leave a successful record, each with its event.
     #[cfg_attr(
         not(test),
@@ -211,8 +238,15 @@ impl Task {
         errors.extend(duplicates("fixtures", &raw.fixtures));
         errors.extend(duplicates("editable", &editable));
         errors.extend(duplicates("hooks", &raw.expected.hooks));
-        let expected_hooks = hooks::resolve(evals, &raw.plugins, &raw.expected.hooks, &mut errors);
         let expected_skills = resolve_skills(raw.expected.skills, &mut errors);
+        let (expected_hooks, skill_sources) = match manifest::read(evals, &raw.plugins, &mut errors)
+        {
+            Some(plugins) => (
+                hooks::resolve(&plugins, &raw.expected.hooks, &mut errors),
+                skills::resolve(&plugins, &expected_skills, &mut errors),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
         if !errors.is_empty() {
             return Err(TaskErrors(errors));
         }
@@ -229,6 +263,7 @@ impl Task {
             checks,
             expected_hooks,
             expected_skills,
+            skill_sources,
         })
     }
 
@@ -493,11 +528,13 @@ mod tests {
             r#"
             kind = "regression"
             prompt = "Add a function."
+            plugins = ["provider"]
             [expected.skills]
             installed = ["first-skill", "second-skill"]
             not_used = ["second-skill"]
             "#,
         );
+        provide(&evals, &["first-skill", "second-skill"]);
 
         let task = load_demo(&evals).unwrap();
 
@@ -510,11 +547,13 @@ mod tests {
             r#"
             kind = "capability"
             prompt = "Add a function."
+            plugins = ["provider"]
             [expected.skills]
             installed = ["first-skill"]
             used = []
             "#,
         );
+        provide(&evals, &["first-skill"]);
 
         let task = load_demo(&evals).unwrap();
 
@@ -563,6 +602,9 @@ mod tests {
                 "skill `a` is in both `installed` and `not_installed`",
                 "skill `c` is in both `used` and `not_used`",
                 "skill `b` is in both `used` and `not_installed`",
+                "expected skill `a` is not provided by any of the task's plugins",
+                "expected skill `b` is not provided by any of the task's plugins",
+                "expected skill `c` is not provided by any of the task's plugins",
             ]
         );
     }
@@ -591,10 +633,314 @@ mod tests {
                 "`plugins` lists `p` more than once",
                 "`editable` lists `src/**` more than once",
                 "`hooks` lists `on-stop` more than once",
-                "expected hook `on-stop` is not declared by any of the task's plugins",
+                // Plugin `p` is missing, so nothing is concluded about what it declares.
                 "`installed` lists `a` more than once",
             ]
         );
+    }
+
+    fn skill_md(name: &str) -> String {
+        format!("---\nname: {name}\ndescription: Use it.\n---\n")
+    }
+
+    const SKILLS: &str = "[[skills]]\nsource.path = \"skills\"\n";
+
+    /// Writes `files`, each a `/`-joined path under `evals/plugins/` and its contents.
+    fn write_plugins<P: AsRef<str>>(evals: &Evals, files: &[(P, String)]) {
+        let any = evals.plugin_dir(&PluginName::new("any").unwrap());
+        let plugins = any.parent().unwrap();
+        for (path, contents) in files {
+            let path = plugins.join(path.as_ref());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+    }
+
+    /// Plugin `provider`, whose `skills/` holds a skill for each of `names`.
+    fn provide(evals: &Evals, names: &[&str]) {
+        let mut files = vec![("provider/Symposium.toml".to_owned(), SKILLS.to_owned())];
+        for name in names {
+            files.push((format!("provider/skills/{name}/SKILL.md"), skill_md(name)));
+        }
+        write_plugins(evals, &files);
+    }
+
+    /// The `demo` task with `plugins` and the `[expected.skills]` body `skills`, after
+    /// writing `files` under `evals/plugins/`.
+    fn expecting_skills(
+        plugins: &[&str],
+        skills: &str,
+        files: &[(&str, String)],
+    ) -> (TempDir, Result<Task, TaskErrors>) {
+        let names: Vec<_> = plugins.iter().map(|name| format!("\"{name}\"")).collect();
+        let (root, evals) = evals_with_task(&format!(
+            "kind = \"regression\"\nprompt = \"x\"\nplugins = [{}]\n[expected.skills]\n{skills}\n",
+            names.join(", ")
+        ));
+        write_plugins(&evals, files);
+        let task = load_demo(&evals);
+        (root, task)
+    }
+
+    fn skill_name(name: &str) -> SkillName {
+        SkillName::new(name).unwrap()
+    }
+
+    /// `relative`, written with `/`, under `root`.
+    fn under(root: &TempDir, relative: &str) -> PathBuf {
+        relative
+            .split('/')
+            .fold(root.path().to_owned(), |path, part| path.join(part))
+    }
+
+    #[test]
+    fn an_expected_skill_is_provided_by_the_skill_md_its_name_is_in() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            // The frontmatter names the skill, not its directory.
+            ("first/skills/folder/SKILL.md", skill_md("named-skill")),
+        ];
+        let (root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+
+        let source = task
+            .unwrap()
+            .skill_source(&skill_name("named-skill"))
+            .map(Path::to_owned);
+
+        assert_eq!(source, Some(under(&root, "plugins/first/skills/folder")));
+    }
+
+    #[test]
+    fn a_plugin_without_a_manifest_provides_the_skill_at_its_root() {
+        let files = [("bare/SKILL.md", skill_md("bare-skill"))];
+        let (root, task) = expecting_skills(&["bare"], r#"installed = ["bare-skill"]"#, &files);
+
+        let task = task.unwrap();
+
+        assert_eq!(
+            task.skill_source(&skill_name("bare-skill")),
+            Some(under(&root, "plugins/bare").as_path())
+        );
+    }
+
+    #[test]
+    fn a_skill_inside_another_or_inside_an_installed_copy_provides_nothing() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/skills/outer/SKILL.md", skill_md("outer")),
+            ("first/skills/outer/inner/SKILL.md", skill_md("inner")),
+            ("first/skills/copy/.symposium", String::new()),
+            ("first/skills/copy/SKILL.md", skill_md("copied")),
+        ];
+        let (_root, task) = expecting_skills(
+            &["first"],
+            r#"installed = ["outer", "inner", "copied"]"#,
+            &files,
+        );
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                "expected skill `inner` is not provided by any of the task's plugins",
+                "expected skill `copied` is not provided by any of the task's plugins",
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_skill_that_must_reach_the_agent_needs_a_provider() {
+        let (_root, task) = expecting_skills(
+            &[],
+            r#"installed = []
+            not_installed = ["absent"]
+            used = ["unused"]
+            not_used = ["absent"]"#,
+            &[],
+        );
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            ["expected skill `unused` is not provided by any of the task's plugins"]
+        );
+    }
+
+    #[test]
+    fn a_skill_two_sources_provide_is_ambiguous_wherever_it_is_listed() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/skills/twice/SKILL.md", skill_md("twice")),
+            ("second/SKILL.md", skill_md("twice")),
+        ];
+        for list in ["installed", "not_installed"] {
+            let (root, task) = expecting_skills(
+                &["first", "second"],
+                &format!(r#"{list} = ["twice"]"#),
+                &files,
+            );
+
+            assert_eq!(
+                messages(&task.unwrap_err()),
+                [format!(
+                    "expected skill `twice` is provided by both `{}` and `{}`",
+                    under(&root, "plugins/first/skills/twice").display(),
+                    under(&root, "plugins/second").display()
+                )],
+                "{list}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_skill_source_must_be_a_path_inside_the_plugin() {
+        let manifest = concat!(
+            "[[skills]]\nsource.git = \"https://example.com/skills\"\n",
+            "[[skills]]\nsource.path = \"../elsewhere\"\n",
+            "[[skills]]\nsource.path = \"missing\"\n",
+        );
+        let files = [("first/Symposium.toml", manifest.to_owned())];
+        let (_root, task) = expecting_skills(&["first"], "installed = []", &files);
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                "a `[[skills]]` group in plugin `first` needs a `source.path`, the only source an offline trial can use",
+                "skill source `../elsewhere` in plugin `first` leaves the plugin, which is all a trial copies",
+                "skill source `missing` in plugin `first` is not a directory in it",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_skill_symposium_would_not_load_is_an_error() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            // Named, so it would match, but Symposium needs a description too.
+            (
+                "first/skills/undescribed/SKILL.md",
+                "---\nname: undescribed\n---\n".to_owned(),
+            ),
+        ];
+        let (root, task) = expecting_skills(&["first"], r#"installed = ["undescribed"]"#, &files);
+        let path = under(&root, "plugins/first/skills/undescribed/SKILL.md");
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                format!(
+                    "`{}` in plugin `first` would not load: its frontmatter has no `description`",
+                    path.display()
+                ),
+                "expected skill `undescribed` is not provided by any of the task's plugins"
+                    .to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_skill_md_reached_through_two_groups_is_one_provider() {
+        let manifest = format!(
+            "{SKILLS}[[skills]]\nsource.path = \"./skills\"\n[[skills]]\nsource.path = \".\"\n"
+        );
+        let files = [
+            ("first/Symposium.toml", manifest),
+            ("first/skills/shared/SKILL.md", skill_md("shared")),
+        ];
+        let (root, task) = expecting_skills(&["first"], r#"installed = ["shared"]"#, &files);
+
+        assert_eq!(
+            task.unwrap().skill_source(&skill_name("shared")),
+            Some(under(&root, "plugins/first/skills/shared").as_path())
+        );
+    }
+
+    #[test]
+    fn a_directory_named_like_the_marker_hides_its_skills_too() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/skills/copy/.symposium/kept", String::new()),
+            ("first/skills/copy/SKILL.md", skill_md("copied")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["copied"]"#, &files);
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            ["expected skill `copied` is not provided by any of the task's plugins"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_anywhere_in_a_plugin_is_an_error() {
+        use std::os::unix::fs::symlink;
+
+        let files = [
+            ("real/skills/linked/SKILL.md", skill_md("linked")),
+            ("real/run.sh", String::new()),
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("second/Symposium.toml", String::new()),
+            ("second/skills/kept/SKILL.md", skill_md("kept")),
+        ];
+        let (root, _) = expecting_skills(&["first", "second", "bare"], "installed = []", &files);
+        let plugins = under(&root, "plugins");
+        // A source root, a file outside any source, and a bare plugin's `SKILL.md`:
+        // `copy_tree` refuses each when creating a trial.
+        symlink(plugins.join("real/skills"), plugins.join("first/skills")).unwrap();
+        fs::create_dir_all(plugins.join("second/scripts")).unwrap();
+        symlink(
+            plugins.join("real/run.sh"),
+            plugins.join("second/scripts/run.sh"),
+        )
+        .unwrap();
+        fs::create_dir_all(plugins.join("bare")).unwrap();
+        symlink(
+            plugins.join("real/skills/linked/SKILL.md"),
+            plugins.join("bare/SKILL.md"),
+        )
+        .unwrap();
+
+        let task = load_demo(&Evals::new(root.path()));
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                "plugin `first` holds a symlink at `skills`, which a trial cannot copy",
+                "plugin `second` holds a symlink at `scripts/run.sh`, which a trial cannot copy",
+                "plugin `bare` holds a symlink at `SKILL.md`, which a trial cannot copy",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_manifest_symposium_rejects_provides_no_skill() {
+        // A hook needs a `command`, so Symposium rejects the whole plugin.
+        let manifest = format!("{SKILLS}[[hooks]]\nname = \"on-stop\"\nevent = \"Stop\"\n");
+        let files = [
+            ("first/Symposium.toml", manifest),
+            ("first/skills/kept/SKILL.md", skill_md("kept")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["kept"]"#, &files);
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            ["invalid `Symposium.toml` in plugin `first`"]
+        );
+    }
+
+    #[test]
+    fn the_repositorys_tasks_find_their_skills() {
+        let evals = Evals::in_repository();
+        for (task, skill, plugin) in [
+            ("formatting", "rust-formatting", "format-on-stop"),
+            ("store-durability", "fixture-store", "fixture-store"),
+        ] {
+            let task = Task::load(&evals, &TaskName::new(task).unwrap()).unwrap();
+            let plugin = evals.plugin_dir(&PluginName::new(plugin).unwrap());
+
+            assert_eq!(
+                task.skill_source(&skill_name(skill)),
+                Some(plugin.join("skills").join(skill).as_path())
+            );
+        }
     }
 
     /// The `demo` task expecting `hooks`, with each of `plugins` declaring its manifest.
@@ -667,13 +1013,14 @@ mod tests {
 
     #[test]
     fn an_expected_hook_must_run_on_a_symposium_event() {
+        // The schema holds a hook to Symposium's events.
         let manifest = ON_STOP.replace("Stop", "stop");
 
         let errors = expecting_hooks(r#"["on-stop"]"#, &[("plugin", &manifest)]).unwrap_err();
 
         assert_eq!(
             messages(&errors),
-            ["expected hook `on-stop` runs on `stop`, which is not a Symposium event"]
+            ["invalid `Symposium.toml` in plugin `plugin`"]
         );
     }
 

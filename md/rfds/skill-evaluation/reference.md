@@ -37,7 +37,9 @@ evals/
 - a skill appears in both `installed` and `not_installed`, or both `used` and `not_used`;
 - a skill in `used` also appears in `not_installed`;
 - a `checks/` file does not hold exactly one test, or a named plugin or fixture does not exist;
-- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client.
+- a plugin holds a link or special file, which a trial cannot copy, or its `Symposium.toml` does not match the plugin schema;
+- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client;
+- a skill in `installed` or `used` is provided by none of the task's plugins, or any named skill is provided by more than one, since sync would then install neither under its own name. A plugin provides the skills its `[[skills]] source.path` groups hold, or, without a `Symposium.toml`, the `SKILL.md` at its root; a skill is named by its frontmatter `name`, and must be one Symposium would load. A source must be a directory inside the plugin.
 
 Fixture crates are not workspace members and have no `skills/` directory, so the only way their rule reaches the agent through Symposium is a registry plugin.
 
@@ -47,6 +49,7 @@ All batches live under one evaluation root:
 
 ```text
 <eval-root>/<batch>/
+  inputs/                        # the batch's one copy of the task, fixtures, and plugins
   tools/
     common/                      # staged clients, readable by every trial
     symposium/                   # staged cargo-agents, readable by Symposium trials only
@@ -60,6 +63,10 @@ All batches live under one evaluation root:
     evidence/     # EVAL_EVIDENCE_DIR and SYMPOSIUM_HOOK_TRACE, outside the project
     registry/     # the task's plugins (Symposium configuration only)
 ```
+
+A batch copies its task, with the task's fixtures and plugins, into `inputs/` once, laid out as `evals/` is. Every trial and grading copy is made from it, and `content_hash` is its digest, so a change to `evals/` during a batch reaches no trial and the hash names what every trial ran. No trial can read `inputs/`, which holds the hidden checks.
+
+`content_hash` is the SHA-256 of `inputs/` encoded as follows: the bytes `symposium-eval tree v1\n`, then each entry under `inputs/`, sorted by the bytes of its `/`-joined relative path, as one kind byte (`d` for a directory, `f` for a file), the path's length as a little-endian `u64` and its bytes, and, for a file, its length as a little-endian `u64` and its bytes. A link or special file makes the digest fail. The `cargo-agents` `sha256` is of the staged binary's bytes alone.
 
 The executables a trial runs are **staged** once per batch: the client into `tools/common/` (a single binary for native installs; for npm installs, the package directory and the Node.js runtime), and the `cargo-agents` under evaluation into `tools/symposium/`. They are copied, not linked: on Linux, `srt` matches read rules by the name a path is opened under, so a link to a client under the developer's home would not launch. Staging also fixes the binaries for the whole batch, and their hashes go into each result.
 
@@ -293,7 +300,7 @@ A trial's `result.json`:
 
 ```json
 {
-  "task": { "name": "store-durability", "kind": "capability", "content_hash": "<sha256 of task, fixture, and plugin dirs>" },
+  "task": { "name": "store-durability", "kind": "capability", "content_hash": "<sha256 of the batch's inputs/, encoded as in Preparing a trial>" },
   "client": { "name": "claude", "version": "<version>" },
   "model": { "name": "<model>", "settings": {} },
   "mode": "with-symposium",

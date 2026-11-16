@@ -9,13 +9,13 @@
 //! tool its configuration may run, so a client finds it by name.
 //!
 //! Tools are staged before any trial is created: a trial links only what is staged by then.
-//!
-//! FIXME: record each staged tool's hash in the results, once there are results.
+//! A staged tool's digest is of the copy, which is what trials run.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use super::{Batch, Configuration, RunError, Trial};
+use crate::digest::{self, Digest, DigestError};
 use crate::grade::copy_exact;
 use crate::task::ToolName;
 
@@ -44,6 +44,14 @@ pub(crate) struct StagedTool {
     name: ToolName,
     audience: Audience,
     command: PathBuf,
+    copy: Copy,
+}
+
+/// What staging copied into the batch.
+#[derive(Debug, Clone)]
+enum Copy {
+    File(PathBuf),
+    Package(PathBuf),
 }
 
 impl Audience {
@@ -59,6 +67,18 @@ impl StagedTool {
     /// The staged file a trial runs.
     pub(crate) fn command(&self) -> &Path {
         &self.command
+    }
+
+    /// The digest of the staged copy: of its file, or of its whole package.
+    ///
+    /// # Errors
+    ///
+    /// When the copy cannot be read.
+    pub(crate) fn digest(&self) -> Result<Digest, DigestError> {
+        match &self.copy {
+            Copy::File(path) => digest::file(path),
+            Copy::Package(path) => digest::tree(path),
+        }
     }
 }
 
@@ -83,7 +103,7 @@ impl Batch {
             Audience::Symposium => self.symposium_tools(),
         };
         let destination = directory.join(name.as_str());
-        let command = match tool {
+        let (command, copy) = match tool {
             Tool::Executable(source) => {
                 // Copy what a link such as `~/.local/bin/claude` points at.
                 let source =
@@ -96,7 +116,7 @@ impl Batch {
                     path: destination.clone(),
                     source,
                 })?;
-                destination
+                (destination.clone(), Copy::File(destination))
             }
             Tool::NodePackage { package, entry } => {
                 // A missing or unusable entry would only show when a trial runs it.
@@ -104,13 +124,14 @@ impl Batch {
                     return Err(RunError::ToolEntry(entry.clone()));
                 }
                 copy_exact(package, &destination, "tool").map_err(RunError::Stage)?;
-                destination.join(entry)
+                (destination.join(entry), Copy::Package(destination))
             }
         };
         self.staged.push(StagedTool {
             name,
             audience,
             command,
+            copy,
         });
         Ok(self.staged.last().expect("just pushed"))
     }
@@ -185,6 +206,28 @@ mod tests {
 
         assert_eq!(staged.command(), batch.symposium_tools().join("tool"));
         assert_eq!(fs::read_to_string(staged.command()).unwrap(), "tool");
+    }
+
+    #[test]
+    fn a_staged_tools_digest_is_of_its_copy() {
+        let host = Host::new();
+        let mut batch = host.batch();
+        let source = host.join("installed-tool");
+        fs::write(&source, "tool").unwrap();
+        let tool = Tool::Executable(source.clone());
+
+        let staged = batch
+            .stage(tool_name("tool"), &tool, Audience::Symposium)
+            .unwrap()
+            .clone();
+        // A later change to the installed tool does not reach the batch.
+        fs::write(&source, "changed").unwrap();
+
+        assert_eq!(
+            staged.digest().unwrap(),
+            digest::file(staged.command()).unwrap()
+        );
+        assert_ne!(staged.digest().unwrap(), digest::file(&source).unwrap());
     }
 
     #[test]
@@ -274,9 +317,9 @@ mod tests {
         batch
             .stage(tool_name("client"), &tool, Audience::Common)
             .unwrap();
-        let (evals, task) = store_durability();
+        let inputs = store_durability(&batch);
 
-        let result = batch.create_trial(1, Configuration::Baseline, &evals, &task);
+        let result = batch.create_trial(1, Configuration::Baseline, &inputs);
 
         assert!(matches!(result, Err(RunError::Link { .. })), "{result:?}");
     }

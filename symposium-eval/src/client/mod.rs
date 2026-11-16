@@ -37,6 +37,9 @@ pub(crate) trait ClientRunner {
     /// What a session's hooks are known to be when its transcript cannot be read: none
     /// seen, from a client that reports them, or unsupported.
     fn unread_hooks(&self) -> HookEvidence;
+
+    /// What a session's usage is known to be when its transcript cannot be read.
+    fn unread_usage(&self) -> Usage;
 }
 
 /// What one transcript says.
@@ -50,6 +53,7 @@ pub(crate) struct Reading {
     pub(crate) loads: Vec<Load>,
     pub(crate) hooks: HookEvidence,
     pub(crate) activity: ToolActivity,
+    pub(crate) summary: Summary,
 }
 
 /// What a transcript says about the hooks its client ran, a record the agent cannot
@@ -213,9 +217,8 @@ pub(crate) enum ToolResult {
     Missing,
 }
 
-/// A skill the runner looks for in a transcript, with the `SKILL.md` sync installed for
-/// it, which may be in a `<name>-<hash>/` directory.
-#[derive(Debug, Clone)]
+/// A skill the runner looks for in a transcript, with the `SKILL.md` sync installs for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstalledSkill {
     pub(crate) name: SkillName,
     pub(crate) skill_md: PathBuf,
@@ -244,6 +247,57 @@ pub(crate) enum Completion {
     Missing,
 }
 
+/// What a client says about its own session, besides how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Summary {
+    /// The model the client says it ran, which resolves an alias the runner passed.
+    pub(crate) model: Option<String>,
+    pub(crate) usage: Usage,
+    /// The agent's last message, from a session that finished.
+    pub(crate) response: Option<String>,
+}
+
+impl Summary {
+    /// Nothing but `usage`, from a transcript that could not be read.
+    pub(crate) fn unread(usage: Usage) -> Self {
+        Self {
+            model: None,
+            usage,
+            response: None,
+        }
+    }
+}
+
+/// The tokens a session used, as its client reports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Usage {
+    /// The client's output never reports usage.
+    Unsupported,
+    Reported(Tokens),
+    /// The client reports usage, but the transcript does not show this session's.
+    Unknown,
+}
+
+/// Token counts, over every model a session called.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Tokens {
+    pub(crate) input: u64,
+    pub(crate) output: u64,
+    pub(crate) cache_read: u64,
+    pub(crate) cache_write: u64,
+}
+
+impl Tokens {
+    pub(crate) fn checked_add(self, other: Self) -> Option<Self> {
+        Some(Self {
+            input: self.input.checked_add(other.input)?,
+            output: self.output.checked_add(other.output)?,
+            cache_read: self.cache_read.checked_add(other.cache_read)?,
+            cache_write: self.cache_write.checked_add(other.cache_write)?,
+        })
+    }
+}
+
 /// One session's run: where its transcript is, how it ended, and which skills reached
 /// the agent.
 #[derive(Debug)]
@@ -255,6 +309,7 @@ pub(crate) struct Execution {
     pub(crate) loads: Vec<Load>,
     pub(crate) hooks: HookEvidence,
     pub(crate) activity: ToolActivity,
+    pub(crate) summary: Summary,
 }
 
 #[derive(Debug)]
@@ -305,6 +360,7 @@ pub(crate) fn execute(
         loads: vec![Load::Unknown; skills.len()],
         hooks: runner.unread_hooks(),
         activity: ToolActivity::unread(),
+        summary: Summary::unread(runner.unread_usage()),
     };
     let finished = match backend.run(&invocation, deadline, &logs) {
         Ok(finished) => finished,
@@ -346,6 +402,7 @@ pub(crate) fn execute(
         loads: reading.loads,
         hooks: reading.hooks,
         activity: reading.activity,
+        summary: reading.summary,
     }
 }
 
@@ -396,6 +453,10 @@ mod tests {
             HookEvidence::Unsupported
         }
 
+        fn unread_usage(&self) -> Usage {
+            Usage::Unsupported
+        }
+
         fn read(&self, _: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading {
             let text = fs::read_to_string(transcript);
             let load = match &text {
@@ -415,6 +476,7 @@ mod tests {
                 loads: vec![load; skills.len()],
                 hooks: HookEvidence::Unsupported,
                 activity: ToolActivity::unread(),
+                summary: Summary::unread(Usage::Unsupported),
             }
         }
     }
