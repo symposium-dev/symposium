@@ -67,11 +67,27 @@ emit({
     claude_code_version: VERSION,
     skills: [],
 });
-// Read each installed skill, as the agent does when the prompt names one.
-const skills = path.join('.claude', 'skills');
-for (const skill of fs.existsSync(skills) ? fs.readdirSync(skills) : []) {
+function skillFiles(directory) {
+    const loose = path.join(directory, 'SKILL.md');
+    const manifest = path.join(directory, '.claude-plugin', 'plugin.json');
+    if (fs.existsSync(loose) || !fs.existsSync(manifest)) {
+        return [loose];
+    }
+    const payloads = path.join(directory, 'skills');
+    return fs.readdirSync(payloads).map((name) => path.join(payloads, name, 'SKILL.md'));
+}
+
+function readInstalledSkills() {
+    const skills = path.join('.claude', 'skills');
+    for (const entry of fs.existsSync(skills) ? fs.readdirSync(skills) : []) {
+        for (const file of skillFiles(path.join(skills, entry))) {
+            readSkill(file);
+        }
+    }
+}
+
+function readSkill(file_path) {
     const id = `toolu_${crypto.randomUUID()}`;
-    const file_path = path.join(skills, skill, 'SKILL.md');
     emit({
         type: 'assistant',
         message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path } }] },
@@ -84,6 +100,8 @@ for (const skill of fs.existsSync(skills) ? fs.readdirSync(skills) : []) {
         parent_tool_use_id: null,
     });
 }
+// Read each installed skill, as the agent does when the prompt names one.
+readInstalledSkills();
 fs.writeFileSync('src/lib.rs', '//! Small arithmetic helpers.\n\npub fn double(x:i32)->i32{x*2}\n');
 runHooks('Stop', 'Stop', { stop_hook_active: false });
 const tokens = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };

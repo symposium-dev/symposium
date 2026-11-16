@@ -124,7 +124,7 @@ mod real {
     use crate::expect::decide;
     use crate::run::client::Client;
     use crate::run::stage::{Audience, Tool};
-    use crate::run::test_support::{RealSrt, api_key, built_cargo_agents};
+    use crate::run::test_support::{RealSrt, api_key, built_symposium};
     use crate::run::{Configuration, Trial};
 
     struct Compiled {
@@ -137,8 +137,8 @@ mod real {
         fn compile(&self) -> Compiled {
             let mut real = RealSrt::new(api_key());
             real.stage(
-                "cargo-agents",
-                &Tool::Executable(built_cargo_agents()),
+                "symposium",
+                &Tool::Executable(built_symposium()),
                 Audience::Symposium,
             );
             // A valid trial supplies the sandbox policy even for a fixture task that
@@ -150,7 +150,7 @@ mod real {
             );
             self.copy_plugins(&trial.registry());
             real.set_up_symposium(&trial, Client::ClaudeCode);
-            let finished = real.run(&trial, "cargo-agents sync", &[], Duration::from_secs(60));
+            let finished = real.run(&trial, "symposium sync", &[], Duration::from_secs(60));
             assert!(finished.succeeded(), "{}", finished.stderr.tail());
             let delivered =
                 delivered_skill(&trial, "first-skill").expect("compiler delivers active skill");
@@ -222,7 +222,7 @@ mod real {
     }
 
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap, and builds symposium"]
     fn filtered_plugin_prediction_matches_real_delivery_or_is_rejected() {
         let scenario = Scenario::colliding(Filtering::WholePlugin);
         let compiled = scenario.compile();
@@ -231,7 +231,7 @@ mod real {
     }
 
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap, and builds symposium"]
     fn filtered_sibling_prediction_matches_real_delivery_or_is_rejected() {
         let scenario = Scenario::colliding(Filtering::SiblingSkill);
         let compiled = scenario.compile();
@@ -240,7 +240,7 @@ mod real {
     }
 
     #[test]
-    #[ignore = "needs node, srt, and bubblewrap, and builds cargo-agents"]
+    #[ignore = "needs node, srt, and bubblewrap, and builds symposium"]
     fn distinct_names_preserve_exact_delivery_with_predicate_filtering() {
         for filtering in [Filtering::WholePlugin, Filtering::SiblingSkill] {
             let scenario = Scenario::new("other-plugin", filtering);
