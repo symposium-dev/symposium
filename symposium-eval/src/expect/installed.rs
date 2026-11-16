@@ -488,6 +488,48 @@ mod tests {
     }
 
     #[test]
+    fn a_skill_in_a_marked_native_plugin_bundle_is_installed() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let bundle = skills.join("format-on-stop");
+        install(&bundle.join("skills"), "first-skill");
+        fs::remove_file(bundle.join("skills/first-skill/.symposium")).unwrap();
+        fs::remove_file(bundle.join("skills/first-skill/.gitignore")).unwrap();
+        fs::create_dir_all(bundle.join(".claude-plugin")).unwrap();
+        let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "format-on-stop",
+            "version": "0.0.0",
+        }))
+        .unwrap();
+        fs::write(bundle.join("plugin.json"), &manifest).unwrap();
+        fs::write(bundle.join(".claude-plugin/plugin.json"), &manifest).unwrap();
+        fs::write(bundle.join(MARKER), "").unwrap();
+
+        assert_eq!(
+            decide(
+                &skills,
+                &["first-skill"],
+                &["first-skill"],
+                &source(root.path())
+            ),
+            [
+                (InstallEvidence::Matching, Verdict::Pass),
+                (InstallEvidence::Present, Verdict::Fail)
+            ]
+        );
+        fs::write(
+            bundle.join("skills/first-skill/references/notes.md"),
+            "edited",
+        )
+        .unwrap();
+        assert_eq!(
+            decide(&skills, &["first-skill"], &[], &source(root.path())),
+            [(InstallEvidence::Differing, Verdict::Fail)]
+        );
+    }
+
+    #[test]
     fn a_marked_copy_of_the_source_is_installed() {
         let root = TempDir::new().unwrap();
         let skills = root.path().join("skills");

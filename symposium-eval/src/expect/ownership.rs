@@ -162,6 +162,32 @@ mod tests {
     }
 
     #[test]
+    fn a_native_bundle_with_an_exact_payload_is_symposiums() {
+        let mut installed = Installed::new();
+        let bundle = installed.project.join(".claude/skills/a-plugin");
+        let payload = bundle.join("skills/first-skill");
+        fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        fs::rename(&installed.copy, &payload).unwrap();
+        installed.copy = payload;
+        // Native delivery marks the bundle; the payload holds only source content.
+        fs::remove_file(installed.copy.join(MARKER)).unwrap();
+        fs::remove_file(installed.copy.join(GITIGNORE)).unwrap();
+        fs::create_dir(bundle.join(".claude-plugin")).unwrap();
+        let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "a-plugin",
+            "version": "0.0.0",
+        }))
+        .unwrap();
+        fs::write(bundle.join("plugin.json"), &manifest).unwrap();
+        fs::write(bundle.join(".claude-plugin/plugin.json"), &manifest).unwrap();
+        fs::write(bundle.join(MARKER), "").unwrap();
+        fs::write(bundle.join(GITIGNORE), GITIGNORE_CONTENTS).unwrap();
+
+        assert_eq!(installed.owned(), [".claude/skills/a-plugin"]);
+    }
+
+    #[test]
     fn an_exact_copy_is_symposiums() {
         let installed = Installed::new();
 

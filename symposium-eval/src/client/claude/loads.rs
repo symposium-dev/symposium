@@ -153,6 +153,33 @@ mod tests {
     }
 
     #[test]
+    fn a_read_of_a_native_bundles_payload_loads_the_skill() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project = dir.path();
+        let payload = project.join(".claude/skills/a-plugin/skills/fixture-greeting");
+        let held = InstalledSkill {
+            name: SkillName::new("fixture-greeting").unwrap(),
+            skill_md: project.join(".claude/skills/fixture-greeting/SKILL.md"),
+        };
+        let transcript = replaced(
+            READ_LOADED,
+            "skills/fixture-greeting/SKILL.md",
+            "skills/a-plugin/skills/fixture-greeting/SKILL.md",
+        );
+        let transcript = replaced(
+            &transcript,
+            PROJECT,
+            &project.to_string_lossy().replace('\\', "/"),
+        );
+
+        assert_eq!(loads_in(&transcript, &[held]), [Load::Loaded]);
+        assert!(
+            !payload.exists(),
+            "load detection must not depend on the bundle surviving"
+        );
+    }
+
+    #[test]
     fn a_successful_skill_call_loads_the_skill() {
         assert_eq!(load_of(SKILL_LOADED), Load::Loaded);
     }
