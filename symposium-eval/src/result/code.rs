@@ -18,6 +18,8 @@ pub(super) enum CodeRecord {
     /// Grading itself failed.
     InfrastructureError {
         error: String,
+        /// Checks completed before grading itself failed. Never a grading verdict.
+        partial: Option<ChecksRecord>,
     },
 }
 
@@ -49,8 +51,9 @@ impl From<&Grading> for CodeRecord {
             Grading::InvalidSubmission(error) => Self::InvalidSubmission {
                 error: capped(grade::with_causes(error)),
             },
-            Grading::Infrastructure(error) => Self::InfrastructureError {
+            Grading::Infrastructure { error, partial } => Self::InfrastructureError {
                 error: capped(grade::with_causes(error)),
+                partial: partial.as_ref().map(ChecksRecord::from),
             },
         }
     }

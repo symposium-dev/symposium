@@ -94,6 +94,7 @@ pub(super) fn expectations() -> Expectations {
         assertion: InstallAssertion::Installed,
         evidence: InstallEvidence::Matching,
         verdict: Verdict::Pass,
+        matching_copy: None,
     };
     Expectations {
         session_start: unconcerned(CallEvidence::Succeeded),
@@ -224,4 +225,83 @@ fn a_failed_session_on_a_client_without_usage() {
     let result = result_of(Configuration::Baseline, graded(&execution, &grading, None));
 
     assert_result_snapshot!(result);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_grading_error_keeps_explicitly_partial_evidence() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use tempfile::TempDir;
+
+    use crate::grade::process::{Backend, Finished, Invocation, Local};
+    use crate::grade::testing::TaskFixture;
+    use crate::grade::{
+        GradeError, GradeLimits, GradingDirs, ProcessError, Submitted, grade as grade_submission,
+    };
+
+    struct BlocksReset<'a> {
+        grading_root: &'a Path,
+    }
+
+    impl Backend for BlocksReset<'_> {
+        fn run(
+            &self,
+            invocation: &Invocation,
+            deadline: Duration,
+            logs: &Path,
+        ) -> Result<Finished, ProcessError> {
+            let finished = Local.run(invocation, deadline, logs)?;
+            if invocation
+                .args
+                .iter()
+                .any(|argument| argument.to_string_lossy() == "--lib")
+            {
+                fs::set_permissions(self.grading_root, fs::Permissions::from_mode(0o000)).unwrap();
+            }
+            Ok(finished)
+        }
+    }
+
+    let fixture = TaskFixture::new("");
+    let submission = fixture.submission();
+    fs::write(submission.path().join("src/lib.rs"), "pub fn works() {}").unwrap();
+    fs::write(submission.path().join("notes.txt"), "outside editable").unwrap();
+    let grading_dir = TempDir::new().unwrap();
+    let grading_root = grading_dir.path().join("grading");
+    fs::create_dir(&grading_root).unwrap();
+    let grading = grade_submission(
+        fixture.evals(),
+        fixture.task(),
+        Submitted::bare(submission.path()),
+        &BlocksReset {
+            grading_root: &grading_root,
+        },
+        &GradeLimits::default(),
+        &GradingDirs::under(&grading_root),
+    );
+    fs::set_permissions(&grading_root, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let Grading::Infrastructure {
+        error: GradeError::ResetWork { .. },
+        partial: Some(partial),
+    } = &grading
+    else {
+        panic!("expected a real reset failure with partial evidence: {grading:?}");
+    };
+    assert_eq!(partial.steps.len(), 2);
+    let execution = execution(Ended::Completed, Usage::Unknown);
+    let result = result_of(Configuration::Baseline, graded(&execution, &grading, None));
+    let json = serde_json::to_value(result).unwrap();
+
+    assert_eq!(json["outcome"]["result"], "grading_exclusion");
+    assert_eq!(json["code"]["status"], "infrastructure_error");
+    assert_eq!(json["code"]["partial"]["build"], "pass");
+    assert_eq!(json["code"]["partial"]["cargo_test_lib"], "pass");
+    assert_eq!(json["code"]["partial"]["hidden"], serde_json::json!({}));
+    assert_eq!(
+        json["code"]["partial"]["edits_outside_editable"],
+        serde_json::json!(["added `notes.txt`"])
+    );
 }

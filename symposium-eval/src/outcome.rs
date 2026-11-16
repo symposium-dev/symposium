@@ -104,7 +104,7 @@ fn code(grading: &Grading) -> Code {
         Grading::Graded(report) if passed(report) => Code::Passed,
         Grading::Graded(_) => Code::Failed(Failure::Code),
         Grading::InvalidSubmission(_) => Code::Failed(Failure::Submission),
-        Grading::Infrastructure(_) => Code::Unknown,
+        Grading::Infrastructure { .. } => Code::Unknown,
     }
 }
 
@@ -159,10 +159,13 @@ mod tests {
     }
 
     fn broken() -> Grading {
-        Grading::Infrastructure(GradeError::Process {
-            step: "cargo build".to_owned(),
-            source: process_error(),
-        })
+        Grading::Infrastructure {
+            error: GradeError::Process {
+                step: "cargo build".to_owned(),
+                source: process_error(),
+            },
+            partial: None,
+        }
     }
 
     fn process_error() -> ProcessError {

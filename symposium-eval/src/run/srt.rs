@@ -50,11 +50,12 @@ pub(crate) struct Srt {
     bwrap: PathBuf,
 }
 
-/// One trial's commands, run under `srt` with that trial's policy.
-#[derive(Debug, Clone, Copy)]
+/// Commands run under `srt` with one policy, and a `/tmp/claude` of their own.
+#[derive(Debug, Clone)]
 pub(crate) struct Sandboxed<'a> {
     srt: &'a Srt,
-    trial: &'a Trial,
+    policy: PathBuf,
+    tmp: PathBuf,
 }
 
 impl Srt {
@@ -147,15 +148,41 @@ impl Srt {
     /// # Errors
     ///
     /// When the trial's policy has not been written: a trial never runs without one.
-    pub(crate) fn for_trial<'a>(&'a self, trial: &'a Trial) -> Result<Sandboxed<'a>, RunError> {
-        let policy = trial.policy_file();
-        if policy.is_file() {
-            Ok(Sandboxed { srt: self, trial })
-        } else {
-            Err(RunError::NoPolicy(policy))
+    pub(crate) fn for_trial(&self, trial: &Trial) -> Result<Sandboxed<'_>, RunError> {
+        self.sandboxed(trial.policy_file(), trial.tmp())
+    }
+
+    /// Runs grading `trial`'s submission under its grading policy.
+    ///
+    /// # Errors
+    ///
+    /// When the grading policy has not been written: grading never runs without one.
+    pub(crate) fn for_grading(&self, trial: &Trial) -> Result<Sandboxed<'_>, RunError> {
+        self.sandboxed(trial.grading_policy_file(), trial.grading_tmp())
+    }
+
+    fn sandboxed(&self, policy: PathBuf, tmp: PathBuf) -> Result<Sandboxed<'_>, RunError> {
+        if !policy.is_file() {
+            return Err(RunError::NoPolicy(policy));
         }
+        // Only on Linux does `srt` bridge its proxy through Unix sockets.
+        if cfg!(target_os = "linux") && tmp.as_os_str().len() + SRT_SOCKET_NAME > MAX_SOCKET_PATH {
+            return Err(RunError::TmpTooLong(tmp));
+        }
+        Ok(Sandboxed {
+            srt: self,
+            policy,
+            tmp,
+        })
     }
 }
+
+/// The longest Unix socket path Linux allows, in bytes, its terminating NUL left out.
+const MAX_SOCKET_PATH: usize = 107;
+
+/// What `srt` 0.0.81 adds to its `TMPDIR` for its proxy's sockets:
+/// `/claude-socks-<16 hex>.sock` (`linux-sandbox-utils.js`, `initializeLinuxNetworkBridge`).
+const SRT_SOCKET_NAME: usize = "/claude-socks-0123456789abcdef.sock".len();
 
 /// Whether `node --version` output, such as `v22.12.0`, is at least [`NODE_MINIMUM`].
 fn node_is_supported(version: &str) -> bool {
@@ -202,12 +229,16 @@ impl Srt {
 }
 
 impl Sandboxed<'_> {
-    /// `invocation`, run by `srt` under the trial's policy, with the trial's own
-    /// `/tmp/claude`.
+    /// `invocation`, run by `srt` under the policy, with its own `/tmp/claude`, and the
+    /// sandbox's directory as `TMPDIR`: `srt` makes its proxy's sockets there, so its
+    /// path must stay short.
     fn wrap(&self, invocation: &Invocation) -> Invocation {
-        let trial = self.trial;
-        self.srt
-            .wrap(&trial.policy_file(), &trial.tmp(), invocation)
+        let mut invocation = invocation.clone();
+        invocation.env.retain(|(name, _)| name != "TMPDIR");
+        invocation
+            .env
+            .push(("TMPDIR".into(), self.tmp.clone().into()));
+        self.srt.wrap(&self.policy, &self.tmp, &invocation)
     }
 }
 
@@ -257,6 +288,39 @@ mod tests {
     }
 
     #[test]
+    fn a_sandboxed_command_has_the_sandboxs_tmpdir() {
+        let host = Host::new();
+        let trial = written_trial(&host);
+        let srt = srt(&host);
+        let mut invocation = probe(&trial);
+        invocation.env.push(("TMPDIR".into(), "/elsewhere".into()));
+
+        let wrapped = srt.for_trial(&trial).unwrap().wrap(&invocation);
+
+        let tmpdirs: Vec<_> = wrapped
+            .env
+            .iter()
+            .filter(|(name, _)| name == "TMPDIR")
+            .map(|(_, value)| PathBuf::from(value))
+            .collect();
+        assert_eq!(tmpdirs, [trial.tmp()]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_tmp_too_long_for_srts_sockets_is_refused() {
+        let host = Host::new();
+        let trial = written_trial(&host);
+        let srt = srt(&host);
+        let fits = PathBuf::from("/").join("t".repeat(MAX_SOCKET_PATH - SRT_SOCKET_NAME - 1));
+        let long = fits.join("x");
+
+        assert!(srt.sandboxed(trial.policy_file(), fits).is_ok());
+        let result = srt.sandboxed(trial.policy_file(), long);
+        assert!(matches!(result, Err(RunError::TmpTooLong(_))), "{result:?}");
+    }
+
+    #[test]
     fn a_trial_without_a_policy_never_runs() {
         let host = Host::new();
         let trial = trial(&host.batch(), 1, Configuration::Baseline);
@@ -298,7 +362,9 @@ mod tests {
         assert_eq!(wrapped.program, host.join("bin/bwrap").as_os_str());
         assert_eq!(wrapped.args, expected);
         assert_eq!(wrapped.dir, trial.project());
-        assert_eq!(wrapped.env, probe(&trial).env);
+        let mut env = probe(&trial).env;
+        env.push(("TMPDIR".into(), trial.tmp().into()));
+        assert_eq!(wrapped.env, env);
     }
 
     #[test]

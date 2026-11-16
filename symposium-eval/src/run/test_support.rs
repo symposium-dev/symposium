@@ -194,6 +194,27 @@ impl RealSrt {
         trial
     }
 
+    /// Grades `submission` as `trial` of task `name`, as a batch does: under real `srt`
+    /// with the grading policy.
+    pub(crate) fn grade(
+        &self,
+        trial: &Trial,
+        name: &str,
+        submission: &std::path::Path,
+    ) -> crate::grade::Grading {
+        let dirs = trial.prepare_grading(&self.machine).unwrap();
+        let backend = self.srt.for_grading(trial).unwrap();
+        let inputs = inputs(&self.batch, name);
+        crate::grade::grade(
+            inputs.evals(),
+            inputs.task(),
+            crate::grade::Submitted::trial(submission, &[]),
+            &backend,
+            &crate::grade::GradeLimits::default(),
+            &dirs,
+        )
+    }
+
     /// Runs a command against a local test API, trusting only its additional test CA.
     pub(crate) fn run_with_test_api(
         &self,
