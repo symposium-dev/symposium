@@ -240,7 +240,7 @@ A hook record contradicted by the transcript, including more records than the tr
 
 ## Outcomes and counting
 
-A trial can succeed only if its client session completed. A timeout or client error is a failure even when the code it left would pass; that code is still graded and reported, and a grading infrastructure error during it does not move the trial out of the count. For a completed trial:
+A trial can succeed only if its client session completed. A timeout or client error is a failure even when the code it left would pass, and so is a session the runner lost hold of or whose ending its transcript cannot show, since it did not complete either; that code is still graded and reported, and a grading infrastructure error during it does not move the trial out of the count. For a completed trial:
 
 | Kind       | Succeeds when                                  | Inconclusive when                                               |
 | ---------- | ---------------------------------------------- | --------------------------------------------------------------- |
@@ -296,13 +296,14 @@ results/store-durability/claude/<batch>/
     symposium.log
 ```
 
-A trial's `result.json`:
+A trial's `result.json`. `schema_version` changes only when a field is removed or changes meaning; new fields are added without it, so a reader ignores fields it does not know. What a trial always has is always present. A phase's output (`session`, `code`, `expectations`) is `null` exactly when the trial stopped before it, and `reached` says where it stopped and, before launch, why (`{"phase": "prelaunch", "error": "..."}`). A value a phase reached but could not know has its own variant, such as `"usage": {"status": "unknown"}`, never `null`. A concern's `reason` is a stable code; its `detail` is for people. `order` arrives with repeated trials and `audit_findings` with the escape audit, each an added field.
 
 ```json
 {
+  "schema_version": 1,
   "task": { "name": "store-durability", "kind": "capability", "content_hash": "<sha256 of the batch's inputs/, encoded as in Preparing a trial>" },
   "client": { "name": "claude", "version": "<version>" },
-  "model": { "name": "<model>", "settings": {} },
+  "model": { "name": "<model as requested>", "settings": {}, "reported": "<model the client says it ran>" },
   "mode": "with-symposium",
   "trial": 3,
   "order": 2,
@@ -310,11 +311,17 @@ A trial's `result.json`:
   "os": "<os and arch>",
   "toolchain": "<rustc version>",
   "deadlines_secs": { "setup": 120, "agent": 600, "grading": 300 },
-  "elapsed_secs": 94,
-  "usage": { "input_tokens": 30100, "output_tokens": 4100, "cache_read_tokens": 7000, "cache_write_tokens": 0 },
-  "execution": "completed",
   "isolation": { "mode": "enforced", "srt_version": "<version>", "audit_findings": [], "config_changes": [] },
+  "reached": { "phase": "graded" },
+  "outcome": { "result": "succeeded" },
+  "session": {
+    "ended": { "status": "completed", "error": null },
+    "elapsed_secs": 94.2,
+    "usage": { "status": "reported", "input_tokens": 30100, "output_tokens": 4100, "cache_read_tokens": 7000, "cache_write_tokens": 0 },
+    "observed_loads": { "fixture-store": "loaded" }
+  },
   "code": {
+    "status": "graded",
     "build": "pass",
     "cargo_test_lib": "pass",
     "hidden": { "settings_persist": "pass" },
@@ -322,11 +329,18 @@ A trial's `result.json`:
     "edits_outside_editable": []
   },
   "expectations": {
-    "skills": { "fixture-store": { "installed": "pass", "used": "pass", "observed_load": "loaded" } },
+    "skills": {
+      "fixture-store": {
+        "installed": { "verdict": "pass", "evidence": "matching", "evidence_verdict": "pass", "concerns": [] },
+        "used": { "verdict": "pass", "observed_load": "loaded" }
+      }
+    },
     "hooks": {},
-    "sync": { "skill_dir_empty_before": "pass", "session_start": "pass", "sync_recorded": "pass" }
-  },
-  "success": "pass"
+    "sync": {
+      "session_start": { "verdict": "pass", "evidence": "succeeded", "evidence_verdict": "pass", "concerns": [] },
+      "sync_recorded": { "verdict": "pass", "evidence": "recorded", "evidence_verdict": "pass", "concerns": [] }
+    }
+  }
 }
 ```
 

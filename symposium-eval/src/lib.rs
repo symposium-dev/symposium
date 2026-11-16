@@ -15,6 +15,13 @@ mod evals;
 mod expect;
 mod grade;
 mod jsonl;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the runner decides these later in RFD step 4")
+)]
+mod outcome;
+#[expect(dead_code, reason = "the runner writes these later in RFD step 4")]
+mod result;
 #[expect(dead_code, reason = "the runner launches trials later in RFD step 2")]
 mod run;
 mod skill_md;
