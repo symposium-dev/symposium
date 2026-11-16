@@ -38,6 +38,8 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 Every agent session runs auto-sync on `SessionStart`, so two sessions opened together run two syncs at once. Steps 5 to 8 (skill installs, the reap, and agent config writes) run under an exclusive lock on `<cache>/sync.lock`, which a second sync waits for; it then finds everything up to date. Without it, one sync's reap would remove the skills another had just installed. The lock is per user rather than per workspace because at the global hook scope those steps also write user-level agent config files shared by every workspace. Resolution (steps 1 to 4) runs before the lock, since it may fetch git skill sources and a hook waiting behind that could time out. Of the [plugins enabled for every workspace](#plugins-enabled-for-every-workspace) and the [plugins for this project](#plugins-for-this-project), selection is resolution and runs before the lock, while compiling, delivering and unregistering run under it.
 
+Step 9 runs outside that lock, so two `sync` or `use` runs, or one of them and a hook, can install the same `cargo` hook source at once. Those installs take turns on a lock of their own, `<cache>/binaries/<crate>/install.lock`, held for the whole install; the one that waited finds the binary in place and, unless forced, does not build it again. A hook waits for it within its time budget.
+
 ## Plugins enabled for every workspace
 
 Between matching skills (step 4) and installing them (step 5), the plugins a `use --global` entry names are compiled for the user, whatever `hook-scope` says.

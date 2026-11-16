@@ -27,6 +27,18 @@ const FAILURE_SUFFIX: &str = ".failed";
 
 const FAILURE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
+// cargo builds an install in a fresh directory under `$TMPDIR`, which a killed
+// build leaves behind, along with the temporary files of the compilers it was
+// running. A fixed directory in the cache, holding both, is found again by the
+// next attempt and removed once cargo exits, whether the install succeeded or
+// failed. cargo releases its own lock on it before that, so installs of one
+// crate take turns on `install.lock`.
+const BUILD_DIRNAME: &str = "build";
+
+const INSTALL_LOCK_FILENAME: &str = "install.lock";
+
+const INSTALL_LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Minimal context needed for acquisition.
 ///
 /// Replaces the full `Symposium` config struct — hook handlers construct this
@@ -313,6 +325,16 @@ async fn install_cargo_crate(
     use std::fs;
 
     let cache_dir = cache_dir.as_deref();
+    let crate_dir = crate_cache_dir(ctx, crate_name)?;
+    let _lock = lock_install(&crate_dir).await?;
+
+    let binary_path = match (cache_dir, binary_name.as_ref()) {
+        (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
+        _ => None,
+    };
+    if !force && binary_path.as_ref().is_some_and(|bin| bin.exists()) {
+        return Ok(None);
+    }
 
     if let Some(cache_dir) = cache_dir {
         if let Some(parent) = cache_dir.parent()
@@ -358,77 +380,103 @@ async fn install_cargo_crate(
         binstall_args.push(git);
     }
     binstall_args.push(&crate_spec);
-    let binstall_result = cargo_output(ctx, &binstall_args).await;
-
-    let binary_path = match (cache_dir, binary_name.as_ref()) {
-        (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
-        _ => None,
-    };
+    let build_dir = cache_dir.unwrap_or(&crate_dir).join(BUILD_DIRNAME);
+    let binstall_result = cargo_output(ctx, &binstall_args, &build_dir).await;
 
     let source_build = match binstall_result {
         Ok(output) if output.status.success() => {
             tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
-            if binary_path.is_none() {
-                return Ok(None);
+            if binary_path.as_ref().is_none_or(|bin| bin.exists()) {
+                None
+            } else {
+                Some(SourceBuild::NoPrebuiltBinary)
             }
-            if let Some(bin) = binary_path.as_ref()
-                && bin.exists()
-            {
-                return Ok(None);
-            }
-            SourceBuild::NoPrebuiltBinary
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             tracing::debug!("cargo binstall failed: {}", stderr);
             if stderr.contains("no such command: `binstall`") {
-                SourceBuild::BinstallMissing
+                Some(SourceBuild::BinstallMissing)
             } else {
-                SourceBuild::NoPrebuiltBinary
+                Some(SourceBuild::NoPrebuiltBinary)
             }
         }
         Err(e) => {
             tracing::debug!("cargo binstall not available: {}", e);
-            SourceBuild::BinstallMissing
+            Some(SourceBuild::BinstallMissing)
         }
     };
 
-    tracing::info!("Falling back to cargo install for {}", crate_spec);
-    let mut args: Vec<&str> = vec!["install"];
-    if force {
-        args.push("--force");
-    }
-    if let Some(dir) = cache_dir_str.as_deref() {
-        args.push("--root");
-        args.push(dir);
-    }
-    if let Some(git) = &git {
-        args.push("--git");
-        args.push(git);
-    }
-    args.push(&crate_spec);
-    let install_result = cargo_output(ctx, &args)
-        .await
-        .context("Failed to run cargo install")?;
+    if source_build.is_some() {
+        tracing::info!("Falling back to cargo install for {}", crate_spec);
+        let mut args: Vec<&str> = vec!["install"];
+        if force {
+            args.push("--force");
+        }
+        if let Some(dir) = cache_dir_str.as_deref() {
+            args.push("--root");
+            args.push(dir);
+        }
+        if let Some(git) = &git {
+            args.push("--git");
+            args.push(git);
+        }
+        args.push(&crate_spec);
+        let install_result = cargo_output(ctx, &args, &build_dir)
+            .await
+            .context("Failed to run cargo install")?;
 
-    if !install_result.status.success() {
-        bail!(
-            "cargo install failed for {}: {}",
-            crate_spec,
-            String::from_utf8_lossy(&install_result.stderr)
-        );
+        if !install_result.status.success() {
+            let _ = fs::remove_dir_all(&build_dir);
+            bail!(
+                "cargo install failed for {}: {}",
+                crate_spec,
+                String::from_utf8_lossy(&install_result.stderr)
+            );
+        }
+
+        tracing::info!("Successfully installed {} via cargo install", crate_spec);
     }
 
-    tracing::info!("Successfully installed {} via cargo install", crate_spec);
-    Ok(Some(source_build))
+    let _ = fs::remove_dir_all(&build_dir);
+    Ok(source_build)
+}
+
+async fn lock_install(crate_dir: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(crate_dir)
+        .with_context(|| format!("create {}", crate_dir.display()))?;
+    let path = crate_dir.join(INSTALL_LOCK_FILENAME);
+    let file = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    // Polled rather than `lock()`, so a dropped future (the hook deadline) stops the wait.
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => tokio::time::sleep(INSTALL_LOCK_POLL).await,
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("lock {}", path.display()));
+            }
+        }
+    }
 }
 
 async fn cargo_output(
     ctx: &InstallContext,
     args: &[&str],
+    build_dir: &Path,
 ) -> std::io::Result<std::process::Output> {
     let mut command = ctx.cargo_command();
-    command.args(args);
+    command.args(args).env("CARGO_TARGET_DIR", build_dir);
+    let temp_dir = build_dir.join("tmp");
+    if std::fs::create_dir_all(&temp_dir).is_ok() {
+        for variable in ["TMPDIR", "TMP", "TEMP"] {
+            command.env(variable, &temp_dir);
+        }
+    }
     run(ctx, command).await
 }
 

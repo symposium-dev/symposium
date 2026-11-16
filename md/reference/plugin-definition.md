@@ -180,6 +180,8 @@ args = ["--version"]   # optional default args
 
 Symposium attempts `cargo binstall` first, with its own fallback to building from source turned off, falls back to `cargo install` when `cargo-binstall` is not installed or finds no prebuilt binary for the platform, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/` (passing `--root` so the install doesn't pollute `~/.cargo/bin`). The chosen `executable` resolves to `<cache>/bin/<executable>`. Hooks that depend on this installation get `<cache>/bin/` prepended to `$PATH`, so scripts can invoke the binary by name.
 
+When cargo has to build the crate, it builds in `~/.symposium/cache/binaries/<crate>/<version>/build/` (Symposium sets `CARGO_TARGET_DIR`, and the temporary directory to `build/tmp/`) rather than in the system's temporary directory. The directory is removed once cargo finishes, whether the install succeeded or failed; a build that was stopped at a hook's time limit leaves it there, and the next attempt continues from it.
+
 To install from a git repo instead of crates.io, set `git`:
 
 ```toml
