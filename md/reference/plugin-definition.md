@@ -82,7 +82,7 @@ Each `[[skills]]` entry declares a group of skills.
 | `depends-on` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Dependency predicates](./depends-on.md) for syntax. |
 | `predicates` | array of strings | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the group to install. See [Predicates](./predicates.md). |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
-| `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
+| `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. The URL follows the rules of a [`github` installation's `url`](#github), and a manifest whose URL breaks them is rejected. |
 
 A skill group must have exactly one of `source.path` or `source.git`. A crate is not a skill-group source; to load a crate's own skills, name it in a [chained plugin](#chained-plugins).
 
@@ -173,8 +173,8 @@ args = ["--version"]   # optional default args
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `crate` | yes | Name of the crate to install. |
-| `version` | no | Exact version to install (`"13.0.0"`). Defaults to the latest stable release on crates.io. |
+| `crate` | yes | Name of the crate to install: ASCII letters, digits, `-` and `_`, starting with a letter, at most 64 characters. Symposium builds its cache paths from it, so a manifest with any other value is rejected. |
+| `version` | no | Exact version to install (`"13.0.0"`), a semantic version rather than a requirement. Defaults to the latest stable release on crates.io. Symposium builds its cache paths from it, so a manifest with any other value is rejected. |
 | `git` | no | Install from this git repository (`cargo install --git`) instead of crates.io. Requires `executable` on the installation. |
 | `global` | no | `true` installs into the user's global cargo location instead of Symposium's cache (see below). Requires `executable` on the installation. |
 
@@ -215,7 +215,7 @@ args = ["--format"]
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `url` | yes | `https://github.com/<owner>/<repo>`, or `https://github.com/<owner>/<repo>/tree/<ref>/<path>` for one directory of the repository. `git` is accepted as another name for this field. |
+| `url` | yes | `https://github.com/<owner>/<repo>`, or `https://github.com/<owner>/<repo>/tree/<ref>/<path>` for one directory of the repository. `git` is accepted as another name for this field. The owner may use only ASCII letters, digits, `-` and `_`, and the repository those and `.`; the ref and each directory of the path must be a plain name rather than a path. Symposium builds its cache paths from them, so a manifest with any other URL is rejected. |
 
 Acquires the repo (or a subtree, if `url` points at `…/tree/<ref>/<path>`) into a local cache. The chosen `executable` / `script` resolves to a file inside the cached tree.
 
