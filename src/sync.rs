@@ -127,7 +127,11 @@ pub(crate) fn unfollowed_entries(root: &Path, package_root: Option<&Path>) -> Ve
 
 fn walk_tree(root: &Path, package_root: Option<&Path>) -> Result<(Vec<TreeEntry>, Vec<String>)> {
     let mut skipped = Vec::new();
+    let git_cache_meta = root.join(symposium_install::git::CACHE_META_FILENAME);
     let tree = dir_walk::walk_where(root, &mut |path| {
+        if path == git_cache_meta {
+            return false;
+        }
         let outside = package_root.is_some_and(|package| !plugins::resolves_inside(package, path));
         if outside {
             skipped.push(format!(

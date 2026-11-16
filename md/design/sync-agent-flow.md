@@ -18,6 +18,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
    - Copy applicable `SKILL.md` files into the agent's expected skill directory, except the skills the agent received inside a compiled plugin (see below).
    - Drop a `.symposium` marker file into each installed skill directory so future syncs (and other tools) can recognize it as symposium-managed.
    - Build each install in a fresh, uniquely named `.symposium-tmp-*` directory beside its slot and rename it into place only once the copy is complete, so a failed copy leaves the slot as it was instead of an unmarked partial directory that later syncs would take for the user's. A unique name never collides with anything already there. The marker goes into that directory before the copy, so what a killed sync leaves behind is reaped by the next one.
+   - A skill of a `source.git` group is copied from the git cache without the cache's own bookkeeping file, so a freshness check that finds nothing new changes no installed copy.
    - A skill whose refresh fails still counts as wanted, so step 7 keeps its previous copy.
    - Write a `.gitignore` containing a single `*` into each installed skill directory, not its `skills/` parent, so symposium-managed files stay out of version control.
 

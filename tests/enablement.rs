@@ -70,6 +70,25 @@ fn snapshot(ctx: &TestContext) -> BTreeMap<PathBuf, Option<String>> {
     entries
 }
 
+fn record_git_fetch(ctx: &TestContext, url: &str) -> PathBuf {
+    let cached =
+        symposium_install::git::GitCacheManager::new(&ctx.sym.install_context(), "plugins")
+            .cache_path_for_url(url)
+            .unwrap();
+    std::fs::create_dir_all(&cached).unwrap();
+    std::fs::write(
+        cached.join(symposium_install::git::CACHE_META_FILENAME),
+        serde_json::json!({
+            "commit_sha": "0000000000000000000000000000000000000000",
+            "fetched_at": chrono::Utc::now().to_rfc3339(),
+            "source_url": url,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    cached
+}
+
 /// Run `f` with a JSON report layer installed and return the drained events.
 async fn with_report<F>(f: F) -> Vec<serde_json::Value>
 where
@@ -421,8 +440,14 @@ async fn use_global_again_changes_nothing() {
             ctx.sym.config.sync_debounce_secs = 0;
             ctx.symposium(&init).await?;
 
+            let git_skills = "https://github.com/example/facet-skills/tree/main/facet-review";
+            std::fs::write(
+                record_git_fetch(&ctx, git_skills).join("SKILL.md"),
+                "---\nname: facet-review\ndescription: Review guidance fetched by facet-kit\n---\n\nReview guidance.\n",
+            )?;
             ctx.symposium(&["use", "--global", "facet-kit"]).await?;
             let installed = snapshot(&ctx);
+            record_git_fetch(&ctx, git_skills);
             ctx.symposium(&["use", "--global", "facet-kit"]).await?;
             let reinstalled = snapshot(&ctx);
 
@@ -440,12 +465,20 @@ async fn use_global_again_changes_nothing() {
             let config = read_config(&ctx);
             assert!(config.contains(r#"use = ["facet-kit"]"#), "{config}");
 
+            let bookkeeping: Vec<_> = installed
+                .keys()
+                .filter(|path| path.ends_with(symposium_install::git::CACHE_META_FILENAME))
+                .collect();
+            assert!(bookkeeping.is_empty(), "installed: {bookkeeping:#?}");
+
             for (agent, skills_root, mcp_config) in &agents {
-                assert!(
-                    skills_root.join("skills/facet-guidance/SKILL.md").is_file(),
-                    "{agent} has no skill under {}",
-                    skills_root.display()
-                );
+                for skill in ["facet-guidance", "facet-review"] {
+                    assert!(
+                        skills_root.join("skills").join(skill).join("SKILL.md").is_file(),
+                        "{agent} has no {skill} under {}",
+                        skills_root.display()
+                    );
+                }
                 let mcp_config = std::fs::read_to_string(mcp_config)?;
                 assert_eq!(
                     mcp_config.matches("--facet-kit-stdio").count(),

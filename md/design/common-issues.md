@@ -58,6 +58,10 @@ And when two walks over one tree feed each other — a copy, and the comparison 
 
 Destinations need the opposite treatment. A link found in an agent's skills directory is the user's, so `sync` never follows it, and since one agent's skills directory can itself be a link to another's, install targets are compared by resolved path. Comparing literal paths there made the reap delete, through the link, the skills it had just installed. To ask whether a destination slot is taken, use `fs::symlink_metadata`: `Path::exists()` follows the link and reports a dangling one as absent, and installing into that slot then fails on every sync.
 
+## Bookkeeping beside content is not content
+
+A directory Symposium reads skills from can also hold a file Symposium keeps for itself: the git cache writes its metadata (`.symposium-cache-meta.json`, with the time of the last freshness check) inside each cache entry, and a `source.git` group whose URL names a skill directory is read from that entry in place. Such a file changes without the skill changing, so a walk that installs or compares content has to leave it out, as `sync`'s `walk_tree` does. Copying it would make every freshness check look like an update of each installed copy, and every agent would be told the plugin changed.
+
 ## Plugin-supplied names are untrusted input
 
 Plugin content must not decide where Symposium writes. A name it supplies, such as a skill's `name`, can resolve outside the directory it is joined onto (`Path::join` does not confine it), so it never becomes part of a path unchecked. Validate it with `skills::is_safe_dir_name`, which also covers Windows-specific path forms, rather than with a check of your own.

@@ -230,7 +230,8 @@ pub struct PluginCacheMeta {
     pub source_url: String,
 }
 
-const CACHE_META_FILENAME: &str = ".symposium-cache-meta.json";
+/// The file a cache entry's [`PluginCacheMeta`] is kept in, inside the cached directory.
+pub const CACHE_META_FILENAME: &str = ".symposium-cache-meta.json";
 
 /// Manages downloading and caching of git-sourced plugin artifacts.
 pub struct GitCacheManager {

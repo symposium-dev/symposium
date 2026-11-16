@@ -3,6 +3,9 @@ name = "facet-kit"
 [[skills]]
 source.path = "skills"
 
+[[skills]]
+source.git = "https://github.com/example/facet-skills/tree/main/facet-review"
+
 [[mcp_servers]]
 name = "facet-kit-server"
 command = "/usr/bin/true"
