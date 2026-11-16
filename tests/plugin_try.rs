@@ -91,6 +91,22 @@ fn user_plugins(ctx: &TestContext) -> PathBuf {
     ctx.sym.config_dir().join("plugins")
 }
 
+/// The sync after a removal resolves the remaining `use` entries, and cargo
+/// searches crates.io for one that no registry offers.
+fn without_cargo(ctx: &mut TestContext) -> anyhow::Result<()> {
+    let path = ctx.sym.config_dir().join("config.toml");
+    let config = std::fs::read_to_string(&path)?;
+    std::fs::write(
+        &path,
+        format!(
+            "{config}\n[[package-manager]]\nname = \"cargo\"\n\
+             command = \"/nonexistent/symposium-pm-cargo\"\n"
+        ),
+    )?;
+    ctx.sym = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
+    Ok(())
+}
+
 fn snapshot(ctx: &TestContext) -> BTreeMap<String, String> {
     let mut files = BTreeMap::new();
     files.insert("config.toml".to_string(), config(ctx));
@@ -413,10 +429,7 @@ async fn try_remove_preserves_preexisting_dormant_enablement() {
         &["plugin-try0"],
         async |mut ctx| {
             let kit = plugin_path(&ctx, "dormant-kit");
-            // Outside a workspace, removal cannot fetch a same-named crate after the
-            // local trial is unlinked; this test checks the durable configuration.
-            let outside = tempfile::tempdir()?;
-            ctx.workspace_root = Some(outside.path().to_path_buf());
+            without_cargo(&mut ctx)?;
             let own = symposium::config::UseEntry::Global("dormant-kit".into());
             ctx.sym.config.plugins.used.push(own.clone());
             ctx.sym.save_config()?;
@@ -441,10 +454,7 @@ async fn try_remove_preserves_explicitly_recreated_enablement() {
         &["plugin-try0"],
         async |mut ctx| {
             let kit = plugin_path(&ctx, "dormant-kit");
-            // Keep the commands outside a workspace so removal cannot fetch a
-            // same-named crate after the trial's local source is unlinked.
-            let outside = tempfile::tempdir()?;
-            ctx.workspace_root = Some(outside.path().to_path_buf());
+            without_cargo(&mut ctx)?;
             let config_dir = ctx.sym.config_dir().to_path_buf();
             let saved_uses = || {
                 symposium::config::Symposium::from_dir(&config_dir)
@@ -565,22 +575,106 @@ async fn try_remove_leaves_everything_as_before() {
     .unwrap();
 }
 
+fn served_kit(workspace: &Path) -> anyhow::Result<String> {
+    let kit = workspace.join("authoring/served-kit");
+    std::fs::create_dir_all(kit.join("skills/served-guidance"))?;
+    std::fs::write(
+        kit.join("Symposium.toml"),
+        "name = \"served-kit\"\n\n[[skills]]\nsource.path = \"skills\"\n\n\
+         [[mcp_servers]]\nname = \"served-kit-server\"\n\
+         command = \"/usr/bin/true\"\nargs = []\nenv = []\n",
+    )?;
+    std::fs::write(
+        kit.join("skills/served-guidance/SKILL.md"),
+        "---\nname: served-guidance\ndescription: Guidance beside an MCP server\n\
+         ---\n\nServed guidance.\n",
+    )?;
+    Ok(kit.display().to_string())
+}
+
+#[tokio::test]
+async fn try_and_remove_reach_the_user_level_inside_and_outside_a_workspace() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+            let kit = served_kit(&workspace(&ctx))?;
+            let home = ctx.sym.home_dir().to_path_buf();
+            let registered =
+                || std::fs::read_to_string(home.join(".claude.json")).unwrap_or_default();
+            let installed = || {
+                home.join(".claude/skills/served-kit/skills/served-guidance/SKILL.md")
+                    .is_file()
+            };
+            let outside = tempfile::tempdir()?;
+
+            for cwd in [workspace(&ctx), outside.path().to_path_buf()] {
+                ctx.workspace_root = Some(cwd.clone());
+                ctx.symposium(&["plugin", "try", &kit]).await?;
+                assert!(registered().contains("served-kit-server"), "{cwd:?}");
+                assert!(installed(), "{cwd:?}");
+
+                ctx.symposium(&["plugin", "try", "--remove", &kit]).await?;
+                assert!(!registered().contains("served-kit-server"), "{cwd:?}");
+                assert!(!installed(), "{cwd:?}");
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn try_remove_by_name_works_after_the_folder_is_gone() {
     with_fixture(
         TestMode::SimulationOnly,
         &["plugin-try0"],
         async |mut ctx| {
-            init(&mut ctx).await?;
-            let kit = plugin_path(&ctx, "dormant-kit");
-            ctx.symposium(&["plugin", "try", &kit]).await?;
-            std::fs::remove_dir_all(&kit)?;
+            ctx.symposium(&[
+                "init",
+                "--hook-scope",
+                "global",
+                "--add-agent",
+                "claude",
+                "--add-agent",
+                "codex",
+                "--add-agent",
+                "copilot",
+            ])
+            .await?;
+            let ws = workspace(&ctx);
+            let config_dir = ctx.sym.config_dir().to_path_buf();
+            let claude_config = ctx.sym.home_dir().join(".claude.json");
+            let registered = || {
+                symposium::state::mcp_registrations(&config_dir)
+                    .iter()
+                    .any(|registration| registration.name == "served-kit-server")
+                    || std::fs::read_to_string(&claude_config)
+                        .unwrap_or_default()
+                        .contains("served-kit-server")
+            };
+            let outside = tempfile::tempdir()?;
 
-            ctx.symposium(&["plugin", "try", "--remove", "dormant-kit"])
-                .await?;
+            for cwd in [ws.clone(), outside.path().to_path_buf()] {
+                let kit = served_kit(&ws)?;
+                ctx.workspace_root = Some(cwd.clone());
+                ctx.symposium(&["plugin", "try", &kit]).await?;
+                assert!(registered(), "{cwd:?}");
+                std::fs::remove_dir_all(&kit)?;
 
-            assert!(!user_plugins(&ctx).join("dormant-kit").exists());
-            assert!(!installed_anywhere(&ctx, &workspace(&ctx), "kit-guidance"));
+                ctx.symposium(&["plugin", "try", "--remove", "served-kit"])
+                    .await?;
+
+                assert!(!user_plugins(&ctx).join("served-kit").exists(), "{cwd:?}");
+                assert!(
+                    !installed_anywhere(&ctx, &cwd, "served-guidance"),
+                    "{cwd:?}"
+                );
+                assert!(!registered(), "{cwd:?}");
+            }
             Ok(())
         },
     )

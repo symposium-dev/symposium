@@ -15,6 +15,7 @@
 //! when it applies. `--remove` is the inverse, and re-syncs so the plugin's
 //! skills are reaped straight away.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -136,7 +137,7 @@ async fn use_in(
     if workspace_root.is_some() {
         crate::sync::sync(sym, deps, update).await?;
     } else {
-        crate::sync::sync_user_plugins(sym, deps, update, &[]).await?;
+        crate::sync::sync_user_plugins(sym, deps, update, &BTreeSet::new()).await?;
     }
     Ok(())
 }
@@ -202,9 +203,11 @@ pub async fn remove_plugin(
         None => None,
     };
     let disabled = match (registry_plugin, &found) {
-        (Some(plugin), _) => vec![plugin.clone()],
-        (None, Some(found)) => pms.load_plugin(found, UpdateLevel::None).await,
-        (None, None) => Vec::new(),
+        (Some(plugin), _) => crate::sync::declared_mcp_servers([plugin]),
+        (None, Some(found)) => {
+            crate::sync::declared_mcp_servers(&pms.load_plugin(found, UpdateLevel::None).await)
+        }
+        (None, None) => BTreeSet::new(),
     };
     if workspace_root.is_some() {
         crate::sync::sync_disabling(sym, &deps, update, &disabled).await?;

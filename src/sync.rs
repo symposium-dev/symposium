@@ -475,14 +475,14 @@ pub struct Synced {
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> Result<Synced> {
-    sync_disabling(sym, ws, update, &[]).await
+    sync_disabling(sym, ws, update, &BTreeSet::new()).await
 }
 
 pub(crate) async fn sync_disabling(
     sym: &Symposium,
     ws: &Arc<Workspace>,
     update: UpdateLevel,
-    disabled: &[plugins::Plugin],
+    withdrawn_mcp_servers: &BTreeSet<String>,
 ) -> Result<Synced> {
     ensure_config_readable(sym)?;
     let out = &Output::quiet();
@@ -833,13 +833,19 @@ pub(crate) async fn sync_disabling(
     // default), even while the cleanup below is held back. The names come
     // from its manifest, with no predicate evaluated; a name an active plugin
     // still declares stays, since the entry may now be that plugin's.
-    unregister_withdrawn_mcp_servers(sym, &revoked, &active, |_, _| true, out);
+    unregister_withdrawn_mcp_servers(
+        sym,
+        &declared_mcp_servers(&revoked),
+        &active,
+        |_, _| true,
+        out,
+    );
     let in_reach = |agent: Agent, file: &Path| {
         file.starts_with(&project_root)
             || file == agent.mcp_config_path(crate::agents::McpScope::User, &project_root, sym)
     };
     if !skip_cleanup {
-        unregister_withdrawn_mcp_servers(sym, disabled, &active, in_reach, out);
+        unregister_withdrawn_mcp_servers(sym, withdrawn_mcp_servers, &active, in_reach, out);
     }
 
     // Stale-skill cleanup: scan every agent's skills parent directory (across
@@ -938,7 +944,7 @@ pub(crate) async fn sync_user_plugins(
     sym: &Symposium,
     ws: &Arc<Workspace>,
     update: UpdateLevel,
-    disabled: &[plugins::Plugin],
+    withdrawn_mcp_servers: &BTreeSet<String>,
 ) -> Result<()> {
     ensure_config_readable(sym)?;
     let here = ws.start().context("no directory to resolve from")?;
@@ -990,13 +996,19 @@ pub(crate) async fn sync_user_plugins(
             register_mcp_servers(sym, agent, user, here, &mcp_servers, out);
         }
     }
-    unregister_withdrawn_mcp_servers(sym, &revoked, &active, |_, _| true, out);
+    unregister_withdrawn_mcp_servers(
+        sym,
+        &declared_mcp_servers(&revoked),
+        &active,
+        |_, _| true,
+        out,
+    );
     if !skip_cleanup {
         unregister_user_plugins(sym);
         let user_file = |agent: Agent, file: &Path| {
             file == agent.mcp_config_path(crate::agents::McpScope::User, here, sym)
         };
-        unregister_withdrawn_mcp_servers(sym, disabled, &active, user_file, out);
+        unregister_withdrawn_mcp_servers(sym, withdrawn_mcp_servers, &active, user_file, out);
     }
     if !compiled.plugins.is_empty() && !left_out.is_empty() {
         tracing::info!(
@@ -1240,25 +1252,25 @@ fn unregister_unconfigured_mcp_servers(
     );
 }
 
+pub(crate) fn declared_mcp_servers<'a>(
+    plugins: impl IntoIterator<Item = &'a plugins::Plugin>,
+) -> BTreeSet<String> {
+    plugins
+        .into_iter()
+        .flat_map(|p| p.manifest.mcp_servers.iter())
+        .map(|s| crate::agents::mcp_server_name(&s.server).to_string())
+        .collect()
+}
+
 fn unregister_withdrawn_mcp_servers(
     sym: &Symposium,
-    withdrawn: &[plugins::Plugin],
+    withdrawn: &BTreeSet<String>,
     active: &[plugins::Plugin],
     in_reach: impl Fn(Agent, &Path) -> bool,
     out: &Output,
 ) {
-    let declared = |plugins: &[plugins::Plugin]| -> BTreeSet<String> {
-        plugins
-            .iter()
-            .flat_map(|p| p.manifest.mcp_servers.iter())
-            .map(|s| crate::agents::mcp_server_name(&s.server).to_string())
-            .collect()
-    };
-    let still_declared = declared(active);
-    let withdrawn: BTreeSet<String> = declared(withdrawn)
-        .into_iter()
-        .filter(|name| !still_declared.contains(name))
-        .collect();
+    let still_declared = declared_mcp_servers(active);
+    let withdrawn: BTreeSet<&String> = withdrawn.difference(&still_declared).collect();
     if !withdrawn.is_empty() {
         unregister_recorded_mcp_servers(
             sym,

@@ -71,6 +71,11 @@ pub async fn try_plugin(
         crate::state::record_trial_use(sym.config_dir(), &name);
         global = true;
     }
+    crate::state::record_trial_mcp_servers(
+        sym.config_dir(),
+        &name,
+        crate::sync::declared_mcp_servers([&plugin]),
+    );
 
     tracing::info!(
         report = %ReportEvent::PluginTried { name: name.clone(), global },
@@ -79,7 +84,7 @@ pub async fn try_plugin(
         report_gate(&plugin);
     }
 
-    if let Some(synced) = sync_here(sym, cwd, update).await? {
+    if let Some(synced) = sync_here(sym, cwd, update, &BTreeSet::new()).await? {
         report_loaded(sym, cwd, &plugin, &synced.skill_origins).await;
     }
     Ok(())
@@ -94,6 +99,7 @@ pub async fn remove_trial(
     let plugins_dir = user_plugins_dir(sym);
     let name = trial_name(&plugins_dir, target)?;
     let link = plugins_dir.join(&name);
+    let mut withdrawn = crate::sync::declared_mcp_servers(&load_plugin_dir(&link));
 
     remove_symlink_dir(&link).with_context(|| format!("cannot remove `{}`", link.display()))?;
     let _ = fs::remove_dir(&plugins_dir);
@@ -104,22 +110,29 @@ pub async fn remove_trial(
         sym.save_config().context("failed to write user config")?;
         crate::state::forget_trial_use(sym.config_dir(), &name);
     }
+    withdrawn.extend(crate::state::take_trial_mcp_servers(
+        sym.config_dir(),
+        &name,
+    ));
 
     tracing::info!(report = %ReportEvent::PluginTrialRemoved { name });
 
-    sync_here(sym, cwd, update).await.map(|_| ())
+    sync_here(sym, cwd, update, &withdrawn).await.map(|_| ())
 }
 
-async fn sync_here(sym: &Symposium, cwd: &Path, update: UpdateLevel) -> Result<Option<Synced>> {
+async fn sync_here(
+    sym: &Symposium,
+    cwd: &Path,
+    update: UpdateLevel,
+    withdrawn_mcp_servers: &BTreeSet<String>,
+) -> Result<Option<Synced>> {
     let workspace = sym.workspace(cwd);
     if workspace.root().await.is_some() {
-        return crate::sync::sync(sym, &workspace, update).await.map(Some);
+        return crate::sync::sync_disabling(sym, &workspace, update, withdrawn_mcp_servers)
+            .await
+            .map(Some);
     }
-    tracing::info!(
-        report = %ReportEvent::Info {
-            message: "not in a Rust workspace; agents pick the change up when a session starts in one".to_string(),
-        },
-    );
+    crate::sync::sync_user_plugins(sym, &workspace, update, withdrawn_mcp_servers).await?;
     Ok(None)
 }
 

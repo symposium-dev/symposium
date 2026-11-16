@@ -119,7 +119,7 @@ symposium plugin try --remove <PATH or NAME>
 
 Install a plugin you are writing in your agents, the way a user would have it, so you can open an agent and use it. `<PATH>` is a plugin directory (with a `Symposium.toml`), an [Agent Plugins package](./agent-plugins.md) directory (with a `plugin.json`) or a skill directory (with a `SKILL.md`).
 
-The plugin is linked into `~/.symposium/plugins/` under its name, then the current workspace is synced. A plugin that names no dependency is also enabled in every workspace, as [`symposium use --global`](./symposium-use.md) would. Symposium reads your directory in place, so an edit reaches your agents on the next sync: `symposium sync`, or the automatic one when an agent starts a session. Most agents then need a new session (Claude Code also takes `/reload-plugins`, Copilot CLI `/restart`).
+The plugin is linked into `~/.symposium/plugins/` under its name, then the current workspace is synced. A plugin that names no dependency is also enabled in every workspace, as [`symposium use --global`](./symposium-use.md) would. Outside a workspace, such a plugin is installed for you right away, as `use --global` does there, its MCP servers included when `hook-scope` is `"global"`; Kiro and OpenCode, which read skills from a project only, get it at the next sync in a workspace. Symposium reads your directory in place, so an edit reaches your agents on the next sync: `symposium sync`, or the automatic one when an agent starts a session. Most agents then need a new session (Claude Code also takes `/reload-plugins`, Copilot CLI `/restart`).
 
 A plugin with its own `depends-on` or predicates is left to them, as it is for its users: it is active only in workspaces where they hold. `try` names the dependency. When the sync installs none of the plugin's skills in the current workspace, it warns and skips the check below.
 
@@ -134,7 +134,7 @@ After syncing, `try` asks each configured agent what it loaded, using the agent'
 
 Claude Code, Antigravity CLI and Kiro have no such command: start a new session in the project and run `/skills`. An agent whose command is not on `PATH` is skipped.
 
-`--remove` discards the trial: it removes the link and the enablement `try` added, and syncs, which removes everything installed for the plugin in the current workspace. Other workspaces are cleaned on their next sync. A directory in `~/.symposium/plugins/` that `try` did not link is left alone.
+`--remove` discards the trial: it removes the link and the enablement `try` added, and syncs, which removes everything installed for the plugin for you and in the current workspace, its MCP servers included, or only what was installed for you when it runs outside a workspace. Other workspaces are cleaned on their next sync. A directory in `~/.symposium/plugins/` that `try` did not link is left alone.
 
 | Flag | Description |
 |------|-------------|
