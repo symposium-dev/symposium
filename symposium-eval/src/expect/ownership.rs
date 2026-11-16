@@ -13,8 +13,10 @@ use std::io;
 use std::path::{Component, Path};
 
 use super::installed::{GITIGNORE, GITIGNORE_CONTENTS, MARKER, copy_candidates, same_bytes};
-use crate::task::SkillSource;
+use crate::task::{SkillName, SkillSource};
 use crate::tree::{self, EntryKind, TreeEntry};
+
+mod bundles;
 
 /// Discovers copies independently of assertions, comparing every candidate against
 /// the task's trusted providers. Returns `/`-joined paths relative to `project`.
@@ -26,8 +28,10 @@ pub(crate) fn symposium_copies(
     let mut owned = sources
         .iter()
         .flat_map(|source| {
-            copy_candidates(skills, &source.name)
+            SkillName::new(&source.name)
+                .ok()
                 .into_iter()
+                .flat_map(|name| copy_candidates(skills, &name))
                 .filter_map(|copy| {
                     is_symposium_copy(&copy, &source.dir)
                         .then(|| relative(project, &copy))
@@ -35,6 +39,13 @@ pub(crate) fn symposium_copies(
                 })
         })
         .collect::<Vec<_>>();
+    let source_of = |skill: &SkillName| {
+        sources
+            .iter()
+            .find(|source| source.name == skill.as_str())
+            .map(|source| source.dir.clone())
+    };
+    owned.extend(bundles::symposium_bundles(project, &source_of));
     owned.sort();
     owned.dedup();
     owned
@@ -117,6 +128,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::expect::test_support::NativeBundle;
 
     /// A skill source, and a project whose skill directory holds sync's copy of it.
     struct Installed {
@@ -148,10 +160,22 @@ mod tests {
             }
         }
 
+        fn bundled(mut self) -> Self {
+            let bundle = NativeBundle::new(&self.project.join(".claude/skills/a-plugin"));
+            let payload = bundle.path().join("skills/first-skill");
+            fs::rename(&self.copy, &payload).unwrap();
+            for metadata in [MARKER, GITIGNORE] {
+                fs::remove_file(payload.join(metadata)).unwrap();
+            }
+            self.copy = payload;
+            self
+        }
+
         fn owned(&self) -> Vec<String> {
             let source = SkillSource {
                 name: "first-skill".to_owned(),
                 dir: self.source.clone(),
+                bundle: None,
             };
             symposium_copies(
                 &self.project,
@@ -163,26 +187,7 @@ mod tests {
 
     #[test]
     fn a_native_bundle_with_an_exact_payload_is_symposiums() {
-        let mut installed = Installed::new();
-        let bundle = installed.project.join(".claude/skills/a-plugin");
-        let payload = bundle.join("skills/first-skill");
-        fs::create_dir_all(payload.parent().unwrap()).unwrap();
-        fs::rename(&installed.copy, &payload).unwrap();
-        installed.copy = payload;
-        // Native delivery marks the bundle; the payload holds only source content.
-        fs::remove_file(installed.copy.join(MARKER)).unwrap();
-        fs::remove_file(installed.copy.join(GITIGNORE)).unwrap();
-        fs::create_dir(bundle.join(".claude-plugin")).unwrap();
-        let manifest = serde_json::to_vec_pretty(&serde_json::json!({
-            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-            "name": "a-plugin",
-            "version": "0.0.0",
-        }))
-        .unwrap();
-        fs::write(bundle.join("plugin.json"), &manifest).unwrap();
-        fs::write(bundle.join(".claude-plugin/plugin.json"), &manifest).unwrap();
-        fs::write(bundle.join(MARKER), "").unwrap();
-        fs::write(bundle.join(GITIGNORE), GITIGNORE_CONTENTS).unwrap();
+        let installed = Installed::new().bundled();
 
         assert_eq!(installed.owned(), [".claude/skills/a-plugin"]);
     }
@@ -207,10 +212,12 @@ mod tests {
             SkillSource {
                 name: "first-skill".to_owned(),
                 dir: installed.source.clone(),
+                bundle: None,
             },
             SkillSource {
                 name: "first-skill".to_owned(),
                 dir: other_source,
+                bundle: None,
             },
         ];
 
