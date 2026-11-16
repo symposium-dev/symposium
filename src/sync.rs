@@ -475,12 +475,7 @@ pub struct Synced {
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> Result<Synced> {
-    if let Some(error) = sym.config_error() {
-        anyhow::bail!(
-            "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
-            display_path(&sym.config_dir().join("config.toml")),
-        );
-    }
+    ensure_config_readable(sym)?;
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();
@@ -572,13 +567,7 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     }
 
     // Collect MCP servers from the same active plugin set.
-    let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
-    for p in &active {
-        if p.applies(&mut ctx) {
-            let servers = p.manifest.applicable_mcp_servers(&mut ctx);
-            mcp_servers.extend(package_mcp_servers(sym, p, servers));
-        }
-    }
+    let mcp_servers = applicable_mcp_servers(sym, &active, &mut ctx);
     let global = compile::global_plugins(sym, pms, &registry, &active, &mut ctx, update).await;
     let project = if Agent::Claude.is_configured(sym) {
         compile::project_plugins(&active, &applicable, &global)
@@ -621,24 +610,15 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // so its silence must not retire what it installed before: neither a skill
     // nor an MCP entry. Both cleanups read this one decision.
     let failed_pms = ws.failed();
-    let skip_cleanup = !registry.unreadable_registries.is_empty() || !failed_pms.is_empty();
+    let skip_cleanup = cleanup_held_back(&registry, &failed_pms);
 
     let mut warned = BTreeSet::new();
     let plugins_root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
     // A revoked package's staged plugin comes off first, so the hold-back
     // below cannot hand it to the agents again.
-    if skip_cleanup && !revoked.is_empty() {
-        let revoked_plugins: BTreeSet<String> = revoked
-            .iter()
-            .filter_map(|p| compile::normalize_name(&p.manifest.name))
-            .collect();
-        for root in [&plugins_root, &compile::project_plugins_root(&project_root)] {
-            reap_unlisted(root, |dir| {
-                !dir.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| revoked_plugins.contains(name))
-            });
-        }
+    if skip_cleanup {
+        let project_staging = compile::project_plugins_root(&project_root);
+        reap_revoked_plugins(&revoked, &[&plugins_root, &project_staging]);
     }
     let compiled = compile::compile(&plugins_root, &global, debounce, &mut warned, skip_cleanup);
     crate::agents::sync_marketplace_index(sym, &compiled.plugins);
@@ -730,30 +710,22 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
                 },
             );
         }
-        match agent.register_mcp_servers(mcp_scope, &project_root, sym, &mcp_servers, out) {
-            Ok(names) => {
-                let file = agent.mcp_config_path(mcp_scope, &project_root, sym);
-                let project_file =
-                    agent.mcp_config_path(crate::agents::McpScope::Project, &project_root, sym);
-                let offered: &[String] = if file == project_file { &names } else { &[] };
-                if agent.supports_project_mcp_scope() && !skip_cleanup {
-                    unregister_recorded_mcp_servers(
-                        sym,
-                        |_, registration| {
-                            registration.agent == *agent_name
-                                && registration.file == project_file
-                                && !offered.contains(&registration.name)
-                        },
-                        out,
-                    );
-                }
-                record_mcp_registrations(sym, agent, &file, names);
-            }
-            Err(e) => {
-                tracing::info!(
-                    report = %crate::report::ReportEvent::Warning {
-                        message: format!("failed to register MCP servers for {agent_name}: {e:#}"),
+        if let Some(names) =
+            register_mcp_servers(sym, agent, mcp_scope, &project_root, &mcp_servers, out)
+        {
+            let file = agent.mcp_config_path(mcp_scope, &project_root, sym);
+            let project_file =
+                agent.mcp_config_path(crate::agents::McpScope::Project, &project_root, sym);
+            let offered: &[String] = if file == project_file { &names } else { &[] };
+            if agent.supports_project_mcp_scope() && !skip_cleanup {
+                unregister_recorded_mcp_servers(
+                    sym,
+                    |_, registration| {
+                        registration.agent == *agent_name
+                            && registration.file == project_file
+                            && !offered.contains(&registration.name)
                     },
+                    out,
                 );
             }
         }
@@ -852,24 +824,7 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // default), even while the cleanup below is held back. The names come
     // from its manifest, with no predicate evaluated; a name an active plugin
     // still declares stays, since the entry may now be that plugin's.
-    let still_declared: BTreeSet<&str> = active
-        .iter()
-        .flat_map(|p| p.manifest.mcp_servers.iter())
-        .map(|s| crate::agents::mcp_server_name(&s.server))
-        .collect();
-    let revoked_mcp: BTreeSet<&str> = revoked
-        .iter()
-        .flat_map(|p| p.manifest.mcp_servers.iter())
-        .map(|s| crate::agents::mcp_server_name(&s.server))
-        .filter(|name| !still_declared.contains(name))
-        .collect();
-    if !revoked_mcp.is_empty() {
-        unregister_recorded_mcp_servers(
-            sym,
-            |_, registration| revoked_mcp.contains(registration.name.as_str()),
-            out,
-        );
-    }
+    unregister_withdrawn_mcp_servers(sym, &revoked, &active, out);
 
     // Stale-skill cleanup: scan every agent's skills parent directory (across
     // all known agents, so we also clean up after agents removed from config)
@@ -971,6 +926,116 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     })
 }
 
+pub(crate) async fn sync_user_plugins(
+    sym: &Symposium,
+    ws: &Arc<Workspace>,
+    update: UpdateLevel,
+) -> Result<()> {
+    ensure_config_readable(sym)?;
+    let here = ws.start().context("no directory to resolve from")?;
+    let dep_ids = ws.dep_ids().await.to_vec();
+    let registry = plugins::load_registry(sym).await;
+    let pms = ws.pms();
+    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, here).await;
+    let custom_entries = resolve_custom_predicate_entries(sym, &registry, update).await;
+    let mut ctx =
+        crate::predicate::PredicateContext::with_custom_predicates(&dep_ids, custom_entries)
+            .with_used(&used)
+            .with_cwd(Some(here));
+    let plugins::ActivePlugins { active, revoked } = plugins::resolve_active_plugins(
+        sym,
+        &registry,
+        pms,
+        Some(here),
+        &mut ctx,
+        UpdateLevel::Check,
+    )
+    .await;
+    let global = compile::global_plugins(sym, pms, &registry, &active, &mut ctx, update).await;
+    let for_user = compile::installed_for_user(sym, pms, &registry.plugins, &active).await;
+    let mcp_servers = applicable_mcp_servers(sym, for_user, &mut ctx);
+    let register_mcp = sym.config.hook_scope == crate::config::HookScope::Global;
+
+    let _lock = lock_sync(sym)?;
+    let out = &Output::quiet();
+    let skip_cleanup = cleanup_held_back(&registry, &ws.failed());
+    let plugins_root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
+    if skip_cleanup {
+        reap_revoked_plugins(&revoked, &[&plugins_root]);
+    }
+    let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
+    let mut warned = BTreeSet::new();
+    let compiled = compile::compile(&plugins_root, &global, debounce, &mut warned, skip_cleanup);
+    crate::agents::sync_marketplace_index(sym, &compiled.plugins);
+
+    let mut left_out = Vec::new();
+    for entry in &sym.config.agents {
+        let Ok(agent) = Agent::from_config_name(&entry.name) else {
+            continue;
+        };
+        if agent.deliver_user_plugins(sym, &compiled.plugins).is_none() {
+            left_out.push(agent.display_name());
+        }
+        if register_mcp {
+            let user = crate::agents::McpScope::User;
+            register_mcp_servers(sym, agent, user, here, &mcp_servers, out);
+        }
+    }
+    unregister_withdrawn_mcp_servers(sym, &revoked, &active, out);
+    if !skip_cleanup {
+        unregister_user_plugins(sym);
+    }
+    if !compiled.plugins.is_empty() && !left_out.is_empty() {
+        tracing::info!(
+            report = %crate::report::ReportEvent::Info {
+                message: format!(
+                    "not installed for {}: the next sync in a workspace installs the skills there",
+                    left_out.join(", ")
+                ),
+            },
+        );
+    }
+    if !register_mcp && !mcp_servers.is_empty() {
+        tracing::info!(
+            report = %crate::report::ReportEvent::Info {
+                message: "MCP servers not registered: with `hook-scope = \"project\"` the next sync in a workspace registers them there".into(),
+            },
+        );
+    }
+    Ok(())
+}
+
+fn ensure_config_readable(sym: &Symposium) -> Result<()> {
+    if let Some(error) = sym.config_error() {
+        anyhow::bail!(
+            "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
+            display_path(&sym.config_dir().join("config.toml")),
+        );
+    }
+    Ok(())
+}
+
+fn cleanup_held_back(registry: &plugins::PluginRegistry, failed_pms: &[String]) -> bool {
+    !registry.unreadable_registries.is_empty() || !failed_pms.is_empty()
+}
+
+fn reap_revoked_plugins(revoked: &[plugins::Plugin], roots: &[&Path]) {
+    let revoked: BTreeSet<String> = revoked
+        .iter()
+        .filter_map(|p| compile::normalize_name(&p.manifest.name))
+        .collect();
+    if revoked.is_empty() {
+        return;
+    }
+    for root in roots {
+        reap_unlisted(root, |dir| {
+            !dir.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| revoked.contains(name))
+        });
+    }
+}
+
 fn lock_sync(sym: &Symposium) -> Result<fs::File> {
     let cache_dir = sym.cache_dir();
     fs::create_dir_all(cache_dir).with_context(|| format!("create {}", cache_dir.display()))?;
@@ -1033,6 +1098,49 @@ pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn applicable_mcp_servers<'a>(
+    sym: &Symposium,
+    plugins: impl IntoIterator<Item = &'a plugins::Plugin>,
+    ctx: &mut crate::predicate::PredicateContext,
+) -> Vec<sacp::schema::McpServer> {
+    let mut servers = Vec::new();
+    for plugin in plugins {
+        if plugin.applies(ctx) {
+            let applicable = plugin.manifest.applicable_mcp_servers(ctx);
+            servers.extend(package_mcp_servers(sym, plugin, applicable));
+        }
+    }
+    servers
+}
+
+fn register_mcp_servers(
+    sym: &Symposium,
+    agent: Agent,
+    scope: crate::agents::McpScope,
+    project_root: &Path,
+    servers: &[sacp::schema::McpServer],
+    out: &Output,
+) -> Option<Vec<String>> {
+    match agent.register_mcp_servers(scope, project_root, sym, servers, out) {
+        Ok(names) => {
+            let file = agent.mcp_config_path(scope, project_root, sym);
+            record_mcp_registrations(sym, agent, &file, names.clone());
+            Some(names)
+        }
+        Err(e) => {
+            tracing::info!(
+                report = %crate::report::ReportEvent::Warning {
+                    message: format!(
+                        "failed to register MCP servers for {}: {e:#}",
+                        agent.config_name()
+                    ),
+                },
+            );
+            None
+        }
+    }
 }
 
 fn package_mcp_servers(
@@ -1117,6 +1225,33 @@ fn unregister_unconfigured_mcp_servers(
         },
         out,
     );
+}
+
+fn unregister_withdrawn_mcp_servers(
+    sym: &Symposium,
+    withdrawn: &[plugins::Plugin],
+    active: &[plugins::Plugin],
+    out: &Output,
+) {
+    let declared = |plugins: &[plugins::Plugin]| -> BTreeSet<String> {
+        plugins
+            .iter()
+            .flat_map(|p| p.manifest.mcp_servers.iter())
+            .map(|s| crate::agents::mcp_server_name(&s.server).to_string())
+            .collect()
+    };
+    let still_declared = declared(active);
+    let withdrawn: BTreeSet<String> = declared(withdrawn)
+        .into_iter()
+        .filter(|name| !still_declared.contains(name))
+        .collect();
+    if !withdrawn.is_empty() {
+        unregister_recorded_mcp_servers(
+            sym,
+            |_, registration| withdrawn.contains(&registration.name),
+            out,
+        );
+    }
 }
 
 /// An entry whose removal fails stays recorded, so the next run retries it.

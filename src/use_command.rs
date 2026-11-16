@@ -141,6 +141,8 @@ async fn use_in(
     // Install now rather than waiting for the next sync.
     if workspace_root.is_some() {
         crate::sync::sync(sym, deps, update).await?;
+    } else {
+        crate::sync::sync_user_plugins(sym, deps, update).await?;
     }
     Ok(())
 }
@@ -196,6 +198,8 @@ pub async fn remove_plugin(
 
     if workspace_root.is_some() {
         crate::sync::sync(sym, &deps, update).await?;
+    } else {
+        crate::sync::sync_user_plugins(sym, &deps, update).await?;
     }
     Ok(())
 }

@@ -50,6 +50,22 @@ async fn installs_globally(pms: &PmRegistry, used: &[PackageId], plugin: &Plugin
             .is_ok_and(|id| used.contains(&id))
 }
 
+pub(crate) async fn installed_for_user<'a>(
+    sym: &Symposium,
+    pms: &PmRegistry,
+    registry_plugins: &[Plugin],
+    plugins: impl IntoIterator<Item = &'a Plugin>,
+) -> Vec<&'a Plugin> {
+    let used = globally_used(&sym.config.plugins, pms, registry_plugins).await;
+    let mut selected = Vec::new();
+    for plugin in plugins {
+        if installs_globally(pms, &used, plugin).await {
+            selected.push(plugin);
+        }
+    }
+    selected
+}
+
 pub(crate) fn is_plugin_dir(dir: &Path) -> bool {
     dir.join(CLAUDE_MANIFEST_DIR).join(MANIFEST_FILE).is_file()
         && !dir.join(crate::pm::layout::SKILL_FILE).exists()
@@ -100,17 +116,16 @@ pub(crate) async fn global_plugins(
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
 ) -> Vec<PluginSkills> {
-    let used = globally_used(&sym.config.plugins, pms, &registry.plugins).await;
     let inactive = registry
         .plugins
         .iter()
         .filter(|plugin| !active.iter().any(|a| a.canonical == plugin.canonical));
-    let mut plugins = Vec::new();
-    for plugin in active.iter().chain(inactive) {
-        if installs_globally(pms, &used, plugin).await {
-            plugins.push(plugin.clone());
-        }
-    }
+    let mut plugins: Vec<Plugin> =
+        installed_for_user(sym, pms, &registry.plugins, active.iter().chain(inactive))
+            .await
+            .into_iter()
+            .cloned()
+            .collect();
     ctx.set_conditions_met(true);
     plugins.retain(|plugin| plugin.applies(ctx));
     let skills = crate::skills::collect_skills(sym, &plugins, ctx, update).await;
