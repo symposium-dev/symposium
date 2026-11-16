@@ -224,7 +224,7 @@ mod tests {
         assert!(finished.succeeded(), "{}", finished.stderr.tail());
         let skill = trial
             .project()
-            .join(".claude/skills/fixture-store/SKILL.md");
+            .join(".claude/skills/fixture-store/skills/fixture-store/SKILL.md");
         assert!(skill.is_file(), "{}", finished.stdout.tail());
     }
 
