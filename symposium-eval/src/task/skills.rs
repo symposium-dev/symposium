@@ -9,11 +9,13 @@
 //! must be one Symposium would load. The plugin's listing is read once, and holds no
 //! links, so a source is followed nowhere else.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use super::delivery::normalized_name;
 use super::manifest::{Plugin, RawSkillGroup};
-use super::{SkillExpectations, SkillName, TaskError};
+use super::{PluginName, SkillExpectations, SkillName, TaskError};
 use crate::skill_md;
 use crate::tree::EntryKind;
 
@@ -26,17 +28,39 @@ const MARKER: &str = ".symposium";
 pub(crate) struct SkillSource {
     pub(crate) name: String,
     pub(crate) dir: PathBuf,
+    pub(crate) bundle: Option<String>,
 }
 
 /// Catalogues every provider and validates the skills `expected` names. A skill that
 /// must be installed or used needs one provider; any named skill with two is refused.
 /// One `SKILL.md` reached through two groups is one provider, as sync counts it.
+/// A skill a plugin provides, including the identity needed to derive its native
+/// delivery bundle.
+struct Provided {
+    name: String,
+    dir: PathBuf,
+    plugin: PluginName,
+    bundle: Option<String>,
+}
 pub(super) fn resolve(
     plugins: &[Plugin<'_>],
     expected: &SkillExpectations,
     errors: &mut Vec<TaskError>,
 ) -> Vec<SkillSource> {
-    let mut provided: Vec<SkillSource> = Vec::new();
+    let provided = provided_skills(plugins, errors);
+    validate_expected_sources(&provided, expected, errors);
+    provided
+        .into_iter()
+        .map(|provided| SkillSource {
+            name: provided.name,
+            dir: provided.dir,
+            bundle: provided.bundle,
+        })
+        .collect()
+}
+
+fn provided_skills(plugins: &[Plugin<'_>], errors: &mut Vec<TaskError>) -> Vec<Provided> {
+    let mut provided: Vec<Provided> = Vec::new();
     for plugin in plugins {
         for skill in plugin_skills(plugin, errors) {
             if !provided.iter().any(|seen| seen.dir == skill.dir) {
@@ -44,6 +68,54 @@ pub(super) fn resolve(
             }
         }
     }
+    bind_bundles(plugins, &mut provided, errors);
+    provided
+}
+
+fn bind_bundles(plugins: &[Plugin<'_>], provided: &mut [Provided], errors: &mut Vec<TaskError>) {
+    let mut owners: BTreeMap<String, PluginName> = BTreeMap::new();
+    for plugin in plugins {
+        let Some(source_name) = bundle_source_name(plugin, provided) else {
+            continue;
+        };
+        let Some(name) = normalized_name(source_name) else {
+            errors.push(TaskError::UnnameableBundle {
+                plugin: plugin.name.clone(),
+                name: source_name.to_owned(),
+            });
+            continue;
+        };
+        if let Some(first) = owners.get(&name) {
+            errors.push(TaskError::AmbiguousBundleName {
+                name: name.clone(),
+                first: first.clone(),
+                second: plugin.name.clone(),
+            });
+        } else {
+            owners.insert(name.clone(), plugin.name.clone());
+        }
+        for skill in provided
+            .iter_mut()
+            .filter(|skill| &skill.plugin == plugin.name)
+        {
+            skill.bundle = Some(name.clone());
+        }
+    }
+}
+
+fn bundle_source_name<'a>(plugin: &'a Plugin<'_>, provided: &'a [Provided]) -> Option<&'a str> {
+    let first = provided.iter().find(|skill| &skill.plugin == plugin.name)?;
+    Some(match &plugin.manifest {
+        Some(manifest) => manifest.name.as_deref()?,
+        None => &first.name,
+    })
+}
+
+fn validate_expected_sources(
+    provided: &[Provided],
+    expected: &SkillExpectations,
+    errors: &mut Vec<TaskError>,
+) {
     let needed =
         |skill: &SkillName| expected.installed().contains(skill) || expected.used().contains(skill);
     for skill in expected.names() {
@@ -61,10 +133,9 @@ pub(super) fn resolve(
             (None, _) => {}
         }
     }
-    provided
 }
 
-fn plugin_skills(plugin: &Plugin<'_>, errors: &mut Vec<TaskError>) -> Vec<SkillSource> {
+fn plugin_skills(plugin: &Plugin<'_>, errors: &mut Vec<TaskError>) -> Vec<Provided> {
     let Some(manifest) = &plugin.manifest else {
         // A plugin without a manifest is a registry's bare skill only at its root.
         let bare = plugin
@@ -179,7 +250,7 @@ fn is_within(path: &str, dir: &str) -> bool {
 }
 
 /// Each skill in `dirs` with its name, if Symposium would load it.
-fn named(plugin: &Plugin<'_>, dirs: Vec<PathBuf>, errors: &mut Vec<TaskError>) -> Vec<SkillSource> {
+fn named(plugin: &Plugin<'_>, dirs: Vec<PathBuf>, errors: &mut Vec<TaskError>) -> Vec<Provided> {
     dirs.into_iter()
         .filter_map(|dir| {
             let path = dir.join("SKILL.md");
@@ -191,7 +262,12 @@ fn named(plugin: &Plugin<'_>, dirs: Vec<PathBuf>, errors: &mut Vec<TaskError>) -
                 }
             };
             match skill_md::loadable_name(&text) {
-                Ok(name) => Some(SkillSource { name, dir }),
+                Ok(name) => Some(Provided {
+                    name,
+                    dir,
+                    plugin: plugin.name.clone(),
+                    bundle: None,
+                }),
                 Err(problem) => {
                     errors.push(TaskError::UnloadableSkill {
                         plugin: plugin.name.clone(),
