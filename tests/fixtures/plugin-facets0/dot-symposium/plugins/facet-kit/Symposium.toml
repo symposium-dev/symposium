@@ -1,0 +1,17 @@
+name = "facet-kit"
+
+[[skills]]
+source.path = "skills"
+
+[[mcp_servers]]
+name = "facet-kit-server"
+command = "/usr/bin/true"
+args = ["--facet-kit-stdio"]
+env = []
+
+[[hooks]]
+name = "facet-kit-hook"
+event = "PreToolUse"
+matcher = "Bash"
+format = "symposium"
+command = { script = "facet-kit-hook.sh" }

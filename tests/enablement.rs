@@ -1,6 +1,7 @@
 //! The enablement commands: `symposium use`, `search`, and `status`,
 //! plus the discovery consent prompt they share a config section with.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use symposium::config::UseEntry;
@@ -46,6 +47,27 @@ fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
 
 fn read_config(ctx: &TestContext) -> String {
     std::fs::read_to_string(ctx.sym.config_dir().join("config.toml")).unwrap()
+}
+
+fn snapshot(ctx: &TestContext) -> BTreeMap<PathBuf, Option<String>> {
+    let mut entries = BTreeMap::new();
+    let mut pending = vec![ctx.tempdir.clone()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path == ctx.sym.cache_dir() {
+                continue;
+            }
+            let relative = path.strip_prefix(&ctx.tempdir).unwrap().to_path_buf();
+            if path.is_dir() {
+                entries.insert(relative, None);
+                pending.push(path);
+            } else {
+                entries.insert(relative, Some(std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    entries
 }
 
 /// Run `f` with a JSON report layer installed and return the drained events.
@@ -340,6 +362,136 @@ async fn a_global_package_reaches_a_workspace_it_does_not_match() {
             )
             .await?;
             assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_global_again_changes_nothing() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0", "workspace-empty0"],
+        async |mut ctx| {
+            let home = ctx.sym.home_dir().to_path_buf();
+            let project = ctx.workspace_root.clone().unwrap();
+            let agents = [
+                (
+                    "claude",
+                    home.join(".claude/skills/facet-kit"),
+                    project.join(".mcp.json"),
+                ),
+                (
+                    "codex",
+                    home.join(".codex/plugins/cache/symposium/facet-kit/0.0.0"),
+                    home.join(".codex/config.toml"),
+                ),
+                (
+                    "copilot",
+                    ctx.sym.config_dir().join("installed/facet-kit"),
+                    home.join(".copilot/mcp-config.json"),
+                ),
+                (
+                    "antigravity",
+                    home.join(".gemini/config/plugins/facet-kit"),
+                    project.join(".agents/mcp_config.json"),
+                ),
+                (
+                    "goose",
+                    home.join(".agents/plugins/facet-kit"),
+                    home.join(".config/goose/config.yaml"),
+                ),
+                (
+                    "kiro",
+                    project.join(".kiro"),
+                    project.join(".kiro/settings/mcp.json"),
+                ),
+                (
+                    "opencode",
+                    project.join(".opencode"),
+                    project.join("opencode.json"),
+                ),
+            ];
+            let mut init = vec!["init"];
+            for (agent, ..) in &agents {
+                init.extend(["--add-agent", *agent]);
+            }
+            ctx.sym.config.sync_debounce_secs = 0;
+            ctx.symposium(&init).await?;
+
+            ctx.symposium(&["use", "--global", "facet-kit"]).await?;
+            let installed = snapshot(&ctx);
+            ctx.symposium(&["use", "--global", "facet-kit"]).await?;
+            let reinstalled = snapshot(&ctx);
+
+            let changed: BTreeMap<_, _> = installed
+                .keys()
+                .chain(reinstalled.keys())
+                .filter(|path| installed.get(*path) != reinstalled.get(*path))
+                .map(|path| (path, (installed.get(path), reinstalled.get(path))))
+                .collect();
+            assert!(
+                changed.is_empty(),
+                "the second run changed (before, after): {changed:#?}"
+            );
+
+            let config = read_config(&ctx);
+            assert!(config.contains(r#"use = ["facet-kit"]"#), "{config}");
+
+            for (agent, skills_root, mcp_config) in &agents {
+                assert!(
+                    skills_root.join("skills/facet-guidance/SKILL.md").is_file(),
+                    "{agent} has no skill under {}",
+                    skills_root.display()
+                );
+                let mcp_config = std::fs::read_to_string(mcp_config)?;
+                assert_eq!(
+                    mcp_config.matches("--facet-kit-stdio").count(),
+                    1,
+                    "{agent} MCP servers: {mcp_config}"
+                );
+            }
+
+            for hooks in [
+                ".claude/settings.json",
+                ".codex/hooks.json",
+                ".github/hooks/symposium.json",
+                ".agents/hooks.json",
+                ".kiro/agents/symposium.json",
+            ] {
+                let registered = std::fs::read_to_string(project.join(hooks))?;
+                let commands: Vec<&str> = registered
+                    .split('"')
+                    .filter(|value| value.starts_with("symposium hook"))
+                    .collect();
+                let distinct: BTreeSet<&str> = commands.iter().copied().collect();
+                assert!(
+                    !commands.is_empty() && commands.len() == distinct.len(),
+                    "{hooks}: {commands:?}"
+                );
+            }
+
+            let fired = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Bash".to_string(),
+                        tool_input: serde_json::json!({ "command": "ls" }),
+                    }],
+                    symposium::hook_schema::HookAgent::Claude,
+                )
+                .await?;
+            let context = fired.hooks[0].output["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap_or_default();
+            assert_eq!(
+                context.matches("facet-kit-hook-fired").count(),
+                1,
+                "{:#?}",
+                fired.hooks
+            );
             Ok(())
         },
     )
