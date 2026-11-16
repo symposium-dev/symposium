@@ -157,26 +157,70 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let project = dir.path();
         let payload = project.join(".claude/skills/a-plugin/skills/fixture-greeting");
-        let held = InstalledSkill {
-            name: SkillName::new("fixture-greeting").unwrap(),
-            skill_md: project.join(".claude/skills/fixture-greeting/SKILL.md"),
-        };
-        let transcript = replaced(
-            READ_LOADED,
-            "skills/fixture-greeting/SKILL.md",
-            "skills/a-plugin/skills/fixture-greeting/SKILL.md",
-        );
-        let transcript = replaced(
-            &transcript,
-            PROJECT,
-            &project.to_string_lossy().replace('\\', "/"),
-        );
+        let held = bundled_greeting(project);
+        let transcript = bundled_read(project, "a-plugin", "genuine skill");
 
         assert_eq!(loads_in(&transcript, &[held]), [Load::Loaded]);
         assert!(
             !payload.exists(),
             "load detection must not depend on the bundle surviving"
         );
+    }
+
+    #[test]
+    fn reading_an_unrelated_bundle_does_not_load_the_genuine_skill() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project = dir.path();
+        let genuine = write_bundled_skill(project, "a-plugin", "genuine skill");
+        write_bundled_skill(project, "decoy", "unrelated text");
+        let held = bundled_greeting(project);
+
+        let loads = loads_in(&bundled_read(project, "decoy", "unrelated text"), &[held]);
+
+        assert_eq!(loads, [Load::NotObserved]);
+        assert_eq!(std::fs::read_to_string(genuine).unwrap(), "genuine skill");
+    }
+
+    fn write_bundled_skill(project: &Path, bundle: &str, content: &str) -> PathBuf {
+        let path = project
+            .join(".claude/skills")
+            .join(bundle)
+            .join("skills/fixture-greeting/SKILL.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    fn bundled_greeting(project: &Path) -> InstalledSkill {
+        InstalledSkill {
+            name: SkillName::new("fixture-greeting").unwrap(),
+            skill_md: project.join(".claude/skills/a-plugin/skills/fixture-greeting/SKILL.md"),
+        }
+    }
+
+    fn bundled_read(project: &Path, bundle: &str, content: &str) -> String {
+        let transcript = editing(
+            READ_LOADED,
+            |line| line.contains(r#""type":"tool_result""#),
+            |event| event["message"]["content"][0]["content"] = content.into(),
+        );
+        let transcript = replaced(
+            &transcript,
+            "skills/fixture-greeting/SKILL.md",
+            &format!("skills/{bundle}/skills/fixture-greeting/SKILL.md"),
+        );
+        replaced(
+            &transcript,
+            PROJECT,
+            &project.to_string_lossy().replace('\\', "/"),
+        )
+    }
+
+    #[test]
+    fn a_loose_read_does_not_load_a_skill_bound_to_a_native_bundle() {
+        let held = bundled_greeting(Path::new(PROJECT));
+
+        assert_eq!(loads_in(READ_LOADED, &[held]), [Load::NotObserved]);
     }
 
     #[test]
