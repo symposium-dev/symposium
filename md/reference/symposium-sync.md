@@ -100,7 +100,7 @@ new ones. [`symposium status`](./symposium-status.md) lists them as
 
 By default (`auto-sync = true`), `symposium sync` runs automatically during hook invocations. This keeps skills in sync with workspace dependencies without manual intervention. Set `auto-sync = false` in the user config to disable this and sync manually.
 
-The automatic sync skips step 8: it runs inside a hook, which cannot wait for a build. A hook whose tool is not installed yet installs it when it first fires, if that fits in the hook's [time limit](./plugin-definition.md#hook-semantics); otherwise run `symposium sync` yourself.
+The automatic sync skips step 8: it runs inside a hook, which cannot wait for a build. A hook whose tool is not installed yet installs it when it first fires, if that fits in the hook's [time limit](./plugin-definition.md#hook-semantics); otherwise run `symposium sync` yourself. When a tool could not be installed that way, your agent is told at the start of the next session which plugins have hooks that are not running, so it can point you here.
 
 ## Example
 

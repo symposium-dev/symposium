@@ -586,3 +586,45 @@ async fn use_global_outside_a_workspace_installs_the_helper() {
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_start_names_the_plugin_whose_helper_did_not_install() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["hook-helper0"],
+        async |mut ctx| {
+            const NOTICE: &str = "Hooks of these plugins are not running";
+            let session_start = [HookStep::session_start()];
+            ctx.sym.config.auto_sync = true;
+            ctx.set_mock_cargo(&installing_cargo(&ctx));
+
+            let before = ctx
+                .prompt_or_hook("ignored", &session_start, HookAgent::Claude)
+                .await?;
+            assert!(!before.has_context_containing(NOTICE), "{before:#?}");
+            assert!(cargo_calls(&ctx).is_empty());
+
+            ctx.set_mock_cargo(&failing_cargo(&ctx));
+            pre_tool_use(&mut ctx).await?;
+            let failed = ctx
+                .prompt_or_hook("ignored", &session_start, HookAgent::Claude)
+                .await?;
+            assert!(failed.has_context_containing(NOTICE), "{failed:#?}");
+            assert!(failed.has_context_containing("helper-kit"), "{failed:#?}");
+            assert!(
+                failed.has_context_containing("symposium sync"),
+                "{failed:#?}"
+            );
+
+            ctx.set_mock_cargo(&installing_cargo(&ctx));
+            ctx.symposium(&["sync"]).await?;
+            let installed = ctx
+                .prompt_or_hook("ignored", &session_start, HookAgent::Claude)
+                .await?;
+            assert!(!installed.has_context_containing(NOTICE), "{installed:#?}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

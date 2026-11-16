@@ -11,8 +11,8 @@ use symposium_install::Runnable;
 
 use crate::discovery::DiscoveredPlugin;
 use crate::installation::{
-    AcquiredInstallation, AcquiredRunnable, acquire_installation, refresh_installation_if_present,
-    resolve_runnable, source_is_missing,
+    AcquiredInstallation, AcquiredRunnable, acquire_installation, install_failed,
+    refresh_installation_if_present, resolve_runnable, source_is_missing,
 };
 use crate::plugins::{HookFormat, Installation};
 use crate::pm::{PackageId, Workspace};
@@ -74,6 +74,18 @@ impl ResolvedHook {
             args: hook.args.clone(),
             plugin_root: parsed_plugin.root.clone(),
         })
+    }
+
+    fn installations(&self) -> impl Iterator<Item = (&Installation, Option<&str>, Option<&str>)> {
+        let command = (
+            &self.command,
+            self.hook_executable.as_deref(),
+            self.hook_script.as_deref(),
+        );
+        self.requirements
+            .iter()
+            .map(|requirement| (requirement, None, None))
+            .chain([command])
     }
 }
 
@@ -358,9 +370,13 @@ async fn execute_hook_inner(
         // SessionStart (once per session) also refreshes every hook's already-
         // cached source, so later events dispatch fresh binaries without per-
         // event network cost. Best-effort; gated by `auto-sync`.
-        if session_start && sym.config.auto_sync {
-            prewarm_hook_sources(sym, &deps).await;
-        }
+        let failed_installs = if session_start && sym.config.auto_sync {
+            let hooks = applicable_hooks(sym, &deps).await;
+            prewarm_hook_sources(sym, &hooks).await;
+            failed_installs_notice(sym, &hooks)
+        } else {
+            None
+        };
 
         // Builtin dispatch → symposium output → host agent output as Value
         let (builtin_sym_output, named) = dispatch_builtin(
@@ -369,6 +385,7 @@ async fn execute_hook_inner(
             &deps,
             notify_about_possible_new_plugins,
             plugin_reload_notice(agent, plugin_changes),
+            failed_installs,
         )
         .await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
@@ -640,8 +657,8 @@ fn hook_dispatch_needs_deps(sym: &Symposium, registry_plugins: &[Plugin]) -> boo
 /// Refresh-only: a source that was never acquired is left alone (it installs
 /// lazily when the hook first fires) — `SessionStart` updates installed tools
 /// but never installs eagerly. Best-effort: failures are logged and skipped.
-async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
-    for resolved in applicable_hooks(sym, deps).await {
+async fn prewarm_hook_sources(sym: &Symposium, hooks: &[ResolvedHook]) {
+    for resolved in hooks {
         for req in &resolved.requirements {
             if let Err(e) = refresh_installation_if_present(sym, req, None).await {
                 tracing::debug!(name = %req.name, error = %e, "prewarm: requirement refresh failed");
@@ -684,13 +701,7 @@ async fn install_sources(
 ) {
     let mut attempted = std::collections::BTreeSet::new();
     for hook in hooks {
-        let command = (
-            &hook.command,
-            hook.hook_executable.as_deref(),
-            hook.hook_script.as_deref(),
-        );
-        let requirements = hook.requirements.iter().map(|req| (req, None, None));
-        for (installation, executable, script) in requirements.chain([command]) {
+        for (installation, executable, script) in hook.installations() {
             if !source_is_missing(sym, installation, executable)
                 || !attempted.insert((hook.plugin_name.clone(), installation.name.clone()))
             {
@@ -722,6 +733,27 @@ async fn install_sources(
             }
         }
     }
+}
+
+fn failed_installs_notice(sym: &Symposium, hooks: &[ResolvedHook]) -> Option<String> {
+    let plugins: std::collections::BTreeSet<&str> = hooks
+        .iter()
+        .filter(|hook| {
+            hook.installations()
+                .any(|(installation, executable, _)| install_failed(sym, installation, executable))
+        })
+        .map(|hook| hook.plugin_name.as_str())
+        .collect();
+    if plugins.is_empty() {
+        return None;
+    }
+    let plugins: Vec<&str> = plugins.into_iter().collect();
+    Some(format!(
+        "Hooks of these plugins are not running, because a tool they need failed to install \
+         or took longer to install than a hook may wait: {}. Tell the user to run \
+         `symposium sync`, which installs it without that time limit.",
+        plugins.join(", ")
+    ))
 }
 
 async fn applicable_hooks(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<ResolvedHook> {
@@ -812,6 +844,7 @@ pub async fn dispatch_builtin(
     deps: &Arc<Workspace>,
     notify_about_possible_new_plugins: bool,
     plugin_reload_notice: Option<String>,
+    failed_installs_notice: Option<String>,
 ) -> (symposium::OutputEvent, Vec<PackageId>) {
     match input {
         symposium::InputEvent::PreToolUse(_) => (
@@ -839,7 +872,14 @@ pub async fn dispatch_builtin(
             .await
         }
         symposium::InputEvent::SessionStart(session) => {
-            handle_session_start(sym, session, deps, plugin_reload_notice).await
+            handle_session_start(
+                sym,
+                session,
+                deps,
+                plugin_reload_notice,
+                failed_installs_notice,
+            )
+            .await
         }
         _ => (
             symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
@@ -856,13 +896,20 @@ async fn handle_session_start(
     _payload: &SessionStartInput,
     deps: &Arc<Workspace>,
     plugin_reload_notice: Option<String>,
+    failed_installs_notice: Option<String>,
 ) -> (OutputEvent, Vec<PackageId>) {
     let discovery = discovery_hint(sym, deps).await;
     let (consent, pending) = consent_hint(sym, deps).await;
-    let fragments = [discovery, consent, update_nudge(sym), plugin_reload_notice]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<String>>();
+    let fragments = [
+        discovery,
+        consent,
+        update_nudge(sym),
+        plugin_reload_notice,
+        failed_installs_notice,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<String>>();
 
     let output = if fragments.is_empty() {
         OutputEvent::empty_for(HookEvent::SessionStart)
@@ -1576,7 +1623,7 @@ mod tests {
             None,
             None,
         ));
-        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1592,7 +1639,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1606,7 +1653,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None, None).await;
         assert!(output.additional_context().is_none());
     }
 

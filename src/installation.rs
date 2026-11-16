@@ -211,6 +211,17 @@ pub fn source_is_missing(
     })
 }
 
+pub fn install_failed(
+    sym: &Symposium,
+    installation: &Installation,
+    override_executable: Option<&str>,
+) -> bool {
+    installation.source.as_ref().is_some_and(|source| {
+        let executable = installation.executable.as_deref().or(override_executable);
+        failure_recorded(&sym.install_context(), source, executable)
+    })
+}
+
 /// Refresh an installation's already-acquired source in place (a freshness
 /// `Check`), running its `install_commands` only when a refresh actually ran.
 /// A source that was never acquired — or a no-source installation — is left
