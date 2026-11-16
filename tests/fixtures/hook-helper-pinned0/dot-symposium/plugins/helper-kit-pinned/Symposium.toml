@@ -1,0 +1,16 @@
+name = "helper-kit-pinned"
+depends-on = ["*"]
+
+[[installations]]
+name = "helper"
+source = "cargo"
+crate = "helper-kit-hooks"
+version = "0.1.0"
+git = "file:///helper-kit-hooks-is-never-cloned"
+executable = "helper-kit-hooks"
+
+[[hooks]]
+name = "context"
+event = "PreToolUse"
+format = "symposium"
+command = "helper"

@@ -23,6 +23,10 @@ const CURRENT_VERSION_FILENAME: &str = "current";
 /// inside the binary's version-keyed cache dir.
 const COMMIT_SHA_FILENAME: &str = ".commit-sha";
 
+const FAILURE_SUFFIX: &str = ".failed";
+
+const FAILURE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
 /// Minimal context needed for acquisition.
 ///
 /// Replaces the full `Symposium` config struct — hook handlers construct this
@@ -880,6 +884,72 @@ fn source_is_cached(ctx: &InstallContext, source: &Source, executable_hint: Opti
     }
 }
 
+/// Whether acquiring `source` failed within the last day and it is still not
+/// in the cache. Reads the disk only.
+pub fn failure_recorded(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> bool {
+    let Some(record) = failure_record(ctx, source, executable_hint) else {
+        return false;
+    };
+    let recent = std::fs::metadata(&record)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|written| written.elapsed().is_ok_and(|age| age < FAILURE_LIFETIME));
+    recent
+        && std::fs::read_to_string(record)
+            .is_ok_and(|recorded| recorded == failure_key(source, executable_hint))
+        && !source_is_cached(ctx, source, executable_hint)
+}
+
+/// Records that acquiring `source` for `executable_hint` failed, beside the
+/// source's cache directory. Each source and executable keeps its own record.
+pub fn record_failure(ctx: &InstallContext, source: &Source, executable_hint: Option<&str>) {
+    let Some(record) = failure_record(ctx, source, executable_hint) else {
+        return;
+    };
+    let written = record
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&record, failure_key(source, executable_hint)));
+    if let Err(e) = written {
+        tracing::debug!(error = %e, "failed to record a failed acquisition");
+    }
+}
+
+/// Drops the record [`record_failure`] left for `source` and `executable_hint`.
+pub fn clear_failure(ctx: &InstallContext, source: &Source, executable_hint: Option<&str>) {
+    if let Some(record) = failure_record(ctx, source, executable_hint) {
+        let _ = std::fs::remove_file(record);
+    }
+}
+
+fn failure_record(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> Option<PathBuf> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let cache_dir = match source {
+        Source::Cargo(cargo) if cargo.global => return None,
+        Source::Cargo(cargo) => crate_cache_dir(ctx, &cargo.crate_name).ok()?,
+        Source::Github(github) => {
+            crate::git::GitCacheManager::new(ctx, "plugins").cache_path_for_url(&github.url)?
+        }
+    };
+    let mut hasher = DefaultHasher::new();
+    failure_key(source, executable_hint).hash(&mut hasher);
+    let mut name = cache_dir.file_name()?.to_os_string();
+    name.push(format!(".{:016x}{FAILURE_SUFFIX}", hasher.finish()));
+    Some(cache_dir.with_file_name(name))
+}
+
+fn failure_key(source: &Source, executable_hint: Option<&str>) -> String {
+    let source = serde_json::to_string(source).unwrap_or_default();
+    format!("{source}\n{}", executable_hint.unwrap_or_default())
+}
+
 /// What an installation resolves to once acquired.
 #[derive(Debug)]
 pub enum Runnable {
@@ -1082,6 +1152,124 @@ mod tests {
         assert!(!source_is_cached(&ctx, &src, None));
     }
 
+    #[test]
+    fn failure_record_names_one_source_and_stops_counting_once_it_is_cached() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let pinned = Source::Cargo(CargoSource::new("ripgrep").with_version("14.1.0"));
+        let repinned = Source::Cargo(CargoSource::new("ripgrep").with_version("14.1.1"));
+
+        assert!(!failure_recorded(&ctx, &pinned, Some("rg")));
+        record_failure(&ctx, &pinned, Some("rg"));
+        assert!(failure_recorded(&ctx, &pinned, Some("rg")));
+        assert!(!failure_recorded(&ctx, &repinned, Some("rg")));
+        assert!(!failure_recorded(&ctx, &pinned, Some("ripgrep")));
+
+        let registry_dir = ctx.cache_dir().join("binaries").join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        std::fs::write(registry_dir.join(CURRENT_VERSION_FILENAME), "14.1.0").unwrap();
+        assert!(!failure_recorded(&ctx, &pinned, Some("rg")));
+
+        std::fs::remove_dir_all(&registry_dir).unwrap();
+        assert!(failure_recorded(&ctx, &pinned, Some("rg")));
+        clear_failure(&ctx, &pinned, Some("rg"));
+        assert!(!failure_recorded(&ctx, &pinned, Some("rg")));
+    }
+
+    #[test]
+    fn failure_record_of_a_cargo_git_source_follows_its_url_and_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let cargo = CargoSource::new("tool").with_git("https://example.com/o/r");
+        let source = Source::Cargo(cargo.clone());
+        let moved = Source::Cargo(CargoSource::new("tool").with_git("https://example.com/o/fork"));
+        let pinned = Source::Cargo(cargo.clone().with_version("1.2.0"));
+
+        record_failure(&ctx, &source, Some("tool"));
+        let record = failure_record(&ctx, &source, Some("tool")).unwrap();
+        assert_eq!(
+            record.parent(),
+            Some(ctx.cache_dir().join("binaries").as_path())
+        );
+        assert!(record.is_file());
+        assert!(failure_recorded(&ctx, &source, Some("tool")));
+        assert!(!failure_recorded(&ctx, &moved, Some("tool")));
+        assert!(!failure_recorded(&ctx, &pinned, Some("tool")));
+
+        let cache_version =
+            git_cache_version(cargo.git.as_deref().unwrap(), cargo.version.as_deref());
+        let bin_dir = get_binary_cache_dir(&ctx, &cargo.crate_name, &cache_version)
+            .unwrap()
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(platform_binary_exe("tool")), b"").unwrap();
+        assert!(!failure_recorded(&ctx, &source, Some("tool")));
+
+        clear_failure(&ctx, &source, Some("tool"));
+        assert!(!record.exists());
+    }
+
+    #[test]
+    fn failure_records_of_two_sources_of_one_crate_stand_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let from_git = Source::Cargo(CargoSource::new("tool").with_git("https://example.com/o/r"));
+        let pinned = Source::Cargo(CargoSource::new("tool").with_version("1.2.0"));
+
+        record_failure(&ctx, &from_git, Some("tool"));
+        record_failure(&ctx, &pinned, Some("tool"));
+        assert!(failure_recorded(&ctx, &from_git, Some("tool")));
+        assert!(failure_recorded(&ctx, &pinned, Some("tool")));
+
+        clear_failure(&ctx, &pinned, Some("tool"));
+        assert!(failure_recorded(&ctx, &from_git, Some("tool")));
+        assert!(!failure_recorded(&ctx, &pinned, Some("tool")));
+    }
+
+    #[test]
+    fn failure_record_of_a_github_source_sits_beside_its_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let source = Source::Github(GithubSource::new("https://github.com/example/tool"));
+
+        record_failure(&ctx, &source, None);
+        assert!(failure_recorded(&ctx, &source, None));
+        let record = failure_record(&ctx, &source, None).unwrap();
+        assert_eq!(
+            record.parent(),
+            Some(ctx.cache_dir().join("plugins").as_path())
+        );
+        assert!(record.is_file());
+    }
+
+    #[test]
+    fn global_cargo_source_keeps_no_failure_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let mut cargo = CargoSource::new("ripgrep");
+        cargo.global = true;
+        let source = Source::Cargo(cargo);
+
+        record_failure(&ctx, &source, Some("rg"));
+        assert!(!failure_recorded(&ctx, &source, Some("rg")));
+    }
+
+    #[test]
+    fn cargo_source_that_is_not_a_crate_name_keeps_no_failure_record() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let ctx = InstallContext::new(root.join("cache"));
+        let outside = root.join("outside");
+
+        for crate_name in [outside.to_str().unwrap(), "../../outside"] {
+            let source =
+                Source::Cargo(CargoSource::new(crate_name).with_git("file:///never-cloned"));
+            record_failure(&ctx, &source, Some("tool"));
+            assert!(!failure_recorded(&ctx, &source, Some("tool")));
+        }
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+    }
+
     #[tokio::test]
     async fn refresh_source_if_present_skips_absent_source() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1197,6 +1385,23 @@ mod tests {
                 "{url}: {error:?}"
             );
             assert!(!source_is_cached(&ctx, &source, None));
+        }
+
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn github_source_whose_url_is_not_plain_names_keeps_no_failure_record() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(root.path().join("cache"));
+
+        for url in [
+            "https://github.com/o/r/tree/main/../../x",
+            "https://github.com/C:/r",
+        ] {
+            let source = Source::Github(GithubSource::new(url));
+            record_failure(&ctx, &source, None);
+            assert!(!failure_recorded(&ctx, &source, None));
         }
 
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);

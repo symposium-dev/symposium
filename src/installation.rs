@@ -12,7 +12,9 @@ use anyhow::{Result, bail};
 
 use crate::config::Symposium;
 use crate::plugins::Installation;
-use symposium_install::{Runnable, acquire_source, make_executable};
+use symposium_install::{
+    Runnable, acquire_source, clear_failure, failure_recorded, make_executable, record_failure,
+};
 
 /// Run a list of post-install shell commands sequentially. Stops at the first
 /// failure.
@@ -122,18 +124,28 @@ pub async fn acquire_installation(
                 Some(_) => sym.install_context(),
                 None => sym.install_context().in_foreground(),
             };
+            if deadline.is_some() && failure_recorded(&context, source, exec_choice) {
+                bail!(
+                    "`{}` is not installed: an earlier attempt failed or ran past the hook time budget",
+                    installation.name
+                );
+            }
             let acquiring = acquire_source(&context, source, exec_choice, update);
             let acquired = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline.into(), acquiring)
                     .await
-                    .map_err(|_| {
-                        anyhow::anyhow!(
+                    .unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!(
                             "acquiring `{}` ran past the hook time budget",
                             installation.name
-                        )
-                    })?,
+                        ))
+                    }),
                 None => acquiring.await,
             };
+            match &acquired {
+                Ok(_) => clear_failure(&context, source, exec_choice),
+                Err(_) => record_failure(&context, source, exec_choice),
+            }
             Some(acquired?)
         }
         None => None,
