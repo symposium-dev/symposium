@@ -16,9 +16,9 @@ A plugin enabled with `symposium use --global` is installed for you as a Codex p
 |------|-------|
 | Marketplace | `[marketplaces.symposium]` in `~/.codex/config.toml`, pointing at `~/.symposium/installed/` |
 | Enablement | `[plugins."<plugin>@symposium"]` in the same file |
-| Plugin files | `~/.codex/plugins/cache/symposium/<plugin>/0.0.0/` |
+| Plugin files | `~/.codex/plugins/cache/symposium/<plugin>/<version>/` |
 
-All three follow `$CODEX_HOME` when it is set. Codex lists the plugin in `/plugins` and loads it in every project. Turning it off there writes `enabled = false`, which symposium leaves alone; `codex plugin remove` is undone by the next sync, so remove it with `symposium use --remove --global <plugin>`. A plugin installed while a session runs appears in the next session.
+All three follow `$CODEX_HOME` when it is set. `<version>` is the [version the plugin was installed under](../symposium-sync.md#plugins-enabled-for-every-workspace): a crate's own version, or `0.0.0` for a plugin that has none. Codex lists the plugin in `/plugins` and loads it in every project. Turning it off there writes `enabled = false`, which symposium leaves alone; `codex plugin remove` is undone by the next sync, so remove it with `symposium use --remove --global <plugin>`. A plugin installed while a session runs appears in the next session.
 
 ## Hooks
 

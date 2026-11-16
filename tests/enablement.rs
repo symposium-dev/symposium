@@ -388,6 +388,36 @@ async fn a_global_package_reaches_a_workspace_it_does_not_match() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn use_global_installs_a_crate_under_its_version() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            ctx.symposium(&["use", "--global", "crate-a"]).await?;
+
+            let plugin = ctx
+                .sym
+                .home_dir()
+                .join(".codex/plugins/cache/symposium/crate-a");
+            let versions: Vec<_> = std::fs::read_dir(&plugin)?
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name())
+                .collect();
+            assert_eq!(versions, ["0.1.0"]);
+            assert!(plugin.join("0.1.0/skills/a-guidance/SKILL.md").is_file());
+            let manifest: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(plugin.join("0.1.0/plugin.json"))?)?;
+            assert_eq!(manifest["version"], "0.1.0");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn use_global_again_changes_nothing() {
     with_fixture(

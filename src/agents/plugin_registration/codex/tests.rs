@@ -4,7 +4,7 @@ use expect_test::expect;
 
 fn compiled(staging: &Path, name: &str) -> CompiledPlugin {
     let dir = staging.join(name);
-    write(&dir.join("plugin.json"), name);
+    write(&dir.join("plugin.json"), r#"{"version": "1.2.0"}"#);
     write(&dir.join(sync::MARKER_FILE), "");
     CompiledPlugin {
         name: name.into(),
@@ -109,10 +109,5 @@ fn a_skill_added_within_the_debounce_is_delivered() {
     deliver_user_plugins(&sym, std::slice::from_ref(&plugin));
 
     let delivered = codex_dir(&sym).join("plugins/cache/symposium/fresh");
-    assert!(
-        delivered
-            .join(compile::PLUGIN_VERSION)
-            .join("skills/added/SKILL.md")
-            .is_file()
-    );
+    assert!(delivered.join("1.2.0/skills/added/SKILL.md").is_file());
 }

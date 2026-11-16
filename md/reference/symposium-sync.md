@@ -35,10 +35,12 @@ A plugin you enabled with [`symposium use --global`](./symposium-use.md) is inst
 | Agent | Where the plugin goes |
 |-------|-----------------------|
 | Claude Code | `~/.claude/skills/<plugin>/` (or `$CLAUDE_CONFIG_DIR/skills/<plugin>/`) |
-| Codex CLI | `~/.codex/plugins/cache/symposium/<plugin>/0.0.0/` (or under `$CODEX_HOME`), registered and enabled in `config.toml` |
+| Codex CLI | `~/.codex/plugins/cache/symposium/<plugin>/<version>/` (or under `$CODEX_HOME`), registered and enabled in `config.toml` |
 | GitHub Copilot | registered in `~/.copilot/settings.json` (or `$COPILOT_HOME/settings.json`) and loaded from `~/.symposium/installed/<plugin>/` |
 | Antigravity CLI | `~/.gemini/config/plugins/<plugin>/` |
 | Goose | `~/.agents/plugins/<plugin>/` (or `$GOOSE_PATH_ROOT/.agents/plugins/<plugin>/`) |
+
+The directory's `plugin.json` carries the version the plugin is installed under, here and for the [plugins of a project](#plugins-for-this-project): the `version` its manifest declares when that is a semantic version; otherwise, for a package such as a crate, the version it resolved to (`0.1.1` for the crate `widget` 0.1.1); otherwise `0.0.0`, which is what a registry or workspace plugin that declares no version gets.
 
 Such an agent gets no per-project copy of the plugin's skills, and copies an earlier sync left are cleaned up; every other agent keeps per-project copies. Agents load plugins when a session starts, so a plugin installed or updated by the automatic sync at session start, or by the one that follows a dependency change during a session, appears in the next session; that sync also tells the agent which plugins changed and how to load them now (in Claude Code, `/reload-plugins`; in Antigravity CLI, `/skills reload`; in Codex CLI, a new session; in GitHub Copilot, `/restart`). Goose picks such a plugin up with the next message. Dropping the `--global` entry, or removing the agent with `symposium init --remove-agent`, removes what symposium installed.
 
