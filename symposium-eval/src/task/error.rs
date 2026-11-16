@@ -25,6 +25,12 @@ pub(crate) enum DirProblem {
     NotADirectory,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BundleIdentityField {
+    Name,
+    Version,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum TaskError {
     #[error(transparent)]
@@ -121,6 +127,13 @@ pub(crate) enum TaskError {
     )]
     UnnameableBundle { plugin: PluginName, name: String },
     #[error(
+        "plugin `{plugin}` relies on adjacent `plugin.json` for `{field}`; task plugins must state it in `Symposium.toml` so evaluation can verify native bundle identity"
+    )]
+    InheritedBundleIdentity {
+        plugin: PluginName,
+        field: BundleIdentityField,
+    },
+    #[error(
         "a `[[skills]]` group in plugin `{0}` needs a `source.path`, the only source an offline trial can use"
     )]
     UnsupportedSkillSource(PluginName),
@@ -186,6 +199,15 @@ impl fmt::Display for DirProblem {
             Self::Symlink => f.write_str("is a symlink; it must be a real directory"),
             Self::NotADirectory => f.write_str("is not a directory"),
         }
+    }
+}
+
+impl fmt::Display for BundleIdentityField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Name => "name",
+            Self::Version => "version",
+        })
     }
 }
 

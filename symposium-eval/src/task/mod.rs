@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub(crate) use checks::CheckError;
-pub(crate) use error::{DirProblem, TaskError, TaskErrors};
+pub(crate) use error::{BundleIdentityField, DirProblem, TaskError, TaskErrors};
 pub(crate) use hooks::ExpectedHook;
 pub(crate) use name::{
     BatchName, CheckName, FixtureName, HookName, NameError, PluginName, SkillName, TaskName,
@@ -37,7 +37,7 @@ pub(crate) use name::{
 };
 pub(crate) use pattern::EditablePattern;
 pub(crate) use protected::is_protected;
-pub(crate) use skills::SkillSource;
+pub(crate) use skills::{BundleIdentity, SkillSource};
 
 use crate::evals::Evals;
 use crate::tree::{self, EntryKind};
@@ -222,7 +222,8 @@ impl Task {
             .iter()
             .find(|source| source.name == skill.as_str())?
             .bundle
-            .as_deref()
+            .as_ref()
+            .map(|bundle| bundle.name.as_str())
     }
 
     /// The plugin hooks that must leave a successful record, each with its event.
@@ -766,6 +767,52 @@ mod tests {
         assert_eq!(
             task.unwrap().skill_bundle_name(&skill_name("named-skill")),
             Some("specialized-plugin")
+        );
+    }
+
+    #[test]
+    fn a_mixed_manifest_must_state_its_bundle_identity_in_symposium_toml() {
+        let agent_plugin = serde_json::json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "from-agent-plugin",
+            "version": "1.2.3",
+        });
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/plugin.json", agent_plugin.to_string()),
+            ("first/skills/only/SKILL.md", skill_md("named-skill")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                "plugin `first` relies on adjacent `plugin.json` for `name`; task plugins must state it in `Symposium.toml` so evaluation can verify native bundle identity",
+                "plugin `first` relies on adjacent `plugin.json` for `version`; task plugins must state it in `Symposium.toml` so evaluation can verify native bundle identity",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mixed_manifest_can_state_its_bundle_identity_in_symposium_toml() {
+        let agent_plugin = serde_json::json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "from-agent-plugin",
+            "version": "1.2.3",
+        });
+        let files = [
+            (
+                "first/Symposium.toml",
+                format!("name = \"from-toml\"\nversion = \"2.0.0\"\n{SKILLS}"),
+            ),
+            ("first/plugin.json", agent_plugin.to_string()),
+            ("first/skills/only/SKILL.md", skill_md("named-skill")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+
+        assert_eq!(
+            task.unwrap().skill_bundle_name(&skill_name("named-skill")),
+            Some("from-toml")
         );
     }
 

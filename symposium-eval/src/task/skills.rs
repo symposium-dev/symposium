@@ -15,9 +15,10 @@ use std::path::{Component, Path, PathBuf};
 
 use super::delivery::normalized_name;
 use super::manifest::{Plugin, RawSkillGroup};
-use super::{PluginName, SkillExpectations, SkillName, TaskError};
+use super::{BundleIdentityField, PluginName, SkillExpectations, SkillName, TaskError};
 use crate::skill_md;
 use crate::tree::EntryKind;
+use symposium_sdk::manifest::AGENT_PLUGIN_FILE;
 
 /// The marker sync leaves in every directory it installs. Discovery skips a directory
 /// holding an entry of this name, whatever kind it is.
@@ -28,7 +29,14 @@ const MARKER: &str = ".symposium";
 pub(crate) struct SkillSource {
     pub(crate) name: String,
     pub(crate) dir: PathBuf,
-    pub(crate) bundle: Option<String>,
+    pub(crate) bundle: Option<BundleIdentity>,
+}
+
+/// The native bundle metadata production derives from a task plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BundleIdentity {
+    pub(crate) name: String,
+    pub(crate) version: String,
 }
 
 /// Catalogues every provider and validates the skills `expected` names. A skill that
@@ -40,7 +48,7 @@ struct Provided {
     name: String,
     dir: PathBuf,
     plugin: PluginName,
-    bundle: Option<String>,
+    bundle: Option<BundleIdentity>,
 }
 pub(super) fn resolve(
     plugins: &[Plugin<'_>],
@@ -75,6 +83,9 @@ fn provided_skills(plugins: &[Plugin<'_>], errors: &mut Vec<TaskError>) -> Vec<P
 fn bind_bundles(plugins: &[Plugin<'_>], provided: &mut [Provided], errors: &mut Vec<TaskError>) {
     let mut owners: BTreeMap<String, PluginName> = BTreeMap::new();
     for plugin in plugins {
+        if reject_inherited_bundle_identity(plugin, provided, errors) {
+            continue;
+        }
         let Some(source_name) = bundle_source_name(plugin, provided) else {
             continue;
         };
@@ -94,13 +105,59 @@ fn bind_bundles(plugins: &[Plugin<'_>], provided: &mut [Provided], errors: &mut 
         } else {
             owners.insert(name.clone(), plugin.name.clone());
         }
+        let version = plugin
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.version.as_deref())
+            .filter(|version| semver::Version::parse(version).is_ok())
+            .unwrap_or("0.0.0")
+            .to_owned();
+        let bundle = BundleIdentity { name, version };
         for skill in provided
             .iter_mut()
             .filter(|skill| &skill.plugin == plugin.name)
         {
-            skill.bundle = Some(name.clone());
+            skill.bundle = Some(bundle.clone());
         }
     }
+}
+
+/// A mixed manifest can inherit these fields from `plugin.json`, but independently
+/// reproducing that format's complete validation would let the checker drift from the
+/// producer. Task plugins therefore state the identity the checker authenticates in
+/// `Symposium.toml` itself.
+fn reject_inherited_bundle_identity(
+    plugin: &Plugin<'_>,
+    provided: &[Provided],
+    errors: &mut Vec<TaskError>,
+) -> bool {
+    if !provided.iter().any(|skill| &skill.plugin == plugin.name) {
+        return false;
+    }
+    let Some(manifest) = &plugin.manifest else {
+        return false;
+    };
+    let has_agent_plugin = plugin
+        .entries
+        .iter()
+        .any(|entry| entry.path == AGENT_PLUGIN_FILE && entry.kind == EntryKind::File);
+    if !has_agent_plugin {
+        return false;
+    }
+
+    let missing = [
+        (BundleIdentityField::Name, manifest.name.is_none()),
+        (BundleIdentityField::Version, manifest.version.is_none()),
+    ];
+    for (field, is_missing) in missing {
+        if is_missing {
+            errors.push(TaskError::InheritedBundleIdentity {
+                plugin: plugin.name.clone(),
+                field,
+            });
+        }
+    }
+    missing.into_iter().any(|(_, is_missing)| is_missing)
 }
 
 fn bundle_source_name<'a>(plugin: &'a Plugin<'_>, provided: &'a [Provided]) -> Option<&'a str> {
