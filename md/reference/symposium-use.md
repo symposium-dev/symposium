@@ -59,6 +59,8 @@ cargo matches crate names, so `widget-lib` and `widget_lib` are the same).
 When a registry plugin and a crate share the name, the registry plugin wins.
 Otherwise the command fails with `no package named <NAME>` and writes nothing.
 Use [`symposium search`](./symposium-search.md) to find the right name.
+The entry records the name the package goes by, so `symposium use widget_lib`
+records `widget-lib`.
 
 A crate the [audits list](./audits.md#revocations) revokes cannot be enabled:
 `use` fails with the revocation and its reason (for example ``revoked by the
@@ -71,8 +73,9 @@ refused the same way.
 
 Removes the entry in the matching scope: without `--global` the entry recorded
 for the current workspace, with it the unscoped one. A scope mismatch (or no
-entry at all) is an error rather than a silent success. The sync that follows
-reaps the plugin's installed skills.
+entry at all) is an error rather than a silent success. The name is matched
+the way `use` matches it, so either spelling of a crate removes its entry. The
+sync that follows reaps the plugin's installed skills.
 
 ## Example
 

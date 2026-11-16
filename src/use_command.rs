@@ -16,13 +16,14 @@
 //! skills are reaped straight away.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 
 use crate::config::{Symposium, UseEntry};
 use crate::plugins::Plugin;
-use crate::pm::{PackageId, PmRegistry};
+use crate::pm::{PackageId, PmRegistry, Workspace};
 use crate::report::ReportEvent;
 
 /// Record an enablement for `name` and sync so its skills install now.
@@ -34,26 +35,29 @@ pub async fn use_plugin(
     update: UpdateLevel,
 ) -> Result<()> {
     let deps = sym.workspace(cwd);
+    use_in(sym, &deps, name, global, update).await
+}
+
+async fn use_in(
+    sym: &mut Symposium,
+    deps: &Arc<Workspace>,
+    name: &str,
+    global: bool,
+    update: UpdateLevel,
+) -> Result<()> {
     let pms = deps.pms();
     let registry = crate::plugins::load_registry(sym).await;
-    let id = match pms
-        .identify(&registry.plugins, name, UpdateLevel::Check)
-        .await
-    {
-        Ok(id) => id,
+    let found = match pms.find(&registry.plugins, name, UpdateLevel::Check).await {
+        Ok(found) => found,
         Err(e) => bail!("{e} (try `symposium search {name}`)"),
     };
+    let id = pms.identity(&found).await?;
 
     // `disable` outranks every way of enabling a plugin, `use` included, so
     // recording an entry here would report success and then install nothing.
     // Re-enabling is dropping the `disable` entry, which is a deliberate edit
     // rather than something `use` undoes on the user's behalf.
-    if sym
-        .config
-        .plugins
-        .is_disabled(pms, &PackageId::any_version(&id.pm, name))
-        .await
-    {
+    if sym.config.plugins.is_disabled(pms, &found).await {
         bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
     }
 
@@ -86,7 +90,7 @@ pub async fn use_plugin(
     // load, the same check every load route makes.
     if registry_plugin.is_none() {
         let audits = crate::audits::AuditIndex::configured(sym);
-        for plugin in pms.load_plugin(&id, UpdateLevel::Check).await {
+        for plugin in pms.load_plugin(&found, UpdateLevel::Check).await {
             if let Some(revocation) = audits.revocation(pms, &plugin.canonical).await {
                 bail!("`{name}` is {revocation}; it cannot be enabled");
             }
@@ -98,10 +102,11 @@ pub async fn use_plugin(
         bail!("{e}; pass --global to enable `{name}` everywhere");
     }
 
+    let recorded = registry_plugin.map_or(&found.name, |p| &p.manifest.name);
     let entry = match &workspace_root {
-        _ if global => UseEntry::Global(name.to_string()),
+        _ if global => UseEntry::Global(recorded.clone()),
         Some(root) => UseEntry::Workspace {
-            name: name.to_string(),
+            name: recorded.clone(),
             workspace: root.clone(),
         },
         None => unreachable!("checked above"),
@@ -127,7 +132,7 @@ pub async fn use_plugin(
         sym.save_config().context("failed to write user config")?;
         tracing::info!(
             report = %ReportEvent::PluginEnabled {
-                name: name.to_string(),
+                name: recorded.clone(),
                 global,
             },
         );
@@ -135,7 +140,7 @@ pub async fn use_plugin(
 
     // Install now rather than waiting for the next sync.
     if workspace_root.is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+        crate::sync::sync(sym, deps, update).await?;
     }
     Ok(())
 }
@@ -222,3 +227,6 @@ async fn names(
                 .as_ref()
                 == id)
 }
+
+#[cfg(test)]
+mod tests;
