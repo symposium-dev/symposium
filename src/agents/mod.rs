@@ -23,6 +23,47 @@ use crate::output::{Output, display_path};
 
 const HOOK_COMMAND: &str = "symposium hook";
 
+/// What `init` wrote before the `symposium` binary existed. `cargo-agents` is
+/// still installed, so such an entry keeps firing: registration rewrites it
+/// and unregistration removes it, or every event would run symposium twice.
+const LEGACY_HOOK_COMMAND: &str = "cargo-agents hook";
+
+fn is_symposium_hook(command: &str) -> bool {
+    command.starts_with(HOOK_COMMAND) || command.starts_with(LEGACY_HOOK_COMMAND)
+}
+
+/// `None` when `entry[key]` is not a symposium hook command, otherwise whether
+/// a legacy command was rewritten to the current one.
+fn claim_hook(entry: &mut serde_json::Value, key: &str) -> Option<bool> {
+    let command = entry.get(key)?.as_str()?;
+    if command.starts_with(HOOK_COMMAND) {
+        return Some(false);
+    }
+    let rest = command.strip_prefix(LEGACY_HOOK_COMMAND)?;
+    entry[key] = json!(format!("{HOOK_COMMAND}{rest}"));
+    Some(true)
+}
+
+/// Claims every symposium hook among `entries`: `None` when there is none,
+/// otherwise whether any legacy command was rewritten.
+fn claim_hooks<'a>(
+    entries: impl Iterator<Item = &'a mut serde_json::Value>,
+    key: &str,
+) -> Option<bool> {
+    entries
+        .filter_map(|entry| claim_hook(entry, key))
+        .reduce(|a, b| a | b)
+}
+
+fn nested_handlers(
+    groups: &mut [serde_json::Value],
+) -> impl Iterator<Item = &mut serde_json::Value> {
+    groups
+        .iter_mut()
+        .filter_map(|group| group.get_mut("hooks").and_then(|h| h.as_array_mut()))
+        .flatten()
+}
+
 fn hook_command(agent: &str, event: &str) -> String {
     format!("{HOOK_COMMAND} {agent} {event}")
 }
@@ -538,23 +579,10 @@ fn register_claude_hooks(settings_path: &Path, out: &Output) -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` if a new entry was added, `false` if already registered.
+/// Returns `true` if an entry was added or rewritten, `false` if already registered.
 fn ensure_claude_hook_entry(arr: &mut Vec<serde_json::Value>, command: &str) -> bool {
-    let already_registered = arr.iter().any(|group| {
-        group
-            .get("hooks")
-            .and_then(|h| h.as_array())
-            .is_some_and(|hooks| {
-                hooks.iter().any(|h| {
-                    h.get("command")
-                        .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.starts_with(HOOK_COMMAND))
-                })
-            })
-    });
-
-    if already_registered {
-        return false;
+    if let Some(rewritten) = claim_hooks(nested_handlers(arr), "command") {
+        return rewritten;
     }
 
     arr.push(json!({
@@ -606,23 +634,10 @@ fn register_codex_hooks(hooks_path: &Path, out: &Output) -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` if a new entry was added, `false` if already registered.
+/// Returns `true` if an entry was added or rewritten, `false` if already registered.
 fn ensure_codex_hook_entry(arr: &mut Vec<serde_json::Value>, command: &str) -> bool {
-    let already_registered = arr.iter().any(|group| {
-        group
-            .get("hooks")
-            .and_then(|h| h.as_array())
-            .is_some_and(|hooks| {
-                hooks.iter().any(|h| {
-                    h.get("command")
-                        .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.starts_with(HOOK_COMMAND))
-                })
-            })
-    });
-
-    if already_registered {
-        return false;
+    if let Some(rewritten) = claim_hooks(nested_handlers(arr), "command") {
+        return rewritten;
     }
 
     arr.push(json!({
@@ -637,7 +652,7 @@ fn ensure_codex_hook_entry(arr: &mut Vec<serde_json::Value>, command: &str) -> b
 }
 
 fn unregister_codex_hooks(hooks_path: &Path, out: &Output) {
-    unregister_settings_hooks(hooks_path, HOOK_COMMAND, out);
+    unregister_settings_hooks(hooks_path, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,20 +670,21 @@ fn register_copilot_hooks_global(config_path: &Path, out: &Output) -> Result<()>
     let mut config = load_json_or_empty(config_path)?;
     let hooks_obj = hooks_object(&mut config, &display)?;
 
-    // Check if already registered
-    let already = hooks_obj.values().any(|arr| {
-        arr.as_array().is_some_and(|a| {
-            a.iter().any(|h| {
-                h.get("bash")
-                    .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.starts_with(HOOK_COMMAND))
-            })
-        })
-    });
-
-    if already {
-        out.already_ok(format!("{display}: hooks already registered"));
-        return Ok(());
+    let entries = hooks_obj
+        .values_mut()
+        .filter_map(|arr| arr.as_array_mut())
+        .flatten();
+    match claim_hooks(entries, "bash") {
+        Some(false) => {
+            out.already_ok(format!("{display}: hooks already registered"));
+            return Ok(());
+        }
+        Some(true) => {
+            save_json(config_path, &config)?;
+            out.done(format!("{display}: updated hooks"));
+            return Ok(());
+        }
+        None => {}
     }
 
     let copilot_hooks = copilot_hook_entries();
@@ -918,17 +934,11 @@ fn register_kiro_hooks(agents_dir: &Path, out: &Output) -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` if a new entry was added, `false` if already registered.
+/// Returns `true` if an entry was added or rewritten, `false` if already registered.
 fn ensure_kiro_hook_entry(arr: &mut Vec<serde_json::Value>, entry: &serde_json::Value) -> bool {
     // Kiro uses a flat structure: each entry has `command` directly (no nested `hooks` array)
-    let already_registered = arr.iter().any(|e| {
-        e.get("command")
-            .and_then(|c| c.as_str())
-            .is_some_and(|c| c.starts_with(HOOK_COMMAND))
-    });
-
-    if already_registered {
-        return false;
+    if let Some(rewritten) = claim_hooks(arr.iter_mut(), "command") {
+        return rewritten;
     }
 
     arr.push(entry.clone());
@@ -983,7 +993,7 @@ fn unregister_kiro_hooks(agents_dir: &Path, out: &Output) {
 // ---------------------------------------------------------------------------
 
 /// Remove symposium hooks from a Claude-style settings.json file.
-fn unregister_settings_hooks(settings_path: &Path, command_prefix: &str, out: &Output) {
+fn unregister_settings_hooks(settings_path: &Path, out: &Output) {
     remove_hook_entries(settings_path, out, |group| {
         let Some(handlers) = group.get_mut("hooks").and_then(|h| h.as_array_mut()) else {
             return false;
@@ -992,7 +1002,7 @@ fn unregister_settings_hooks(settings_path: &Path, command_prefix: &str, out: &O
         handlers.retain(|h| {
             !h.get("command")
                 .and_then(|c| c.as_str())
-                .is_some_and(|c| c.starts_with(command_prefix))
+                .is_some_and(is_symposium_hook)
         });
         handlers.len() < before && handlers.is_empty()
     });
@@ -1042,7 +1052,7 @@ fn remove_hook_entries(
 }
 
 fn unregister_claude_hooks(settings_path: &Path, out: &Output) {
-    unregister_settings_hooks(settings_path, HOOK_COMMAND, out);
+    unregister_settings_hooks(settings_path, out);
 }
 
 /// Remove symposium hooks from a Copilot project hooks directory.
@@ -1071,7 +1081,7 @@ fn unregister_flat_hooks(config_path: &Path, command_key: &str, out: &Output) {
         entry
             .get(command_key)
             .and_then(|c| c.as_str())
-            .is_some_and(|c| c.starts_with(HOOK_COMMAND))
+            .is_some_and(is_symposium_hook)
     });
 }
 
@@ -1753,6 +1763,70 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
         let pre_tool = content["hooks"]["preToolUse"].as_array().unwrap();
         assert_eq!(pre_tool.len(), 1);
+    }
+
+    fn with_legacy_commands(path: &Path) {
+        let current = fs::read_to_string(path).unwrap();
+        fs::write(path, current.replace(HOOK_COMMAND, LEGACY_HOOK_COMMAND)).unwrap();
+    }
+
+    #[test]
+    fn registering_over_legacy_hooks_rewrites_them_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = Output::quiet();
+        let kiro_dir = tmp.path().join("kiro");
+        let registrations: [(PathBuf, fn(&Path, &Output) -> Result<()>); 4] = [
+            (tmp.path().join("claude.json"), register_claude_hooks),
+            (tmp.path().join("codex.json"), register_codex_hooks),
+            (
+                tmp.path().join("copilot.json"),
+                register_copilot_hooks_global,
+            ),
+            (kiro_dir.join("symposium.json"), |path, out| {
+                register_kiro_hooks(path.parent().unwrap(), out)
+            }),
+        ];
+        for (path, register) in registrations {
+            register(&path, &out).unwrap();
+            let fresh = fs::read_to_string(&path).unwrap();
+            with_legacy_commands(&path);
+
+            register(&path, &out).unwrap();
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                fresh,
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn unregistering_removes_legacy_hooks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = Output::quiet();
+        let registrations: [(&str, fn(&Path, &Output) -> Result<()>, fn(&Path, &Output)); 3] = [
+            (
+                "claude.json",
+                register_claude_hooks,
+                unregister_claude_hooks,
+            ),
+            ("codex.json", register_codex_hooks, unregister_codex_hooks),
+            (
+                "copilot.json",
+                register_copilot_hooks_global,
+                unregister_copilot_hooks_global,
+            ),
+        ];
+        for (name, register, unregister) in registrations {
+            let path = tmp.path().join(name);
+            register(&path, &out).unwrap();
+            with_legacy_commands(&path);
+
+            unregister(&path, &out);
+            let left = fs::read_to_string(&path).unwrap();
+            assert!(!left.contains(LEGACY_HOOK_COMMAND), "{name}: {left}");
+        }
     }
 
     #[test]
