@@ -13,6 +13,7 @@
 
 mod identity;
 mod policy;
+mod resolution_witness;
 mod schema;
 mod state;
 mod storage;

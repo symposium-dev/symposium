@@ -227,9 +227,11 @@ Plugin, skill, and command names follow the same public-by-allowlist rule. Packa
 
 Safe nodes are public `package` and `extension` coordinates, `all` contributors, the successful `any` branch, an opaque `not` marker, or `opaque` with a fixed reason: `private_source`, `non_package_predicate`, or `limit`.
 
+`private_source` also covers ambiguous coordinate predicates. When several distinct admitted packages match, the predicate proves existence but selects no exact origin; telemetry therefore makes the witness opaque before testing whether any candidate is publicly nameable. Repeated evidence for the same admitted package is deduplicated first.
+
 Shell commands, paths, environment values, custom predicate details, workspace members, wildcards, private names, and a negated child never enter the path.
 
-The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. These limits do not count filesystem path components; filesystem paths are never recorded.
+The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. Exceeding the complete path's 16-leaf or 4 KiB compact UTF-8 JSON limit replaces the whole path with one `opaque: limit` node. These limits do not count filesystem path components; filesystem paths are never recorded.
 
 Full sync builds safe evidence for successful installations because the generated attribution index needs it even when telemetry is disabled. Only an enabled recorder serializes that evidence as telemetry.
 

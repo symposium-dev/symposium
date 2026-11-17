@@ -143,7 +143,7 @@ pub(crate) enum DependencyMatch<'a, T> {
             not(test),
             expect(
                 dead_code,
-                reason = "the resolution-witness producer reads the admitted package in the next commit"
+                reason = "the structured sync report reaches admitted witness evidence in the next stack slice"
             )
         )]
         &'a T,
@@ -204,7 +204,7 @@ where
     not(test),
     expect(
         dead_code,
-        reason = "the resolution-witness producer consumes this seam in the next commit"
+        reason = "the structured sync report reaches the witness producer in the next stack slice"
     )
 )]
 pub(crate) trait PredicateWitnessEval {

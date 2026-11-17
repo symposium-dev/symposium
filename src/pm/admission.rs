@@ -171,7 +171,7 @@ impl ResolvedDependency {
         not(test),
         expect(
             dead_code,
-            reason = "resolution witnesses consume admitted dependency handles in the next stack slice"
+            reason = "the structured sync report reaches admitted dependency handles in the next stack slice"
         )
     )]
     pub(crate) fn handle(&self) -> PackageHandle {
@@ -183,7 +183,7 @@ impl ResolvedDependency {
         not(test),
         expect(
             dead_code,
-            reason = "resolution witnesses consume admitted dependency naming views in the next stack slice"
+            reason = "the structured sync report reaches dependency naming views in the next stack slice"
         )
     )]
     pub(crate) fn naming_view(&self) -> PackageNamingView<'_> {

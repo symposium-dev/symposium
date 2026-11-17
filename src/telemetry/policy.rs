@@ -15,7 +15,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "resolution and extension producers consume this policy in later slices"
+        reason = "structured resolution and extension producers reach this policy in later slices"
     )
 )]
 
