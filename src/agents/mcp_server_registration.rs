@@ -781,8 +781,7 @@ mod tests {
 
     fn test_servers() -> Vec<McpServer> {
         vec![McpServer::Stdio(
-            McpServerStdio::new("symposium", "/usr/local/bin/cargo-agents")
-                .args(vec!["mcp".into()]),
+            McpServerStdio::new("symposium", "/usr/local/bin/symposium").args(vec!["mcp".into()]),
         )]
     }
 
@@ -921,7 +920,7 @@ mod tests {
         // The rest of the entry is still brought up to date.
         assert_eq!(
             config["mcp"]["symposium"]["command"][0],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
 
         let goose = tmp.path().join("config.yaml");
@@ -940,7 +939,7 @@ mod tests {
         );
         assert_eq!(
             doc["extensions"]["symposium"]["cmd"].as_str(),
-            Some("/usr/local/bin/cargo-agents"),
+            Some("/usr/local/bin/symposium"),
             "got: {content}"
         );
     }
@@ -1007,7 +1006,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
         assert_eq!(settings["mcpServers"]["symposium"]["args"][0], "mcp");
     }
@@ -1037,7 +1036,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
     }
 
@@ -1054,7 +1053,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
     }
 
@@ -1082,7 +1081,7 @@ mod tests {
         let doc: toml::Value = content.parse().unwrap();
         assert_eq!(
             doc["mcp_servers"]["symposium"]["command"].as_str().unwrap(),
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
         assert_eq!(
             doc["mcp_servers"]["symposium"]["args"].as_array().unwrap()[0]
@@ -1121,7 +1120,7 @@ mod tests {
         let entry = &doc["mcp_servers"]["symposium"];
         assert_eq!(
             entry["command"].as_str().unwrap(),
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
         assert_eq!(
             entry["args"].as_array().unwrap()[0].as_str().unwrap(),
@@ -1161,7 +1160,7 @@ mod tests {
         // reject the entire file.
         assert_eq!(
             config["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
         assert_eq!(config["mcpServers"]["symposium"]["args"][0], "mcp");
     }
@@ -1191,7 +1190,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             config["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
     }
 
@@ -1222,7 +1221,7 @@ mod tests {
         // `provider`/`config` pair - which it rejects with `missing field type`.
         assert_eq!(ext["type"].as_str().unwrap(), "stdio");
         assert_eq!(ext["name"].as_str().unwrap(), "symposium");
-        assert_eq!(ext["cmd"].as_str().unwrap(), "/usr/local/bin/cargo-agents");
+        assert_eq!(ext["cmd"].as_str().unwrap(), "/usr/local/bin/symposium");
         assert_eq!(ext["args"][0].as_str().unwrap(), "mcp");
         assert!(ext["enabled"].as_bool().unwrap());
     }
@@ -1303,7 +1302,7 @@ mod tests {
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(
             doc["extensions"]["symposium"]["cmd"].as_str().unwrap(),
-            "/usr/local/bin/cargo-agents",
+            "/usr/local/bin/symposium",
         );
         assert!(
             doc["extensions"]["symposium"]["provider"].is_null(),
@@ -1353,7 +1352,7 @@ mod tests {
         // the whole config file.
         let entry = &config["mcp"]["symposium"];
         assert_eq!(entry["type"], "local");
-        assert_eq!(entry["command"][0], "/usr/local/bin/cargo-agents");
+        assert_eq!(entry["command"][0], "/usr/local/bin/symposium");
         assert_eq!(entry["command"][1], "mcp");
         assert_eq!(entry["enabled"], true);
         assert!(entry.get("args").is_none(), "got: {entry}");
@@ -1386,7 +1385,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             config["mcp"]["symposium"]["command"][0],
-            "/usr/local/bin/cargo-agents"
+            "/usr/local/bin/symposium"
         );
     }
 

@@ -122,7 +122,7 @@ fn arm(configuration: Configuration) -> Arm {
     match configuration {
         Configuration::Baseline => Arm::Baseline,
         Configuration::Symposium => Arm::Symposium(SymposiumBuild {
-            version: "cargo-agents 1.0.0".to_owned(),
+            version: "symposium 1.0.0".to_owned(),
             sha256: crate::digest::file(&manifest).unwrap(),
             revision: None,
         }),

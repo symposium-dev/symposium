@@ -1,4 +1,4 @@
-//! `cargo agents search` — find plugins across every configured source.
+//! `symposium search`: find plugins across every configured source.
 //!
 //! Two arms, in the order a user cares about:
 //!
@@ -47,7 +47,7 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
             let dormant = parsed
                 .manifest
                 .requires_use
-                .then_some("dormant: enable with `cargo agents use`");
+                .then_some("dormant: enable with `symposium use`");
             let description = match (parsed.manifest.description.as_deref(), dormant) {
                 (Some(description), Some(dormant)) => Some(format!("{description} ({dormant})")),
                 (description, dormant) => description.or(dormant).map(str::to_string),
@@ -81,7 +81,7 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
     matches
 }
 
-/// The `cargo agents search` entry point: report every match grouped by the
+/// The `symposium search` entry point: report every match grouped by the
 /// instance it came from, or a nothing-found message.
 pub async fn search(sym: &Symposium, query: &str) -> Result<()> {
     let matches = find_matches(sym, query).await;

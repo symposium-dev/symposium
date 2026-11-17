@@ -1,4 +1,4 @@
-//! End-to-end coverage for plugin-vended `cargo agents <name>` dispatch.
+//! End-to-end coverage for plugin-vended `symposium <name>` dispatch.
 //!
 //! See `md/design/running-tests.md` for how to run these.
 //!
@@ -42,7 +42,7 @@ async fn help_shows_plugin_subcommand() {
             expect_test::expect![[r#"
                 AI the Rust Way
 
-                Usage: cargo agents [OPTIONS] [COMMAND]
+                Usage: symposium [OPTIONS] [COMMAND]
 
                 Commands for humans:
                 init         Set up user-wide configuration
