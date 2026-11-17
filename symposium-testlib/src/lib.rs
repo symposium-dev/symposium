@@ -6,10 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use symposium::cli::Cli;
+use symposium::cli::Binary;
 use symposium::config::Symposium;
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
@@ -230,6 +229,7 @@ impl Drop for TestContext {
 impl TestContext {
     /// Run a `symposium` CLI command in-process, returning captured output.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
+        let binary = Binary::CargoAgents;
         let mut full_args = vec!["cargo-agents"];
         full_args.extend_from_slice(args);
 
@@ -244,9 +244,10 @@ impl TestContext {
             .map(|fs| fs.to_string())
             .collect::<Vec<_>>();
 
-        let parse = Cli::try_parse_from(&full_args);
+        let parse = binary.parse(&full_args);
         if let Some(text) =
-            symposium::help_render::help_text(parse.as_ref(), &args_str, &self.sym, &cwd).await
+            symposium::help_render::help_text(binary, parse.as_ref(), &args_str, &self.sym, &cwd)
+                .await
         {
             out.println(text);
             return Ok(out.captured().join("\n"));

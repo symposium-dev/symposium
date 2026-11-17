@@ -70,7 +70,7 @@ This boundary keeps the manifest small, keeps plugins authoritative about their 
 
 ## Dispatch
 
-`cargo-agents`'s top-level CLI uses clap's `allow_external_subcommands`: unknown subcommands are not errors but are routed to a catch-all variant. The binary then:
+The top-level CLI uses clap's `allow_external_subcommands`: unknown subcommands are not errors but are routed to a catch-all variant. The binary then:
 
 1. Loads the plugin registry and the active workspace's crates.
 2. Walks active plugins for one whose `subcommands` map contains the typed name *and* whose subcommand-level `depends-on` predicate (if any) also matches.

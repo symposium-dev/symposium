@@ -12,22 +12,26 @@ name = "symposium"
 path = "src/lib.rs"
 
 [[bin]]
+name = "symposium"
+path = "src/bin/symposium.rs"
+
+[[bin]]
 name = "cargo-agents"
 path = "src/bin/cargo-agents.rs"
 
 # The cargo package manager, as a standalone PM binary. Shipped from this crate
-# so `cargo install symposium` installs it alongside `cargo-agents`: a PM the
+# so `cargo install symposium` installs it alongside `symposium`: a PM the
 # user has to install separately would be a PM that is usually missing.
 [[bin]]
 name = "symposium-pm-cargo"
 path = "src/bin/symposium-pm-cargo.rs"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/{ name }-v{ version }/cargo-agents-{ target }.tar.gz"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/symposium-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
-pkg-url = "{ repo }/releases/download/{ name }-v{ version }/cargo-agents-{ target }.zip"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/symposium-{ target }.zip"
 pkg-fmt = "zip"
 
 [dependencies]
