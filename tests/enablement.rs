@@ -312,6 +312,41 @@ async fn use_global_installs_registry_content_for_the_user() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn a_global_package_reaches_a_workspace_it_does_not_match() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["use", "--global", "serde-guidance"])
+                .await?;
+            let plugin = ctx.sym.home_dir().join(".claude/skills/serde-guidance");
+            std::fs::remove_dir_all(&plugin)?;
+
+            let other = ctx.tempdir.join("other-workspace");
+            std::fs::create_dir_all(other.join("src"))?;
+            std::fs::write(
+                other.join("Cargo.toml"),
+                "[package]\nname = \"other-workspace\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            )?;
+            std::fs::write(other.join("src/lib.rs"), "")?;
+            ctx.workspace_root = Some(other);
+
+            ctx.prompt_or_hook(
+                "hello",
+                &[HookStep::session_start()],
+                symposium::hook_schema::HookAgent::Claude,
+            )
+            .await?;
+            assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `use` wakes a dormant registry plugin (one no dependency gates), and
 /// `--remove` puts it back to sleep, reaping its skills.
 #[tokio::test]
