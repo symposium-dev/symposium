@@ -14,7 +14,9 @@ use symposium_install::UpdateLevel;
 use crate::config::Symposium;
 use crate::output::display_path;
 use crate::plugins::{Plugin, PluginSource, SkillGroup};
-use crate::predicate::{PredicateContext, PredicateSet};
+#[cfg(test)]
+use crate::predicate::PredicateContext;
+use crate::predicate::{PredicateContextImpl, PredicateDependencies, PredicateSet};
 
 fn source_display(source: &PluginSource) -> String {
     match source {
@@ -278,12 +280,15 @@ pub async fn skills_applicable_to(
 /// `workspace-member()` predicate sees the plugin it belongs to. Skill git
 /// sources are fetched here (hence `update`), which is why this is separate
 /// from [`crate::plugins::active_plugins`].
-pub(crate) async fn collect_skills(
+pub(crate) async fn collect_skills<D>(
     sym: &Symposium,
     active: &[Plugin],
-    ctx: &mut PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> Vec<SkillWithGroupContext> {
+) -> Vec<SkillWithGroupContext>
+where
+    D: PredicateDependencies,
+{
     let mut results = Vec::new();
     for (plugin_index, parsed) in active.iter().enumerate() {
         ctx.set_workspace_member(parsed.workspace_member);
@@ -294,9 +299,8 @@ pub(crate) async fn collect_skills(
                     skill,
                     origin_hash,
                     plugin_index,
-                    parsed.agent_plugin_root.as_deref(),
                     package_content,
-                    &parsed.manifest.name,
+                    parsed,
                     ctx,
                     &mut results,
                 );
@@ -343,13 +347,16 @@ pub(crate) fn skills_on_disk(sym: &Symposium, plugins: &[Plugin]) -> Vec<(String
 /// paired with the origin hash it was discovered through — its group's origin
 /// key combined
 /// with the SKILL.md's path within that origin, one per discovered SKILL.md.
-async fn load_skills_for_group(
+async fn load_skills_for_group<D>(
     sym: &Symposium,
     parsed: &Plugin,
     group: &SkillGroup,
-    ctx: &mut PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> Vec<(Skill, String, Option<PackageContent>)> {
+) -> Vec<(Skill, String, Option<PackageContent>)>
+where
+    D: PredicateDependencies,
+{
     let plugin = &parsed.manifest;
 
     // Pre-fetch filtering: skip groups whose predicates don't hold (crate
@@ -868,21 +875,22 @@ pub(crate) fn is_safe_dir_name(name: &str) -> bool {
 ///
 /// Plugin- and group-level predicates have already been evaluated by callers as
 /// a pre-filter, so only the skill-level set is checked here.
-fn collect_skill_applicable_to(
+fn collect_skill_applicable_to<D>(
     skill: Skill,
     origin_hash: String,
     plugin_index: usize,
-    agent_plugin_root: Option<&Path>,
     package_content: Option<PackageContent>,
-    plugin_name: &str,
-    ctx: &mut PredicateContext,
+    plugin: &Plugin,
+    ctx: &mut PredicateContextImpl<D>,
     results: &mut Vec<SkillWithGroupContext>,
-) {
+) where
+    D: PredicateDependencies,
+{
     if !skill.predicates.evaluate(ctx) {
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillConsidered {
                 skill: skill.name().to_string(),
-                plugin: plugin_name.to_string(),
+                plugin: plugin.manifest.name.clone(),
                 matched: false,
                 reason: Some("skill-level predicates not satisfied".into()),
             },
@@ -893,7 +901,7 @@ fn collect_skill_applicable_to(
     tracing::debug!(
         report = %crate::report::ReportEvent::SkillConsidered {
             skill: skill.name().to_string(),
-            plugin: plugin_name.to_string(),
+            plugin: plugin.manifest.name.clone(),
             matched: true,
             reason: None,
         },
@@ -902,7 +910,7 @@ fn collect_skill_applicable_to(
         skill,
         origin_hash,
         plugin_index,
-        agent_plugin_root: agent_plugin_root.map(Path::to_path_buf),
+        agent_plugin_root: plugin.agent_plugin_root.clone(),
         package_content,
     });
 }

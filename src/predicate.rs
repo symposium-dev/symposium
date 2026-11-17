@@ -36,20 +36,28 @@ use crate::predicate_cache::{
 /// the SDK, which knows nothing about workspaces or the environment.
 pub trait PredicateEval {
     /// True if this holds in `ctx`.
-    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool;
+    fn evaluate<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies;
 }
 
 impl PredicateEval for Predicate {
     /// Short-circuits: `any` stops at the first true child, `all` at the first
     /// false.
-    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+    fn evaluate<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies,
+    {
         evaluate_predicate(self, ctx, &mut BooleanMode).is_some()
     }
 }
 
 impl PredicateEval for PredicateSet {
     /// True if every predicate holds (or the set is empty).
-    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+    fn evaluate<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies,
+    {
         evaluate_predicate_set(self, ctx, &mut BooleanMode).is_some()
     }
 }
@@ -857,6 +865,23 @@ mod tests {
             )))
         );
         assert_eq!(mode.dependency_visits, 1);
+    }
+
+    #[test]
+    fn boolean_evaluation_accepts_admitted_dependencies() {
+        let dependency = resolved_dependency(
+            0,
+            CARGO_PM,
+            "serde",
+            "1.0.0",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let dependencies = [dependency];
+        let mut context = ResolvedPredicateContext::new(&dependencies);
+
+        assert!(Predicate::DependsOn(Dependency::named("serde")).evaluate(&mut context));
+        assert!(!Predicate::DependsOn(Dependency::named("missing")).evaluate(&mut context));
     }
 
     #[test]

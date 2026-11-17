@@ -12,7 +12,7 @@ use crate::agents::CompiledPlugin;
 use crate::config::{PluginRef, PluginsConfig, Symposium};
 use crate::plugins::{Plugin, PluginRegistry};
 use crate::pm::{PackageId, PmRegistry};
-use crate::predicate::PredicateContext;
+use crate::predicate::{PredicateContextImpl, PredicateDependencies};
 use crate::report::ReportEvent;
 use crate::skills::SkillWithGroupContext;
 use crate::sync::{self, TreeContents};
@@ -60,14 +60,17 @@ pub(crate) struct PluginSkills {
     skills: Vec<SkillWithGroupContext>,
 }
 
-pub(crate) async fn global_plugins(
+pub(crate) async fn global_plugins<D>(
     sym: &Symposium,
     pms: &PmRegistry,
     registry: &PluginRegistry,
     active: &[Plugin],
-    ctx: &mut PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> Vec<PluginSkills> {
+) -> Vec<PluginSkills>
+where
+    D: PredicateDependencies,
+{
     let used = globally_used(
         &sym.config.plugins,
         pms,

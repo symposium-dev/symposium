@@ -1,4 +1,4 @@
-use crate::predicate::PredicateEval;
+use crate::predicate::{PredicateContextImpl, PredicateDependencies, PredicateEval};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -363,7 +363,10 @@ impl Plugin {
     /// subcommands) on the same context. A dormant plugin
     /// ([`requires_use`](PluginManifest::requires_use)) applies only when an
     /// applicable `[plugins] use` entry names it.
-    pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
+    pub fn applies<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies,
+    {
         ctx.set_workspace_member(self.workspace_member);
         if self.manifest.requires_use && !ctx.is_used(&self.canonical) {
             return false;
@@ -464,10 +467,13 @@ impl PluginManifest {
     ///
     /// ANDed with the plugin-level predicates, which the caller checks
     /// separately.
-    pub fn applicable_mcp_servers(
+    pub fn applicable_mcp_servers<D>(
         &self,
-        ctx: &mut crate::predicate::PredicateContext,
-    ) -> Vec<McpServerEntry> {
+        ctx: &mut PredicateContextImpl<D>,
+    ) -> Vec<McpServerEntry>
+    where
+        D: PredicateDependencies,
+    {
         self.mcp_servers
             .iter()
             .filter(|s| s.predicates.evaluate(ctx))
@@ -1342,14 +1348,17 @@ async fn load_registry_impl(
 ///
 /// `ctx.package_ids()` supplies the dependency list expansion evaluates
 /// against.
-pub async fn active_plugins(
+pub async fn active_plugins<D>(
     sym: &Symposium,
     registry: &PluginRegistry,
     pms: &crate::pm::PmRegistry,
     workspace_root: Option<&Path>,
-    ctx: &mut crate::predicate::PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> Vec<Plugin> {
+) -> Vec<Plugin>
+where
+    D: PredicateDependencies,
+{
     resolve_active_plugins(sym, registry, pms, workspace_root, ctx, update)
         .await
         .active
@@ -1365,14 +1374,17 @@ pub struct ActivePlugins {
 }
 
 /// [`active_plugins`], also returning the revoked packages it withheld.
-pub async fn resolve_active_plugins(
+pub async fn resolve_active_plugins<D>(
     sym: &Symposium,
     registry: &PluginRegistry,
     pms: &crate::pm::PmRegistry,
     workspace_root: Option<&Path>,
-    ctx: &mut crate::predicate::PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> ActivePlugins {
+) -> ActivePlugins
+where
+    D: PredicateDependencies,
+{
     let mut active = Vec::new();
     let mut revoked = Vec::new();
     if let Err(error) = sym.config.plugins.validate_disable_managers(pms) {
@@ -1502,14 +1514,17 @@ async fn withheld(
 /// Gate `plugin` and, if it passes, record it into `active` and enqueue its
 /// `[[plugins]]` chained references (evaluated against this plugin's provenance)
 /// onto `worklist`.
-fn record_active(
+fn record_active<D>(
     plugin: Plugin,
     disabled: &crate::config::PluginsConfig,
     spellings: &crate::config::Spellings,
-    ctx: &mut crate::predicate::PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     active: &mut Vec<Plugin>,
     worklist: &mut Vec<crate::pm::PackageRequest>,
-) -> bool {
+) -> bool
+where
+    D: PredicateDependencies,
+{
     // `disable` names a plugin whatever offers it. A trusted source is what
     // lets a plugin activate without being asked about, not a claim the user
     // cannot change their mind.

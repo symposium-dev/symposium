@@ -1280,7 +1280,19 @@ mod tests {
             unreadable_registries: Vec::new(),
             custom_predicates: Default::default(),
         };
-        let mut context = crate::predicate::PredicateContext::new(&deps);
+        let resolved: Vec<_> = deps
+            .iter()
+            .enumerate()
+            .map(|(slot, id)| {
+                crate::pm::ResolvedDependency::for_test(
+                    slot,
+                    id.clone(),
+                    crate::pm::PackageSourceClaim::Unknown,
+                    crate::pm::PackageNamingAuthority::Remote,
+                )
+            })
+            .collect();
+        let mut context = crate::predicate::ResolvedPredicateContext::new(&resolved);
         let active = crate::plugins::active_plugins(
             &sym,
             &registry,
