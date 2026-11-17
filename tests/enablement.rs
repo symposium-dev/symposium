@@ -806,7 +806,7 @@ async fn decide_crate_d(ctx: &mut TestContext, approve: bool) -> anyhow::Result<
     symposium::discovery::apply_consent(&mut ctx.sym, deps.pms(), &approved, &declined).await
 }
 
-async fn crate_d_is_offered(ctx: &mut TestContext) -> anyhow::Result<bool> {
+async fn crate_d_is_offered(ctx: &mut TestContext) -> anyhow::Result<(bool, bool)> {
     let workspace_root = ctx.workspace_root.clone().unwrap();
     let deps = ctx.sym.workspace(&workspace_root);
     let pending = symposium::discovery::pending_candidates(&ctx.sym, &deps).await;
@@ -817,7 +817,10 @@ async fn crate_d_is_offered(ctx: &mut TestContext) -> anyhow::Result<bool> {
             symposium::hook_schema::HookAgent::Claude,
         )
         .await?;
-    Ok(pending.iter().any(|c| c.name() == "crate-d") || session.has_context_containing("crate-d"))
+    Ok((
+        pending.iter().any(|c| c.name() == "crate-d"),
+        session.has_context_containing("crate-d"),
+    ))
 }
 
 async fn active_crate_d_facets(ctx: &mut TestContext) -> anyhow::Result<Vec<&'static str>> {
@@ -875,15 +878,16 @@ async fn declined_dependency_plugin_stays_inactive() {
         async |mut ctx| {
             ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            assert!(crate_d_is_offered(&mut ctx).await?);
+            assert_eq!(crate_d_is_offered(&mut ctx).await?, (true, true));
 
             decide_crate_d(&mut ctx, false).await?;
             assert_eq!(ctx.sym.config.plugins.disable, ["crate-d"]);
+            ctx.sym.config.plugins.auto_enable = vec!["*".into()];
             ctx.symposium(&["sync"]).await?;
 
             assert_eq!(active_crate_d_facets(&mut ctx).await?, Vec::<&str>::new());
             assert_eq!(crate_d_status(&ctx).await?, StatusState::Declined);
-            assert!(!crate_d_is_offered(&mut ctx).await?);
+            assert_eq!(crate_d_is_offered(&mut ctx).await?, (false, false));
             Ok(())
         },
     )
@@ -899,7 +903,7 @@ async fn approved_dependency_plugin_activates() {
         async |mut ctx| {
             ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            assert!(crate_d_is_offered(&mut ctx).await?);
+            assert_eq!(crate_d_is_offered(&mut ctx).await?, (true, true));
 
             decide_crate_d(&mut ctx, true).await?;
             ctx.symposium(&["sync"]).await?;
@@ -909,7 +913,7 @@ async fn approved_dependency_plugin_activates() {
                 ["skill", "mcp server", "hook", "subcommand"]
             );
             assert_eq!(crate_d_status(&ctx).await?, StatusState::Active);
-            assert!(!crate_d_is_offered(&mut ctx).await?);
+            assert_eq!(crate_d_is_offered(&mut ctx).await?, (false, false));
             Ok(())
         },
     )
