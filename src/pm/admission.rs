@@ -165,8 +165,55 @@ impl ResolvedDependency {
         self.0.id()
     }
 
+    /// The supplier-local identity used to collapse repeated evidence for the
+    /// same admitted package.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "resolution witnesses consume admitted dependency handles in the next stack slice"
+        )
+    )]
+    pub(crate) fn handle(&self) -> PackageHandle {
+        self.0.handle()
+    }
+
+    /// The source-sensitive facts public naming may inspect.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "resolution witnesses consume admitted dependency naming views in the next stack slice"
+        )
+    )]
+    pub(crate) fn naming_view(&self) -> PackageNamingView<'_> {
+        self.0.naming_view()
+    }
+
     pub(crate) fn into_package(self) -> ResolvedPackage {
         self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        slot: usize,
+        id: PackageId,
+        source: PackageSourceClaim,
+        authority: PackageNamingAuthority,
+    ) -> Self {
+        Self(ResolvedPackage {
+            handle: PackageHandle {
+                supplier: SupplierId(0),
+                slot,
+            },
+            id,
+            source,
+            authority: match authority {
+                PackageNamingAuthority::BuiltinCargo => PackageAuthority::BuiltinCargo,
+                PackageNamingAuthority::Recommendations => PackageAuthority::Recommendations,
+                PackageNamingAuthority::Remote => PackageAuthority::Remote,
+            },
+        })
     }
 }
 

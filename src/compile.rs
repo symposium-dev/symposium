@@ -68,8 +68,14 @@ pub(crate) async fn global_plugins(
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
 ) -> Vec<PluginSkills> {
-    let used = globally_used(&sym.config.plugins, pms, &registry.plugins, ctx.deps).await;
-    let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
+    let used = globally_used(
+        &sym.config.plugins,
+        pms,
+        &registry.plugins,
+        ctx.package_ids(),
+    )
+    .await;
+    let names = crate::discovery::Names::new(&registry.plugins, ctx.package_ids(), pms);
     let mut spellings = names.spellings(&sym.config.plugins).await;
     let inactive = registry
         .plugins

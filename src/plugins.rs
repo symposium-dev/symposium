@@ -1340,7 +1340,8 @@ async fn load_registry_impl(
 /// plugin-level gate; a facet still calls [`Plugin::applies`] before its
 /// own predicates, to re-stamp `workspace-member()` for the plugin being read.
 ///
-/// `ctx.deps` supplies the dependency list expansion evaluates against.
+/// `ctx.package_ids()` supplies the dependency list expansion evaluates
+/// against.
 pub async fn active_plugins(
     sym: &Symposium,
     registry: &PluginRegistry,
@@ -1395,7 +1396,7 @@ pub async fn resolve_active_plugins(
     let mut settled = std::collections::HashSet::new();
     // Package ids still to resolve through the set.
     let mut worklist: Vec<crate::pm::PackageRequest> = Vec::new();
-    let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
+    let names = crate::discovery::Names::new(&registry.plugins, ctx.package_ids(), pms);
     let mut spellings = names.spellings(&sym.config.plugins).await;
 
     // Seed with the trust-root plugins (registry + workspace), gated.
@@ -1415,8 +1416,15 @@ pub async fn resolve_active_plugins(
     if let Some(root) = workspace_root {
         let used = crate::discovery::used(sym, root, &names).await;
         worklist.extend(
-            crate::discovery::enabled_dependencies(sym, pms, ctx.deps, &used, &spellings, update)
-                .await,
+            crate::discovery::enabled_dependencies(
+                sym,
+                pms,
+                ctx.package_ids(),
+                &used,
+                &spellings,
+                update,
+            )
+            .await,
         );
     }
 

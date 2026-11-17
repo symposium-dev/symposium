@@ -524,11 +524,11 @@ pub async fn sync(
     }
     let predicate_cache_path =
         crate::predicate_cache::PredicateCache::path_for_workspace(sym.cache_dir(), &project_root);
-    let mut ctx =
-        crate::predicate::PredicateContext::with_custom_predicates(&dep_ids, custom_entries)
-            .with_used(&used.plugins)
-            .with_cwd(ws.start())
-            .with_disk_cache(&predicate_cache_path);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_custom_predicates(custom_entries)
+        .with_used(&used.plugins)
+        .with_cwd(ws.start())
+        .with_disk_cache(&predicate_cache_path);
 
     // The active plugin set: registry plugins plus the crate-sourced plugins
     // reached through `[[plugins]]` chained references and dependency

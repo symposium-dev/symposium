@@ -263,7 +263,8 @@ pub async fn skills_applicable_to(
     let used =
         crate::discovery::used_plugins(sym, workspace_root, &registry.plugins, &for_crates, pms)
             .await;
-    let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries)
+    let mut ctx = PredicateContext::new(&for_crates)
+        .with_custom_predicates(custom_predicate_entries)
         .with_used(&used);
 
     let active =

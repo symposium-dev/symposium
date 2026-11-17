@@ -9,8 +9,9 @@
 //! without linking evaluation: a PM never asks whether a predicate holds.
 //!
 //! Evaluation is [`PredicateEval`], an extension trait rather than an inherent
-//! method, since the types are now foreign. A predicate is purely a boolean
-//! gate.
+//! method, since the types are now foreign. Ordinary callers retain only the
+//! boolean gate. Resolution telemetry can run the same traversal over admitted
+//! dependencies and retain evidence from the branches that actually passed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,7 +25,7 @@ pub use symposium_sdk::predicate::syntax::{
     validate_custom_predicate_name,
 };
 
-use crate::pm::PackageId;
+use crate::pm::{PackageId, PackageNamingView, ResolvedDependency};
 use crate::predicate_cache::{
     CacheEntry, CacheTtl, Fingerprints, PredicateCache, WatchSet, cache_key, now_ms,
 };
@@ -35,33 +36,300 @@ use crate::predicate_cache::{
 /// the SDK, which knows nothing about workspaces or the environment.
 pub trait PredicateEval {
     /// True if this holds in `ctx`.
-    fn evaluate(&self, ctx: &mut PredicateContext) -> bool;
+    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool;
 }
 
 impl PredicateEval for Predicate {
     /// Short-circuits: `any` stops at the first true child, `all` at the first
     /// false.
-    fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
-        match self {
-            Predicate::DependsOn(wanted) => ctx.deps.iter().any(|dep| dep_matches(dep, wanted)),
-            Predicate::DependsOnWildcard => true,
-            Predicate::Shell(cmd) => run_shell(cmd, ctx.cwd.as_deref()),
-            Predicate::PathExists(arg) => path_exists(arg, ctx.cwd.as_deref()),
-            Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
-            Predicate::WorkspaceMember => ctx.workspace_member,
-            Predicate::Not(inner) => !inner.evaluate(ctx),
-            Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
-            Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
-            Predicate::Custom { name, arg } => ctx.evaluate_custom(name, arg),
-        }
+    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+        evaluate_predicate(self, ctx, &mut BooleanMode).is_some()
     }
 }
 
 impl PredicateEval for PredicateSet {
     /// True if every predicate holds (or the set is empty).
-    fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
-        ctx.conditions_met || self.predicates.iter().all(|p| p.evaluate(ctx))
+    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+        evaluate_predicate_set(self, ctx, &mut BooleanMode).is_some()
     }
+}
+
+/// Dependency storage understood by the shared predicate traversal.
+///
+/// This trait is public only because it bounds the public context type. The
+/// [`predicate`](crate::predicate) module itself remains crate-private.
+pub trait PredicateDependencies {
+    type Dependency;
+
+    fn dependencies(&self) -> &[Self::Dependency];
+    fn package_id(dependency: &Self::Dependency) -> &PackageId;
+    fn package_ids(&self) -> &[PackageId];
+}
+
+/// Borrowed package ids used by ordinary boolean predicate evaluation.
+///
+/// This is an implementation detail of the [`PredicateContext`] alias;
+/// callers construct that alias through its context constructors.
+#[derive(Clone, Copy)]
+pub struct BorrowedPackageIds<'a>(&'a [PackageId]);
+
+impl PredicateDependencies for BorrowedPackageIds<'_> {
+    type Dependency = PackageId;
+
+    fn dependencies(&self) -> &[Self::Dependency] {
+        self.0
+    }
+
+    fn package_id(dependency: &Self::Dependency) -> &PackageId {
+        dependency
+    }
+
+    fn package_ids(&self) -> &[PackageId] {
+        self.0
+    }
+}
+
+/// Admitted dependency views plus their derived package-id projection.
+///
+/// Repeated handles are collapsed here, before a predicate counts matching
+/// packages. The ids are derived rather than accepted as a second collection,
+/// so coordinate matching and source-sensitive evidence cannot drift apart.
+pub(crate) struct ResolvedDependencies<'a> {
+    packages: Vec<PackageNamingView<'a>>,
+    package_ids: Vec<PackageId>,
+}
+
+impl<'a> ResolvedDependencies<'a> {
+    fn new(dependencies: &'a [ResolvedDependency]) -> Self {
+        let mut handles = std::collections::HashSet::with_capacity(dependencies.len());
+        let mut packages = Vec::with_capacity(dependencies.len());
+        let mut package_ids = Vec::with_capacity(dependencies.len());
+
+        for dependency in dependencies {
+            if handles.insert(dependency.handle()) {
+                packages.push(dependency.naming_view());
+                package_ids.push(dependency.id().clone());
+            }
+        }
+
+        Self {
+            packages,
+            package_ids,
+        }
+    }
+}
+
+impl<'a> PredicateDependencies for ResolvedDependencies<'a> {
+    type Dependency = PackageNamingView<'a>;
+
+    fn dependencies(&self) -> &[Self::Dependency] {
+        &self.packages
+    }
+
+    fn package_id(dependency: &Self::Dependency) -> &PackageId {
+        dependency.id()
+    }
+
+    fn package_ids(&self) -> &[PackageId] {
+        &self.package_ids
+    }
+}
+
+/// Cardinality of the admitted packages satisfying one coordinate predicate.
+pub(crate) enum DependencyMatch<'a, T> {
+    /// Exactly one distinct admitted package matched.
+    Unique(
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "the resolution-witness producer reads the admitted package in the next commit"
+            )
+        )]
+        &'a T,
+    ),
+    /// Several distinct admitted packages matched the coordinate predicate.
+    Ambiguous,
+}
+
+/// Output hooks for the shared predicate traversal.
+///
+/// Boolean evaluation uses `Evidence = ()`. Witnessed evaluation receives the
+/// admitted dependency cardinality before public naming policy is applied.
+pub(crate) trait PredicateEvaluationMode<D>
+where
+    D: PredicateDependencies,
+{
+    type Evidence;
+
+    /// Whether a dependency leaf must distinguish one admitted match from
+    /// several. Boolean evaluation can stop at the first match.
+    const DISTINGUISH_DEPENDENCY_MATCHES: bool;
+
+    fn dependency(&mut self, matched: DependencyMatch<'_, D::Dependency>) -> Self::Evidence;
+    fn non_package(&mut self) -> Self::Evidence;
+    fn not(&mut self) -> Self::Evidence;
+    fn any(&mut self, child: Self::Evidence) -> Self::Evidence;
+    fn all(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence;
+    fn set(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence;
+}
+
+struct BooleanMode;
+
+impl<D> PredicateEvaluationMode<D> for BooleanMode
+where
+    D: PredicateDependencies,
+{
+    type Evidence = ();
+    const DISTINGUISH_DEPENDENCY_MATCHES: bool = false;
+
+    fn dependency(&mut self, _matched: DependencyMatch<'_, D::Dependency>) -> Self::Evidence {}
+
+    fn non_package(&mut self) -> Self::Evidence {}
+
+    fn not(&mut self) -> Self::Evidence {}
+
+    fn any(&mut self, _child: Self::Evidence) -> Self::Evidence {}
+
+    fn all(&mut self, _children: Vec<Self::Evidence>) -> Self::Evidence {}
+
+    fn set(&mut self, _children: Vec<Self::Evidence>) -> Self::Evidence {}
+}
+
+/// Evaluate while retaining evidence from the original short-circuited pass.
+///
+/// The method accepts only [`ResolvedPredicateContext`]. An ID-only context
+/// cannot request a source-sensitive witness.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the resolution-witness producer consumes this seam in the next commit"
+    )
+)]
+pub(crate) trait PredicateWitnessEval {
+    fn evaluate_witness<'a, M>(
+        &self,
+        ctx: &mut ResolvedPredicateContext<'a>,
+        mode: &mut M,
+    ) -> Option<M::Evidence>
+    where
+        M: PredicateEvaluationMode<ResolvedDependencies<'a>>;
+}
+
+impl PredicateWitnessEval for Predicate {
+    fn evaluate_witness<'a, M>(
+        &self,
+        ctx: &mut ResolvedPredicateContext<'a>,
+        mode: &mut M,
+    ) -> Option<M::Evidence>
+    where
+        M: PredicateEvaluationMode<ResolvedDependencies<'a>>,
+    {
+        evaluate_predicate(self, ctx, mode)
+    }
+}
+
+impl PredicateWitnessEval for PredicateSet {
+    fn evaluate_witness<'a, M>(
+        &self,
+        ctx: &mut ResolvedPredicateContext<'a>,
+        mode: &mut M,
+    ) -> Option<M::Evidence>
+    where
+        M: PredicateEvaluationMode<ResolvedDependencies<'a>>,
+    {
+        evaluate_predicate_set(self, ctx, mode)
+    }
+}
+
+fn evaluate_predicate<D, M>(
+    predicate: &Predicate,
+    ctx: &mut PredicateContextImpl<D>,
+    mode: &mut M,
+) -> Option<M::Evidence>
+where
+    D: PredicateDependencies,
+    M: PredicateEvaluationMode<D>,
+{
+    match predicate {
+        Predicate::DependsOn(wanted) => {
+            let mut matching = ctx
+                .dependencies
+                .dependencies()
+                .iter()
+                .filter(|dependency| dep_matches(D::package_id(dependency), wanted));
+            let first = matching.next()?;
+            let matched = if M::DISTINGUISH_DEPENDENCY_MATCHES && matching.next().is_some() {
+                DependencyMatch::Ambiguous
+            } else {
+                DependencyMatch::Unique(first)
+            };
+            Some(mode.dependency(matched))
+        }
+        Predicate::DependsOnWildcard => Some(mode.non_package()),
+        Predicate::Shell(command) => {
+            run_shell(command, ctx.cwd.as_deref()).then(|| mode.non_package())
+        }
+        Predicate::PathExists(argument) => {
+            path_exists(argument, ctx.cwd.as_deref()).then(|| mode.non_package())
+        }
+        Predicate::Env(name, expected) => {
+            env_matches(name, expected.as_deref()).then(|| mode.non_package())
+        }
+        Predicate::WorkspaceMember => ctx.workspace_member.then(|| mode.non_package()),
+        Predicate::Not(inner) => evaluate_predicate(inner, ctx, &mut BooleanMode)
+            .is_none()
+            .then(|| mode.not()),
+        Predicate::Any(children) => {
+            for child in children {
+                if let Some(evidence) = evaluate_predicate(child, ctx, mode) {
+                    return Some(mode.any(evidence));
+                }
+            }
+            None
+        }
+        Predicate::All(children) => {
+            evaluate_all(children, ctx, mode).map(|evidence| mode.all(evidence))
+        }
+        Predicate::Custom { name, arg } => {
+            ctx.evaluate_custom(name, arg).then(|| mode.non_package())
+        }
+    }
+}
+
+fn evaluate_predicate_set<D, M>(
+    predicates: &PredicateSet,
+    ctx: &mut PredicateContextImpl<D>,
+    mode: &mut M,
+) -> Option<M::Evidence>
+where
+    D: PredicateDependencies,
+    M: PredicateEvaluationMode<D>,
+{
+    if ctx.conditions_met {
+        return Some(mode.non_package());
+    }
+
+    evaluate_all(&predicates.predicates, ctx, mode).map(|evidence| mode.set(evidence))
+}
+
+fn evaluate_all<D, M>(
+    predicates: &[Predicate],
+    ctx: &mut PredicateContextImpl<D>,
+    mode: &mut M,
+) -> Option<Vec<M::Evidence>>
+where
+    D: PredicateDependencies,
+    M: PredicateEvaluationMode<D>,
+{
+    // For BooleanMode this is Vec<()>, whose zero-sized elements require no
+    // allocation; ordinary boolean evaluation keeps its current cost model.
+    let mut evidence = Vec::with_capacity(predicates.len());
+    for predicate in predicates {
+        evidence.push(evaluate_predicate(predicate, ctx, mode)?);
+    }
+    Some(evidence)
 }
 
 /// The evaluation environment a predicate is checked against.
@@ -70,9 +338,8 @@ impl PredicateEval for PredicateSet {
 /// (`shell`, `path_exists`, `env`) is read ambiently at evaluation time. Custom
 /// (plugin-defined) predicates are resolved entries whose results are cached
 /// for the lifetime of the context.
-#[derive(Debug)]
-pub struct PredicateContext<'a> {
-    pub deps: &'a [PackageId],
+pub struct PredicateContextImpl<D> {
+    dependencies: D,
     /// Whether the plugin currently being evaluated is defined by a member
     /// of the active workspace. This is *provenance*, not a workspace fact:
     /// the loader stamps it per plugin (via `Plugin::applies`) before
@@ -95,10 +362,35 @@ pub struct PredicateContext<'a> {
     disk_cache_original: Option<Arc<PredicateCache>>,
 }
 
-impl<'a> PredicateContext<'a> {
+/// Existing ID-only predicate context used throughout dispatch and rendering.
+pub type PredicateContext<'a> = PredicateContextImpl<BorrowedPackageIds<'a>>;
+
+/// Admitted context required by source-sensitive witnessed evaluation.
+pub(crate) type ResolvedPredicateContext<'a> = PredicateContextImpl<ResolvedDependencies<'a>>;
+
+impl<'a> PredicateContextImpl<BorrowedPackageIds<'a>> {
     pub fn new(deps: &'a [PackageId]) -> Self {
+        Self::from_dependencies(BorrowedPackageIds(deps))
+    }
+}
+
+impl<'a> PredicateContextImpl<ResolvedDependencies<'a>> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the structured sync report constructs admitted predicate contexts in a later slice"
+        )
+    )]
+    pub(crate) fn new(dependencies: &'a [ResolvedDependency]) -> Self {
+        Self::from_dependencies(ResolvedDependencies::new(dependencies))
+    }
+}
+
+impl<D> PredicateContextImpl<D> {
+    fn from_dependencies(dependencies: D) -> Self {
         Self {
-            deps,
+            dependencies,
             workspace_member: false,
             conditions_met: false,
             used: Vec::new(),
@@ -110,14 +402,21 @@ impl<'a> PredicateContext<'a> {
         }
     }
 
-    pub fn with_custom_predicates(
-        deps: &'a [PackageId],
+    /// Attach the custom predicate definitions available to this evaluation.
+    pub(crate) fn with_custom_predicates(
+        mut self,
         entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     ) -> Self {
-        Self {
-            custom_entries: entries,
-            ..Self::new(deps)
-        }
+        self.custom_entries = entries;
+        self
+    }
+
+    /// Package ids used by coordinate predicates and ID-only consumers.
+    pub(crate) fn package_ids(&self) -> &[PackageId]
+    where
+        D: PredicateDependencies,
+    {
+        self.dependencies.package_ids()
     }
 
     /// Record the plugins the applicable `[plugins] use` entries enable,
@@ -427,7 +726,8 @@ fn parse_predicate_events(predicate_name: &str, stdout: &[u8]) -> Vec<CustomPred
 mod tests {
     // The parsing tests below exercise the SDK's parser directly.
     use super::*;
-    use crate::pm::CARGO_PM;
+    use crate::pm::{CARGO_PM, PackageNamingAuthority};
+    use symposium_sdk::pm::PackageSourceClaim;
     use symposium_sdk::predicate::syntax::parse_predicate as parse;
 
     fn ctx<'a>(deps: &'a [PackageId]) -> PredicateContext<'a> {
@@ -439,6 +739,69 @@ mod tests {
             .iter()
             .map(|(n, ver)| PackageId::new(CARGO_PM, *n, *ver))
             .collect()
+    }
+
+    fn resolved_dependency(
+        slot: usize,
+        pm: &str,
+        name: &str,
+        version: &str,
+        source: PackageSourceClaim,
+        authority: PackageNamingAuthority,
+    ) -> ResolvedDependency {
+        ResolvedDependency::for_test(slot, PackageId::new(pm, name, version), source, authority)
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum TestEvidence {
+        Package(PackageId),
+        Ambiguous,
+        NonPackage,
+        Not,
+        Any(Box<TestEvidence>),
+        All(Vec<TestEvidence>),
+        Set(Vec<TestEvidence>),
+    }
+
+    #[derive(Default)]
+    struct TestMode {
+        dependency_visits: usize,
+    }
+
+    impl<'a> PredicateEvaluationMode<ResolvedDependencies<'a>> for TestMode {
+        type Evidence = TestEvidence;
+        const DISTINGUISH_DEPENDENCY_MATCHES: bool = true;
+
+        fn dependency(
+            &mut self,
+            matched: DependencyMatch<'_, PackageNamingView<'a>>,
+        ) -> Self::Evidence {
+            self.dependency_visits += 1;
+            match matched {
+                DependencyMatch::Unique(package) => TestEvidence::Package(package.id().clone()),
+                DependencyMatch::Ambiguous => TestEvidence::Ambiguous,
+            }
+        }
+
+        fn non_package(&mut self) -> Self::Evidence {
+            TestEvidence::NonPackage
+        }
+
+        fn not(&mut self) -> Self::Evidence {
+            TestEvidence::Not
+        }
+
+        fn any(&mut self, child: Self::Evidence) -> Self::Evidence {
+            TestEvidence::Any(Box::new(child))
+        }
+
+        fn all(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence {
+            TestEvidence::All(children)
+        }
+
+        fn set(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence {
+            TestEvidence::Set(children)
+        }
     }
 
     // --- workspace-member ---
@@ -468,6 +831,256 @@ mod tests {
 
         c.set_workspace_member(false);
         assert!(!p.evaluate(&mut c));
+    }
+
+    #[test]
+    fn witnessed_dependency_retains_one_admitted_package() {
+        let dependency = resolved_dependency(
+            0,
+            CARGO_PM,
+            "serde",
+            "1.0.0",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let dependencies = [dependency];
+        let mut context = ResolvedPredicateContext::new(&dependencies);
+        let mut mode = TestMode::default();
+
+        let evidence = Predicate::DependsOn(Dependency::named("serde"))
+            .evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(
+            evidence,
+            Some(TestEvidence::Package(PackageId::new(
+                CARGO_PM, "serde", "1.0.0"
+            )))
+        );
+        assert_eq!(mode.dependency_visits, 1);
+    }
+
+    #[test]
+    fn repeated_handles_count_as_one_admitted_package() {
+        let dependency = resolved_dependency(
+            0,
+            CARGO_PM,
+            "serde",
+            "1.0.0",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let dependencies = [dependency.clone(), dependency];
+        let mut context = ResolvedPredicateContext::new(&dependencies);
+        let mut mode = TestMode::default();
+
+        let evidence = Predicate::DependsOn(Dependency::named("serde"))
+            .evaluate_witness(&mut context, &mut mode);
+
+        assert!(matches!(evidence, Some(TestEvidence::Package(_))));
+        assert_eq!(context.package_ids().len(), 1);
+    }
+
+    #[test]
+    fn distinct_matching_packages_are_ambiguous_in_either_order() {
+        let public = resolved_dependency(
+            0,
+            CARGO_PM,
+            "widget",
+            "1.2.3",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let private = resolved_dependency(
+            1,
+            CARGO_PM,
+            "widget",
+            "1.2.3",
+            PackageSourceClaim::Registry,
+            PackageNamingAuthority::Remote,
+        );
+        let predicate = Predicate::DependsOn(Dependency::named("widget"));
+
+        for dependencies in [
+            [public.clone(), private.clone()],
+            [private.clone(), public.clone()],
+        ] {
+            let mut context = ResolvedPredicateContext::new(&dependencies);
+            let mut mode = TestMode::default();
+
+            assert_eq!(
+                predicate.evaluate_witness(&mut context, &mut mode),
+                Some(TestEvidence::Ambiguous)
+            );
+            assert_eq!(mode.dependency_visits, 1);
+        }
+    }
+
+    #[test]
+    fn repeated_handle_does_not_hide_another_distinct_match() {
+        let first = resolved_dependency(
+            0,
+            CARGO_PM,
+            "widget",
+            "1.2.3",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let second = resolved_dependency(
+            1,
+            CARGO_PM,
+            "widget",
+            "1.2.3",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let dependencies = [first.clone(), first, second];
+        let mut context = ResolvedPredicateContext::new(&dependencies);
+        let mut mode = TestMode::default();
+
+        let evidence = Predicate::DependsOn(Dependency::named("widget"))
+            .evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, Some(TestEvidence::Ambiguous));
+        assert_eq!(context.package_ids().len(), 2);
+    }
+
+    #[test]
+    fn witnessed_any_all_and_not_keep_only_evaluated_branches() {
+        let dependency = resolved_dependency(
+            0,
+            CARGO_PM,
+            "present",
+            "1.0.0",
+            PackageSourceClaim::Path,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let dependencies = [dependency];
+
+        let mut any_context = ResolvedPredicateContext::new(&dependencies);
+        let mut any_mode = TestMode::default();
+        let any = Predicate::Any(vec![
+            Predicate::DependsOn(Dependency::named("present")),
+            Predicate::DependsOn(Dependency::named("missing")),
+        ]);
+        assert!(matches!(
+            any.evaluate_witness(&mut any_context, &mut any_mode),
+            Some(TestEvidence::Any(_))
+        ));
+        assert_eq!(any_mode.dependency_visits, 1);
+
+        let mut all_context = ResolvedPredicateContext::new(&dependencies);
+        let mut all_mode = TestMode::default();
+        let all = Predicate::All(vec![
+            Predicate::DependsOn(Dependency::named("missing")),
+            Predicate::DependsOn(Dependency::named("present")),
+        ]);
+        assert_eq!(all.evaluate_witness(&mut all_context, &mut all_mode), None);
+        assert_eq!(all_mode.dependency_visits, 0);
+
+        let mut not_context = ResolvedPredicateContext::new(&dependencies);
+        let mut not_mode = TestMode::default();
+        let not = Predicate::Not(Box::new(Predicate::DependsOn(Dependency::named("missing"))));
+        assert_eq!(
+            not.evaluate_witness(&mut not_context, &mut not_mode),
+            Some(TestEvidence::Not)
+        );
+        assert_eq!(not_mode.dependency_visits, 0);
+    }
+
+    #[test]
+    fn workspace_membership_is_non_package_evidence() {
+        let mut context = ResolvedPredicateContext::new(&[]);
+        context.set_workspace_member(true);
+        let mut mode = TestMode::default();
+
+        let evidence = Predicate::WorkspaceMember.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, Some(TestEvidence::NonPackage));
+        assert_eq!(mode.dependency_visits, 0);
+    }
+
+    #[test]
+    fn witnessed_predicate_set_keeps_contributors_in_order() {
+        let first = resolved_dependency(
+            0,
+            CARGO_PM,
+            "first",
+            "1.0.0",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let second = resolved_dependency(
+            1,
+            CARGO_PM,
+            "second",
+            "2.0.0",
+            PackageSourceClaim::CratesIo,
+            PackageNamingAuthority::BuiltinCargo,
+        );
+        let dependencies = [first, second];
+        let mut context = ResolvedPredicateContext::new(&dependencies);
+        let mut mode = TestMode::default();
+        let predicates = PredicateSet {
+            predicates: vec![
+                Predicate::DependsOn(Dependency::named("first")),
+                Predicate::DependsOn(Dependency::named("second")),
+            ],
+        };
+
+        let evidence = predicates.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(
+            evidence,
+            Some(TestEvidence::Set(vec![
+                TestEvidence::Package(PackageId::new(CARGO_PM, "first", "1.0.0")),
+                TestEvidence::Package(PackageId::new(CARGO_PM, "second", "2.0.0")),
+            ]))
+        );
+    }
+
+    #[test]
+    fn externally_satisfied_sets_emit_non_package_evidence() {
+        let mut context = ResolvedPredicateContext::new(&[]);
+        context.set_conditions_met(true);
+        let mut mode = TestMode::default();
+        let predicates = PredicateSet {
+            predicates: vec![Predicate::DependsOn(Dependency::named("missing"))],
+        };
+
+        let evidence = predicates.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, Some(TestEvidence::NonPackage));
+        assert_eq!(mode.dependency_visits, 0);
+    }
+
+    #[test]
+    fn custom_predicates_have_boolean_and_witness_parity() {
+        let entries = || {
+            std::collections::HashMap::from([(
+                "configured".to_string(),
+                ResolvedPredicateEntry {
+                    // Listing the current test binary is a portable command
+                    // that succeeds without relying on a system shell.
+                    runnable: symposium_install::Runnable::Exec(std::env::current_exe().unwrap()),
+                    args: vec!["--list".to_string()],
+                },
+            )])
+        };
+        let predicate = Predicate::Custom {
+            name: "configured".to_string(),
+            arg: String::new(),
+        };
+
+        let mut boolean_context = PredicateContext::new(&[]).with_custom_predicates(entries());
+        assert!(predicate.evaluate(&mut boolean_context));
+
+        let mut witnessed_context =
+            ResolvedPredicateContext::new(&[]).with_custom_predicates(entries());
+        let mut mode = TestMode::default();
+        assert_eq!(
+            predicate.evaluate_witness(&mut witnessed_context, &mut mode),
+            Some(TestEvidence::NonPackage)
+        );
     }
 
     // --- crate-atom parsing ---
@@ -859,7 +1472,10 @@ mod tests {
             );
             scripts.push(script);
         }
-        (PredicateContext::with_custom_predicates(&[], map), scripts)
+        (
+            PredicateContext::new(&[]).with_custom_predicates(map),
+            scripts,
+        )
     }
 
     /// Render `path` for use *inside* a `/bin/sh` script body. On Windows `sh`
@@ -924,7 +1540,7 @@ mod tests {
                 args: vec![],
             },
         );
-        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let mut ctx = PredicateContext::new(&[]).with_custom_predicates(entries);
         let pred = Predicate::Custom {
             name: "foo".into(),
             arg: "x".into(),
@@ -954,7 +1570,7 @@ mod tests {
                 args: vec![],
             },
         );
-        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let mut ctx = PredicateContext::new(&[]).with_custom_predicates(entries);
         let pred = Predicate::Custom {
             name: "counter".into(),
             arg: "a".into(),
@@ -991,7 +1607,7 @@ mod tests {
                 args: vec!["--static".into(), "arg".into()],
             },
         );
-        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let mut ctx = PredicateContext::new(&[]).with_custom_predicates(entries);
         let pred = Predicate::Custom {
             name: "checker".into(),
             arg: "dynamic-arg".into(),
@@ -1025,7 +1641,7 @@ mod tests {
                 args: vec!["--static".into()],
             },
         );
-        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let mut ctx = PredicateContext::new(&[]).with_custom_predicates(entries);
 
         // Empty arg (from `foo()`) — should not be appended.
         let pred = Predicate::Custom {
@@ -1075,7 +1691,9 @@ mod tests {
         entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
         cache_path: &Path,
     ) -> PredicateContext<'a> {
-        PredicateContext::with_custom_predicates(deps, entries).with_disk_cache(cache_path)
+        PredicateContext::new(deps)
+            .with_custom_predicates(entries)
+            .with_disk_cache(cache_path)
     }
 
     fn entries_for(
