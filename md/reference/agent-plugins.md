@@ -23,7 +23,7 @@ These packages are picked up in the same three places as a symposium plugin, and
 
 | Where it sits | When it turns on |
 |---------------|------------------|
-| An entry in a configured [plugin source](./plugin-source.md) | Dormant until a [`use`](./cargo-agents-use.md) entry names it, unless it [declares a gate](#telling-symposium-when-it-applies) |
+| An entry in a configured [plugin source](./plugin-source.md) | Dormant until a [`use`](./symposium-use.md) entry names it, unless it [declares a gate](#telling-symposium-when-it-applies) |
 | A workspace member's folder | Whenever that project is in your workspace |
 | A dependency's source | Offered for consent like any plugin found in a dependency, and enabled by the crate's name |
 
@@ -138,7 +138,7 @@ Problems are contained to the smallest part affected. Each one is reported as a 
 | An unknown top-level field, or an `extensions` that is not an object | Ignored. The package loads. |
 | `skills` is not a folder | The package loads with no skills. |
 | A `SKILL.md` at the package root | Not a skill, with a hint to move it under `skills/`. |
-| One skill does not meet the skill format | That skill is skipped, and `cargo agents plugin validate` reports it. In a workspace member the usual [informal skill](../workspace-skills.md#informal-skills) rules apply instead. |
+| One skill does not meet the skill format | That skill is skipped, and `symposium plugin validate` reports it. In a workspace member the usual [informal skill](../workspace-skills.md#informal-skills) rules apply instead. |
 | `mcp.json` is not valid JSON, misses `$schema` or `mcpServers`, has another top-level field, or names another version than `plugin.json` | No MCP servers load from that package. Its skills still load. |
 | One MCP server does not follow the [rules above](#mcp-servers), or has a `type` symposium does not know | That server is skipped. |
 
@@ -153,7 +153,7 @@ Installing one of its skills follows the links in it only as far as the package 
 ## Validation
 
 ```bash
-cargo agents plugin validate path/to/pdf-tools
+symposium plugin validate path/to/pdf-tools
 ```
 
 The path can be the package folder, its `plugin.json`, or a plugin source holding several packages. Warnings, such as an unknown field or a skipped MCP server, do not make the command fail; a rejected package or a broken skill does.

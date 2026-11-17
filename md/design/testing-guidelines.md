@@ -41,8 +41,8 @@ For `TestMode::Any` and `TestMode::AgentOnly`, the test closure runs once per co
 
 Text files have variables expanded when copied:
 
-- `$TEST_DIR` — the tempdir root.
-- `$BINARY` — path to the `cargo-agents` binary.
+- `$TEST_DIR`: the tempdir root.
+- `$BINARY`: path to the `symposium` binary.
 
 ### Fixture requirements
 

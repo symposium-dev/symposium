@@ -24,7 +24,7 @@ See the [plugin definition reference](../reference/plugin-definition.md) for the
 
 ### Will users get every crate from all their dependencies by default?
 
-No, the default is that Symposium makes users away when there are suggested plugin for their workspace, but users must explicitly run `cargo agents sync` and then agree for those plugins to be enabled. However, once a plugin has been enabled in one workspace, it will automatically be enabled in other workspaces.
+No, the default is that Symposium makes users away when there are suggested plugin for their workspace, but users must explicitly run `symposium sync` and then agree for those plugins to be enabled. However, once a plugin has been enabled in one workspace, it will automatically be enabled in other workspaces.
 
 NB: Plugins in the [recommendations repository][rr] are reviewed before they are merged so they do not require explicit confirmation.
 
@@ -68,7 +68,7 @@ my-crate/
 
 ##### 2. Publish your crate
 
-That is all Symposium needs. When a project depends directly on `my-crate`, an interactive `cargo agents sync` offers to enable its plugin, and [`cargo agents status`](../reference/cargo-agents-status.md) lists it as a candidate until the user decides. `cargo agents use my-crate` enables it directly, even for a project that doesn't depend on the crate.
+That is all Symposium needs. When a project depends directly on `my-crate`, an interactive `symposium sync` offers to enable its plugin, and [`symposium status`](../reference/symposium-status.md) lists it as a candidate until the user decides. `symposium use my-crate` enables it directly, even for a project that doesn't depend on the crate.
 
 Symposium reads your plugin from the published package, so make sure `skills/` (and `Symposium.toml`, if you have one) are part of it: check with `cargo package --list` (add `--allow-dirty` if you have uncommitted changes), and add them to `include` if your `Cargo.toml` uses that field.
 
@@ -129,7 +129,7 @@ source.path = "."
 
 The manifest's `depends-on` says which crate the skills apply to, so the skills themselves don't need one.
 
-A skill can also be an entry on its own: a directory in the recommendations repo holding just a `SKILL.md`, with no `Symposium.toml`. Such a skill names the crates it applies to with `depends-on` in its frontmatter (or a `depends-on(...)` predicate in `predicates`). Without one it loads dormant, and only users who run `cargo agents use <skill-name>` get it:
+A skill can also be an entry on its own: a directory in the recommendations repo holding just a `SKILL.md`, with no `Symposium.toml`. Such a skill names the crates it applies to with `depends-on` in its frontmatter (or a `depends-on(...)` predicate in `predicates`). Without one it loads dormant, and only users who run `symposium use <skill-name>` get it:
 
 ```markdown
 ---
@@ -235,7 +235,7 @@ See the [plugin definition reference](../reference/plugin-definition.md#mcp_serv
 
 ### Subcommands
 
-A subcommand lets agents run your crate's own command-line tool through `cargo agents`, so they can find crate-aware tooling before they work on the code. By convention a crate adds one subcommand named after itself, and its tool handles everything typed after that name: `cargo agents my-crate --help` prints your tool's help, and `cargo agents my-crate check` runs its `check` command.
+A subcommand lets agents run your crate's own command-line tool through `symposium`, so they can find crate-aware tooling before they work on the code. By convention a crate adds one subcommand named after itself, and its tool handles everything typed after that name: `symposium my-crate --help` prints your tool's help, and `symposium my-crate check` runs its `check` command.
 
 ```toml
 [[installations]]
@@ -244,48 +244,48 @@ source = "cargo"
 crate = "my-crate-cli"
 executable = "my-crate-cli"
 
-# `cargo agents my-crate check` runs `my-crate-cli check`
+# `symposium my-crate check` runs `my-crate-cli check`
 [subcommand.my-crate]
 description = "Check and inspect the widgets in this workspace"
 command = "my-crate-cli" # the [[installations]] entry that provides the tool
 ```
 
-`cargo agents --help` lists the subcommand under "Commands for agents" with its `description`, and on agents that run hooks, Symposium suggests running `cargo agents --help` at the start of each session in a project that has one. Your tool's output and exit code are passed through. See the [plugin definition reference](../reference/plugin-definition.md) for the other `[subcommand.<name>]` fields.
+`symposium --help` lists the subcommand under "Commands for agents" with its `description`, and on agents that run hooks, Symposium suggests running `symposium --help` at the start of each session in a project that has one. Your tool's output and exit code are passed through. See the [plugin definition reference](../reference/plugin-definition.md) for the other `[subcommand.<name>]` fields.
 
 ## Step 3. Check it with the author tools
 
-Symposium's tools for plugin authors live under `cargo agents plugin`:
+Symposium's tools for plugin authors live under `symposium plugin`:
 
-- **`cargo agents plugin validate <path>`** checks a plugin without installing anything: missing fields, bad crate predicates, unreachable skill paths, invalid skills, and crate names that don't exist on crates.io. `<path>` is your crate (its directory, `Cargo.toml` or `Symposium.toml`), a recommendations entry, or a whole checkout of the recommendations repo. A crate is checked as your users get it, so a mistake in `[package.metadata.symposium]` or `Symposium.toml` that Symposium would otherwise only log is reported here. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-validate).
-- **`cargo agents plugin try <path>`** installs a plugin, skill or [Agent Plugins package](../reference/agent-plugins.md) directory in your agents the way a user would get it, so you can use it while you write it, and reports which agents list its skills. Symposium reads the directory in place, so edits reach your agents on the next sync. `cargo agents plugin try --remove <path>` discards the trial. A crate is tried through a path dependency instead, as in step 4. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-try).
-- **`cargo agents plugin import <path>`** turns a Claude Code plugin into an Agent Plugins package that Symposium loads: its skills and commands become skills, its hooks and MCP servers go into a `Symposium.toml`, and anything it cannot carry over is reported. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-import).
+- **`symposium plugin validate <path>`** checks a plugin without installing anything: missing fields, bad crate predicates, unreachable skill paths, invalid skills, and crate names that don't exist on crates.io. `<path>` is your crate (its directory, `Cargo.toml` or `Symposium.toml`), a recommendations entry, or a whole checkout of the recommendations repo. A crate is checked as your users get it, so a mistake in `[package.metadata.symposium]` or `Symposium.toml` that Symposium would otherwise only log is reported here. See the [reference](../reference/symposium-plugin.md#symposium-plugin-validate).
+- **`symposium plugin try <path>`** installs a plugin, skill or [Agent Plugins package](../reference/agent-plugins.md) directory in your agents the way a user would get it, so you can use it while you write it, and reports which agents list its skills. Symposium reads the directory in place, so edits reach your agents on the next sync. `symposium plugin try --remove <path>` discards the trial. A crate is tried through a path dependency instead, as in step 4. See the [reference](../reference/symposium-plugin.md#symposium-plugin-try).
+- **`symposium plugin import <path>`** turns a Claude Code plugin into an Agent Plugins package that Symposium loads: its skills and commands become skills, its hooks and MCP servers go into a `Symposium.toml`, and anything it cannot carry over is reported. See the [reference](../reference/symposium-plugin.md#symposium-plugin-import).
 
 ```bash
 # In your crate
-cargo agents plugin validate .
+symposium plugin validate .
 
 # A recommendations entry, or every entry from the root of the checkout
-cargo agents plugin validate my-crate/
-cargo agents plugin validate .
+symposium plugin validate my-crate/
+symposium plugin validate .
 
 # Skip the crates.io name check (e.g., for private crates)
-cargo agents plugin validate . --no-check-crates
+symposium plugin validate . --no-check-crates
 ```
 
-To try the entry before opening the pull request, install it in your agents with `cargo agents plugin try my-crate/` and use it in a project that depends on the crate: edits reach your agents on the next sync. Discard the trial with `cargo agents plugin try --remove my-crate/`. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-try).
+To try the entry before opening the pull request, install it in your agents with `symposium plugin try my-crate/` and use it in a project that depends on the crate: edits reach your agents on the next sync. Discard the trial with `symposium plugin try --remove my-crate/`. See the [reference](../reference/symposium-plugin.md#symposium-plugin-try).
 
 ## Step 4. Try it in a project
 
-Before publishing, check what your users will get. In a scratch project that depends on your crate by path, enable the plugin (this assumes you have run [`cargo agents init`](../reference/cargo-agents-init.md)):
+Before publishing, check what your users will get. In a scratch project that depends on your crate by path, enable the plugin (this assumes you have run [`symposium init`](../reference/symposium-init.md)):
 
 ```bash
 cargo new try-my-crate && cd try-my-crate
 cargo add my-crate --path ../my-crate
-cargo agents use my-crate
-cargo agents status
+symposium use my-crate
+symposium status
 ```
 
-`cargo agents use` records the choice and syncs, and `cargo agents status` should list your plugin as active; if it doesn't, see [Edge cases](./supporting-your-crate.md#edge-cases). Its skills are now in each configured agent's skills directory, for example `.claude/skills/` for Claude Code.
+`symposium use` records the choice and syncs, and `symposium status` should list your plugin as active; if it doesn't, see [Edge cases](./supporting-your-crate.md#edge-cases). Its skills are now in each configured agent's skills directory, for example `.claude/skills/` for Claude Code.
 
 To try a hook or subcommand before its binary is published, point the installation at your local build: drop `source` and `crate`, and set `executable` to the binary's absolute path:
 
@@ -295,16 +295,16 @@ name = "my-crate-hooks"
 executable = "/path/to/my-crate-hooks/target/debug/my-crate-hooks"
 ```
 
-Then, from the scratch project, run a subcommand as an agent would, for example `cargo agents my-crate --help`. To try a hook, send Symposium the payload an agent would send, using a tool call your hook reacts to (this one runs `ls`). This runs the same dispatch the agent triggers, so it prints what the agent would receive:
+Then, from the scratch project, run a subcommand as an agent would, for example `symposium my-crate --help`. To try a hook, send Symposium the payload an agent would send, using a tool call your hook reacts to (this one runs `ls`). This runs the same dispatch the agent triggers, so it prints what the agent would receive:
 
 ```bash
 echo '{"session_id":"test","cwd":"'"$PWD"'","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' \
-  | cargo agents hook claude pre-tool-use
+  | symposium hook claude pre-tool-use
 ```
 
 Each agent has its own payload format; see [Agent details](../design/agent-details/index.html) for the others. If nothing happens, rerun the command with `--verbose` to see which plugins and hooks Symposium considered, and check the logs in `~/.symposium/logs/`.
 
-When you are done, remove the test enablement with `cargo agents use my-crate --remove`. Before you publish, restore the `source = "cargo"` installation and publish the hook or subcommand crate first: your users' agents install it from crates.io.
+When you are done, remove the test enablement with `symposium use my-crate --remove`. Before you publish, restore the `source = "cargo"` installation and publish the hook or subcommand crate first: your users' agents install it from crates.io.
 
 A path dependency reads your source tree, so it doesn't catch files missing from the published package; check those with `cargo package --list` (see step 2 of [Embedding skills in your crate](#embedding-skills-in-your-crate-recommended)).
 

@@ -1,22 +1,22 @@
-# `cargo agents self-update`
+# `symposium self-update`
 
 Update symposium to the latest version.
 
 ## Usage
 
 ```bash
-cargo agents self-update
+symposium self-update
 ```
 
 ## Behavior
 
-1. **Check for updates** — runs `cargo search` against the configured registry to find the latest published version of symposium. If the installed version is already current, prints a message and exits.
+1. **Check for updates**: runs `cargo search` against the configured registry to find the latest published version of symposium. If the installed version is already current, prints a message and exits.
 
-2. **Install** — runs `cargo install symposium --force` to build and install the latest version.
+2. **Install**: runs `cargo install symposium --force` to build and install the latest version.
 
 ## Configuration
 
-The `auto-update` key in `~/.symposium/config.toml` controls update behavior. It is also configurable during `cargo agents init`.
+The `auto-update` key in `~/.symposium/config.toml` controls update behavior. It is also configurable during `symposium init`.
 
 ### `auto-update`
 
@@ -40,7 +40,7 @@ The 24-hour throttle is tracked in `~/.symposium/state.toml`. The check is skipp
 Manual update:
 
 ```bash
-cargo agents self-update
+symposium self-update
 ```
 
 Disable all update checks:
