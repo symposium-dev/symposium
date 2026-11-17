@@ -86,6 +86,10 @@ cargo test --test hook_agent -- --nocapture
 
 On failure, the test's temporary directory is preserved and its path is printed to stderr so you can inspect the fixture state.
 
+## CI
+
+CI runs the suite with `cargo nextest run --workspace`, which runs every test in its own process and the test binaries in parallel, and runs doctests separately with `cargo test --workspace --doc`. A test that relies on state another test in the same binary left behind can pass under `cargo test` and fail in CI; reproduce it locally with `cargo nextest run`.
+
 ## Windows
 
 CI runs the full test suite on `windows-latest` as part of the `test` matrix (see `.github/workflows/ci.yml`). To run the tests locally on Windows:
