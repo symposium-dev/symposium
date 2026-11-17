@@ -110,6 +110,10 @@ target directory, or an explicit `SYMPOSIUM_TEST_BINARY` when invoking Node test
 directly. CI runs both suites on Linux, macOS, and Windows. Cancellation tests
 exercise Unix signals and are explicitly skipped on Windows.
 
+## CI
+
+CI runs the suite with `cargo nextest run --workspace`, which runs every test in its own process and the test binaries in parallel, and runs doctests separately with `cargo test --workspace --doc`. A test that relies on state another test in the same binary left behind can pass under `cargo test` and fail in CI; reproduce it locally with `cargo nextest run`.
+
 ## Windows
 
 CI runs the full test suite on `windows-latest` as part of the `test` matrix (see `.github/workflows/ci.yml`). To run the tests locally on Windows:

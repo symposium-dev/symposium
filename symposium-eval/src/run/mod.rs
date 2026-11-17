@@ -7,7 +7,7 @@
 //! ```text
 //! <eval-root>/<batch>/
 //!   tools/common/        staged clients, readable by every trial
-//!   tools/symposium/     staged cargo-agents, readable by Symposium trials only
+//!   tools/symposium/     staged symposium, readable by Symposium trials only
 //!   trial-<n>-<with|without>-symposium/
 //! ```
 //!
@@ -26,6 +26,8 @@ pub(crate) mod client;
 mod env;
 mod error;
 mod exploratory;
+mod grading;
+mod inputs;
 mod policy;
 mod prelaunch;
 pub(crate) mod setup;
@@ -42,18 +44,19 @@ use std::path::{Path, PathBuf};
 
 pub(crate) use env::ApiKey;
 pub(crate) use error::{RunError, Unready};
+pub(crate) use inputs::Inputs;
 pub(crate) use policy::{Machine, Policy, Reach};
 pub(crate) use srt::SRT_VERSION;
 use stage::StagedTool;
 
-use crate::evals::Evals;
+use crate::grade::PROJECT_SCAFFOLD;
 use crate::grade::ProcessError;
 use crate::grade::copy_tree;
 use crate::grade::process::Finished;
-use crate::task::{BatchName, Task};
+use crate::task::BatchName;
 
 /// Whether a trial can reach Symposium. Nothing is installed or uninstalled between the
-/// two: a baseline trial simply cannot read the staged `cargo-agents`.
+/// two: a baseline trial simply cannot read the staged `symposium`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Configuration {
     Baseline,
@@ -145,26 +148,29 @@ impl Batch {
         self.root.join("tools").join("common")
     }
 
-    /// The `cargo-agents` under evaluation, readable by Symposium trials only.
+    /// The `symposium` under evaluation, readable by Symposium trials only.
     pub(crate) fn symposium_tools(&self) -> PathBuf {
         self.root.join("tools").join("symposium")
     }
 
-    /// Creates trial `number` of `task`: empty working directories, the starter in
-    /// `project/`, the fixtures beside it, and, for Symposium, the task's plugins as the
-    /// trial's registry.
+    /// Creates trial `number` of the task in `inputs`, this batch's copy: empty working
+    /// directories, the starter in `project/`, the fixtures beside it, and, for
+    /// Symposium, the task's plugins as the trial's registry.
     ///
     /// # Errors
     ///
-    /// When the trial already exists, a directory cannot be created, or the task cannot
-    /// be copied.
+    /// When `inputs` are another batch's, the trial already exists, a directory cannot
+    /// be created, or the task cannot be copied.
     pub(crate) fn create_trial(
         &self,
         number: usize,
         configuration: Configuration,
-        evals: &Evals,
-        task: &Task,
+        inputs: &Inputs,
     ) -> Result<Trial, RunError> {
+        if inputs.batch() != self.root {
+            return Err(RunError::ForeignInputs(inputs.batch().to_owned()));
+        }
+        let (evals, task) = (inputs.evals(), inputs.task());
         let trial = Trial {
             batch: self.clone(),
             root: self.root.join(format!("trial-{number}-{configuration}")),
@@ -182,9 +188,7 @@ impl Batch {
         self.link_tools(&trial)?;
         copy_tree(&evals.starter_dir(task.name()), &trial.project(), "starter")
             .map_err(RunError::Copy)?;
-        // `srt` write-protects `.claude/commands` in the project. Where `.claude/` is
-        // missing, it protects all of `.claude/` instead, and no skill could be installed.
-        create_dirs([trial.project().join(".claude")])?;
+        create_dirs(PROJECT_SCAFFOLD.map(|dir| trial.project().join(dir)))?;
         // Fixtures are not in the policy's writable paths, so `srt` keeps them read-only.
         for fixture in task.fixtures() {
             let destination = trial.fixtures().join(fixture.as_str());
@@ -358,13 +362,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::task::TaskName;
-
-    fn store_durability() -> (Evals, Task) {
-        let evals = Evals::in_repository();
-        let task = Task::load(&evals, &TaskName::new("store-durability").unwrap()).unwrap();
-        (evals, task)
-    }
+    use crate::run::test_support::store_durability;
 
     fn batch_name() -> BatchName {
         BatchName::new("batch").unwrap()
@@ -379,12 +377,11 @@ mod tests {
 
     #[test]
     fn a_symposium_trial_holds_the_task_and_its_registry() {
-        let (evals, task) = store_durability();
         let root = TempDir::new().unwrap();
         let batch = Batch::create(root.path(), &batch_name()).unwrap();
 
         let trial = batch
-            .create_trial(1, Configuration::Symposium, &evals, &task)
+            .create_trial(1, Configuration::Symposium, &store_durability(&batch))
             .unwrap();
 
         assert_eq!(
@@ -407,12 +404,11 @@ mod tests {
 
     #[test]
     fn a_baseline_trial_has_no_registry() {
-        let (evals, task) = store_durability();
         let root = TempDir::new().unwrap();
         let batch = Batch::create(root.path(), &batch_name()).unwrap();
 
         let trial = batch
-            .create_trial(2, Configuration::Baseline, &evals, &task)
+            .create_trial(2, Configuration::Baseline, &store_durability(&batch))
             .unwrap();
 
         assert_eq!(
@@ -425,16 +421,16 @@ mod tests {
 
     #[test]
     fn an_existing_trial_is_never_reused() {
-        let (evals, task) = store_durability();
         let root = TempDir::new().unwrap();
         let batch = Batch::create(root.path(), &batch_name()).unwrap();
+        let inputs = store_durability(&batch);
         let trial = batch
-            .create_trial(1, Configuration::Baseline, &evals, &task)
+            .create_trial(1, Configuration::Baseline, &inputs)
             .unwrap();
         let sentinel = trial.home().join("sentinel");
         fs::write(&sentinel, "earlier attempt").unwrap();
 
-        let again = batch.create_trial(1, Configuration::Baseline, &evals, &task);
+        let again = batch.create_trial(1, Configuration::Baseline, &inputs);
 
         assert!(already_exists(again));
         assert!(sentinel.is_file());

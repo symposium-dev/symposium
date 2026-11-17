@@ -13,7 +13,8 @@ use super::{
 };
 use crate::evals::EntryError;
 use crate::grade::{GradeError, OutsideEdit, Step};
-use crate::tree::WalkError;
+use crate::skill_md::Unloadable;
+use crate::tree::{EntryKind, WalkError};
 
 /// Why a path that must be a real directory is not one. A failure to inspect the path
 /// is an I/O error instead, kept apart from what the task author wrote.
@@ -95,8 +96,46 @@ pub(crate) enum TaskError {
         "expected hook `{hook}` in plugin `{plugin}` is limited to one agent by `agent` or `format`, but a task runs on every client"
     )]
     AgentLimitedHook { hook: HookName, plugin: PluginName },
-    #[error("expected hook `{hook}` runs on `{event}`, which is not a Symposium event")]
-    UnknownHookEvent { hook: HookName, event: String },
+    #[error("expected skill `{0}` is not provided by any of the task's plugins")]
+    UnprovidedSkill(SkillName),
+    #[error(
+        "expected skill `{skill}` is provided by both `{}` and `{}`",
+        .first.display(),
+        .second.display()
+    )]
+    AmbiguousSkill {
+        skill: SkillName,
+        first: PathBuf,
+        second: PathBuf,
+    },
+    #[error(
+        "a `[[skills]]` group in plugin `{0}` needs a `source.path`, the only source an offline trial can use"
+    )]
+    UnsupportedSkillSource(PluginName),
+    #[error(
+        "skill source `{path}` in plugin `{plugin}` leaves the plugin, which is all a trial copies"
+    )]
+    EscapingSkillSource { plugin: PluginName, path: String },
+    #[error("skill source `{path}` in plugin `{plugin}` is not a directory in it")]
+    MissingSkillSource { plugin: PluginName, path: String },
+    #[error("cannot list plugin `{plugin}`")]
+    PluginTree {
+        plugin: PluginName,
+        #[source]
+        source: WalkError,
+    },
+    #[error("plugin `{plugin}` holds a {kind} at `{path}`, which a trial cannot copy")]
+    PluginEntry {
+        plugin: PluginName,
+        path: String,
+        kind: EntryKind,
+    },
+    #[error("`{}` in plugin `{plugin}` would not load: {problem}", .path.display())]
+    UnloadableSkill {
+        plugin: PluginName,
+        path: PathBuf,
+        problem: Unloadable,
+    },
     #[error("`{list}` lists `{value}` more than once")]
     Duplicate { list: &'static str, value: String },
     #[error("skill `{skill}` is in both `{first}` and `{second}`")]

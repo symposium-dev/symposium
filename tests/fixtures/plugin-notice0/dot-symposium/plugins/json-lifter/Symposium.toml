@@ -1,0 +1,8 @@
+name = "json-lifter"
+depends-on = ["*"]
+
+[[hooks]]
+name = "lift-block"
+event = "UserPromptSubmit"
+format = "claude"
+command = { script = "scripts/lift.sh" }

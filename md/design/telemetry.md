@@ -46,16 +46,16 @@ Files older than `RETENTION_DAYS` (30) are rolled off — deleted on the next
 enabled = true
 ```
 
-The preference is collected during `cargo agents init` ("Enable anonymous usage
-telemetry?") and can be toggled later with `cargo agents telemetry enable` /
+The preference is collected during `symposium init` ("Enable anonymous usage
+telemetry?") and can be toggled later with `symposium telemetry enable` /
 `disable`.
 
 ## The `telemetry` subcommand
 
-- `cargo agents telemetry status` — whether enabled, where data lives, and how
+- `symposium telemetry status`: whether enabled, where data lives, and how
   much is stored.
-- `cargo agents telemetry enable` / `disable` — toggle the opt-in.
-- `cargo agents telemetry show [--count N]` — print recent events for
+- `symposium telemetry enable` / `disable`: toggle the opt-in.
+- `symposium telemetry show [--count N]`: print recent events for
   inspection (the data the user would share).
 
 ## What we deliberately do *not* record

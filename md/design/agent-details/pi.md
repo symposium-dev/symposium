@@ -34,7 +34,8 @@ tool inputs are not shell arguments. Each process has a 10-minute timeout and a
 their hook first fires; session-start refresh does not install missing tools.
 On Unix, the bridge starts the CLI in an isolated process group and sets
 `SYMPOSIUM_PI_BRIDGE=1`. Cancellation, timeout, and stdout/stderr overflow send
-SIGTERM to the CLI. Its signal listener drops pending work; plugin dispatch uses
+SIGTERM to the CLI. The shared entry point in `src/binary.rs` installs the signal
+listener for both `cargo-agents` and `symposium`. It drops pending work; plugin dispatch uses
 an async wait and a drop guard that kills and reaps its own process group.
 Installers retain their own cancellation guards. This preserves upstream's
 per-plugin deadlines without letting nested process groups escape Pi cancellation,

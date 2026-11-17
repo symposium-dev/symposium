@@ -3,7 +3,7 @@
 //! Telemetry is **opt-in** (`[telemetry] enabled = true`), **per-user**, and
 //! **local-first**: events are appended as JSON lines under
 //! `<config-dir>/telemetry/`, one file per UTC day. Nothing is uploaded — that
-//! is a separate step the user takes deliberately (e.g. `cargo agents telemetry
+//! is a separate step the user takes deliberately (e.g. `symposium telemetry
 //! show`).
 //!
 //! Older daily files are rolled off after [`RETENTION_DAYS`].

@@ -11,7 +11,7 @@ pub(crate) enum Client {
 }
 
 impl Client {
-    /// The name `cargo agents init --add-agent` takes.
+    /// The name `symposium init --add-agent` takes.
     pub(crate) fn symposium_name(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude",

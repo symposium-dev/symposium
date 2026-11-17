@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # CI never reads debuginfo, and it makes links (slowest on Windows) and the cache much bigger.
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 # Cancel superseded runs on the same ref (e.g. rapid pushes to a PR branch).
 concurrency:
@@ -30,16 +32,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          key: ${{ matrix.os }}
+          # Only main saves: a PR's cache is scoped to its ref, so no other run could
+          # restore it, and it would evict main's.
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: Check
         run: cargo check --workspace --all-targets
@@ -98,16 +96,10 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ matrix.name }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.name }}-cargo-
+          key: ${{ matrix.name }}
+          save-if: ${{ github.event_name == 'push' }}
 
       # Tests spawn `sh` to run script-based hooks/predicates. Git for Windows
       # ships sh.exe in usr/bin, which is not on the runner's PATH by default.
@@ -120,17 +112,25 @@ jobs:
         if: runner.os == 'Windows'
         run: sh --version
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Disable agent tests
         shell: bash
         run: echo 'test-agents = []' > test-agents.toml
 
-      # `--workspace`: plain `cargo test` tests only the root package, not the
+      # `--workspace`: without it only the root package is tested, not the
       # SDK and the other member crates.
-      # `--no-fail-fast`: without it cargo stops at the first failing test
-      # binary, so a platform-specific failure hides every later one and each
-      # fix costs another CI round-trip to learn what is still broken.
+      # `--no-fail-fast`: without it the run stops at the first failure, so a
+      # platform-specific failure hides every later one and each fix costs
+      # another CI round-trip to learn what is still broken.
+      # nextest runs the test binaries in parallel, which `cargo test` does not.
       - name: Test
-        run: cargo test --workspace --no-fail-fast ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+        run: cargo nextest run --workspace --no-fail-fast ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+
+      # nextest does not run doctests.
+      - name: Doctests
+        run: cargo test --workspace --doc ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
   xtask:
     name: Run xtask checks
@@ -147,16 +147,10 @@ jobs:
           components: rustfmt
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ubuntu-xtask-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ubuntu-xtask-cargo-
+          key: xtask
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: Check for orphaned md files
         run: cargo xtask md-orphan-check

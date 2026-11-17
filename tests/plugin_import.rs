@@ -81,7 +81,7 @@ async fn import_writes_a_package_and_reports_what_it_leaves_out() {
                 ⚠️  MCP server `local` not imported: it refers to `${CLAUDE_PLUGIN_ROOT}`, which agents do not expand outside Claude Code plugins
                 ⚠️  skill `guide` refers to `${CLAUDE_PLUGIN_ROOT}`, which only Claude Code fills in for its own plugins
                 Imported $WORKSPACE/claude-plugin into $CONFIG_DIR/plugins/demo-tools
-                  ⚠️  demo-tools (plugin): plugin `demo-tools` references no dependency; it stays dormant until enabled with `cargo agents use demo-tools`
+                  ⚠️  demo-tools (plugin): plugin `demo-tools` references no dependency; it stays dormant until enabled with `symposium use demo-tools`
                   ⚠️  demo-tools (plugin): `PreToolUse` hooks have only the `claude` format, so they fire on no other agent; add a `format = "symposium"` hook for the others
                   ⚠️  demo-tools (plugin): `SessionStart` hooks have only the `claude` format, so they fire on no other agent; add a `format = "symposium"` hook for the others
                   ✅ guide (skill)

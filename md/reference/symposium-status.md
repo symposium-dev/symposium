@@ -1,14 +1,14 @@
-# `cargo agents status`
+# `symposium status`
 
 Show which plugins are enabled for this workspace, and why.
 
 ## Usage
 
 ```bash
-cargo agents status
+symposium status
 ```
 
-Must be run from within a workspace, as [`cargo agents sync`](./cargo-agents-sync.md) is.
+Must be run from within a workspace, as [`symposium sync`](./symposium-sync.md) is.
 
 ## Behavior
 
@@ -22,15 +22,15 @@ Each line is in one of five states:
 | State | Meaning |
 |-------|---------|
 | `active` | Enabled and its predicates hold here. The root names the trust root: workspace membership, a configured registry, `[plugins] auto-enable`, or a `[plugins] use` entry. |
-| `dormant` | Loaded but contributing nothing: a registry plugin awaiting [`cargo agents use`](./cargo-agents-use.md), one whose predicates don't currently hold, a dependency named by `use` that offers no plugin, or a `use` entry naming no registry plugin, dependency or cached crate (a [`cargo agents sync`](./cargo-agents-sync.md) downloads a crate that is not cached yet). |
-| `candidate` | Discovered in a dependency and awaiting consent. These are exactly what an interactive [`cargo agents sync`](./cargo-agents-sync.md) asks about. |
+| `dormant` | Loaded but contributing nothing: a registry plugin awaiting [`symposium use`](./symposium-use.md), one whose predicates don't currently hold, a dependency named by `use` that offers no plugin, or a `use` entry naming no registry plugin, dependency or cached crate (a [`symposium sync`](./symposium-sync.md) downloads a crate that is not cached yet). |
+| `candidate` | Discovered in a dependency and awaiting consent. These are exactly what an interactive [`symposium sync`](./symposium-sync.md) asks about. |
 | `declined` | Recorded in `[plugins] disable` — the record of pruned plugins and declined discoveries. |
 | `revoked` | The [audits list](./audits.md) revokes this release or payload of a crate, for the reason shown. It is not loaded and not offered for consent, whatever `use` or `auto-enable` say. `disable` outranks it: a crate that is both shows as `declined`. |
 
 The line of a discovered dependency plugin, or of a cached crate `use`d
 without being a dependency, ends with what the
 [audits list](./audits.md) says about it, in the words the
-[consent prompt](./cargo-agents-sync.md#consent-prompt) uses:
+[consent prompt](./symposium-sync.md#consent-prompt) uses:
 ``audited by the `symposium-audits` list``, `not audited`, or, when the list
 audits the crate but this payload cannot be checked against an audit,
 `not audited: ...` with the reason. When no list was read (the list is off,
@@ -61,11 +61,11 @@ after its name and version.
 ## Example
 
 ```bash
-$ cargo agents status
+$ symposium status
 ✅ my-tool — workspace member
 ✅ serde-skills 1.0.0 — `[plugins] use` — not audited
-💤 team-conventions — registry `user-plugins` (dormant: awaiting `cargo agents use`)
-❓ widget-lib 0.3.1 — found via dependency `widget-lib`, awaiting consent (`cargo agents use widget-lib`) — not audited
+💤 team-conventions — registry `user-plugins` (dormant: awaiting `symposium use`)
+❓ widget-lib 0.3.1 — found via dependency `widget-lib`, awaiting consent (`symposium use widget-lib`) — not audited
 ➖ noisy-crate — declined (`[plugins] disable`)
 ✅ tidy-crate 2.4.0 — `[plugins] auto-enable` — audited by the `symposium-audits` list
 ⛔ risky-crate 2.0.1 — revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code

@@ -13,15 +13,16 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use super::{Verdict, file};
+use crate::skill_md::{self, MAX_SKILL_MD};
 use crate::task::{SkillExpectations, SkillName};
 
 /// The marker sync leaves in every directory it installs.
-const MARKER: &str = ".symposium";
+pub(super) const MARKER: &str = ".symposium";
+/// The `.gitignore` sync leaves beside it, and what it writes there.
+pub(super) const GITIGNORE: &str = ".gitignore";
+pub(super) const GITIGNORE_CONTENTS: &[u8] = b"*\n";
 /// The files sync adds, which are not skill content.
-const MANAGED: [&str; 2] = [MARKER, ".gitignore"];
-
-/// Larger than any `SKILL.md` a hashed copy is identified by.
-const MAX_SKILL_MD: u64 = 8 * 1024 * 1024;
+const MANAGED: [&str; 2] = [MARKER, GITIGNORE];
 
 /// Which of the two install assertions a skill is under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +60,8 @@ pub(crate) struct SkillInstall {
     pub(crate) assertion: InstallAssertion,
     pub(crate) evidence: InstallEvidence,
     pub(crate) verdict: Verdict,
+    /// The copy that matched, when `evidence` is [`InstallEvidence::Matching`].
+    pub(crate) matching_copy: Option<PathBuf>,
 }
 
 impl InstallAssertion {
@@ -92,36 +95,41 @@ pub(crate) fn skill_installs(
         .into_iter()
         .flat_map(|(assertion, names)| names.iter().map(move |skill| (assertion, skill)))
         .map(|(assertion, skill)| {
-            let evidence = match (assertion, source_of(skill)) {
-                (InstallAssertion::Installed, None) => InstallEvidence::NoSource,
+            let (evidence, matching_copy) = match (assertion, source_of(skill)) {
+                (InstallAssertion::Installed, None) => (InstallEvidence::NoSource, None),
                 (InstallAssertion::Installed, Some(source)) => installed(skills, skill, &source),
-                (InstallAssertion::NotInstalled, _) => presence(skills, skill),
+                (InstallAssertion::NotInstalled, _) => (presence(skills, skill), None),
             };
             SkillInstall {
                 skill: skill.clone(),
                 assertion,
                 evidence,
                 verdict: assertion.decide(evidence),
+                matching_copy,
             }
         })
         .collect()
 }
 
-/// What `skills` shows for `skill`, compared with its `source`: one matching copy
-/// settles it, whatever else is there.
-fn installed(skills: &Path, skill: &SkillName, source: &Path) -> InstallEvidence {
+/// What `skills` shows for `skill`, compared with its `source`, with the copy that
+/// matched: one matching copy settles it, whatever else is there.
+fn installed(
+    skills: &Path,
+    skill: &SkillName,
+    source: &Path,
+) -> (InstallEvidence, Option<PathBuf>) {
     let Ok(candidates) = candidates(skills, skill) else {
-        return InstallEvidence::Unreadable;
+        return (InstallEvidence::Unreadable, None);
     };
     let mut unreadable = candidates.unreadable;
     for copy in &candidates.copies {
         match same_contents(copy, source) {
-            Ok(true) => return InstallEvidence::Matching,
+            Ok(true) => return (InstallEvidence::Matching, Some(copy.clone())),
             Ok(false) => {}
             Err(_) => unreadable = true,
         }
     }
-    if unreadable {
+    let evidence = if unreadable {
         InstallEvidence::Unreadable
     } else if candidates.unidentified {
         InstallEvidence::Unidentified
@@ -129,7 +137,8 @@ fn installed(skills: &Path, skill: &SkillName, source: &Path) -> InstallEvidence
         InstallEvidence::Absent
     } else {
         InstallEvidence::Differing
-    }
+    };
+    (evidence, None)
 }
 
 /// Whether `skills` holds any copy of `skill`: one settles it, whatever else is there.
@@ -249,26 +258,11 @@ fn identity(dir: &Path, skill: &SkillName) -> io::Result<Identity> {
     };
     let text = String::from_utf8(bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    Ok(match frontmatter_name(&text) {
+    Ok(match skill_md::name(&text) {
         Some(name) if name == skill.as_str() => Identity::Expected,
         Some(_) => Identity::Other,
         None => Identity::Unknown,
     })
-}
-
-/// The `name` of a `SKILL.md`, read as Symposium reads it: the YAML between the
-/// opening `---` and the next line starting `---`, with surrounding double quotes
-/// removed. `None` when there is no such name.
-fn frontmatter_name(text: &str) -> Option<String> {
-    let body = text.trim_start().strip_prefix("---")?;
-    let body = body.strip_prefix('\n').unwrap_or(body);
-    let yaml = &body[..body.find("\n---")?];
-    let frontmatter: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).ok()?;
-    let name = frontmatter.get("name")?.as_str()?;
-    let unquoted = name
-        .strip_prefix('"')
-        .and_then(|name| name.strip_suffix('"'));
-    Some(unquoted.unwrap_or(name).to_owned())
 }
 
 /// A directory or a file, the only entries sync reads.
@@ -346,7 +340,7 @@ fn same_contents(copy: &Path, source: &Path) -> io::Result<bool> {
 
 /// Whether two files of `len` bytes hold the same bytes, read a chunk at a time, since
 /// the agent chose the copy's size.
-fn same_bytes(copy: &Path, source: &Path, len: u64) -> io::Result<bool> {
+pub(super) fn same_bytes(copy: &Path, source: &Path, len: u64) -> io::Result<bool> {
     // One byte past `len` shows a file that grew.
     let mut copy = File::open(copy)?.take(len + 1);
     let mut source = File::open(source)?.take(len + 1);
@@ -580,6 +574,25 @@ mod tests {
     }
 
     #[test]
+    fn only_a_matching_copy_is_kept() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let differing = install(&skills, "first-skill");
+        fs::write(differing.join("added.md"), "").unwrap();
+        let matching = install(&skills, "first-skill-0123abcd");
+        let expected =
+            SkillExpectations::installing(vec![skill("first-skill")], vec![skill("second-skill")]);
+
+        let installs = skill_installs(&skills, &expected, |_| Some(source(root.path())));
+
+        let copies: Vec<_> = installs
+            .iter()
+            .map(|install| install.matching_copy.clone())
+            .collect();
+        assert_eq!(copies, [Some(matching), None]);
+    }
+
+    #[test]
     fn a_copy_with_an_extra_file_is_not_installed() {
         let root = TempDir::new().unwrap();
         let skills = root.path().join("skills");
@@ -640,33 +653,6 @@ mod tests {
                 (InstallEvidence::Present, Verdict::Fail)
             ]
         );
-    }
-
-    #[test]
-    fn a_frontmatter_name_is_read_as_yaml() {
-        for text in [
-            "---\nname: x\n---\n",
-            "---\nname: \"x\"\n---\n",
-            "---\nname: 'x'\n---\n",
-            "---\nname: x # explanatory comment\n---\n",
-            "---\ndescription: |\n  two\n  lines\nname: >-\n  x\n---\n",
-            "\n---\r\nname: x\r\n---\r\n",
-        ] {
-            assert_eq!(frontmatter_name(text).as_deref(), Some("x"), "{text:?}");
-        }
-    }
-
-    #[test]
-    fn a_frontmatter_without_a_name_names_nothing() {
-        for text in [
-            "name: x\n",
-            "---\nname: x\n",
-            "---\nname: [x\n---\n",
-            "---\nname: [x]\n---\n",
-            "---\ndescription: d\n---\n",
-        ] {
-            assert_eq!(frontmatter_name(text), None, "{text:?}");
-        }
     }
 
     #[test]

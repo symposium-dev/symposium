@@ -1,13 +1,13 @@
-# `cargo agents crate-info`
+# `symposium crate-info`
 
 Find crate sources and guidance.
 
-This is an agent-facing command, listed under "Commands for agents" in `cargo agents --help`. Its output format and exit codes may change in future releases.
+This is an agent-facing command, listed under "Commands for agents" in `symposium --help`. Its output format and exit codes may change in future releases.
 
 ## Usage
 
 ```bash
-cargo agents crate-info <NAME> [--version <VERSION>]
+symposium crate-info <NAME> [--version <VERSION>]
 ```
 
 ## Behavior

@@ -7,7 +7,9 @@ use std::process::ExitStatus;
 
 use thiserror::Error;
 
+use crate::digest::DigestError;
 use crate::grade::{ImportError, ProcessError};
+use crate::task::TaskErrors;
 
 #[derive(Debug, Error)]
 pub(crate) enum RunError {
@@ -31,6 +33,14 @@ pub(crate) enum RunError {
     },
     #[error("cannot copy the task into the trial")]
     Copy(#[source] ImportError),
+    #[error("cannot copy the task's inputs into the batch")]
+    Snapshot(#[source] ImportError),
+    #[error("the inputs are batch `{}`'s, not this batch's", .0.display())]
+    ForeignInputs(PathBuf),
+    #[error("the task is not valid")]
+    Task(#[source] TaskErrors),
+    #[error("cannot hash the task")]
+    Digest(#[source] DigestError),
     #[error("cannot write the `srt` policy")]
     Policy(#[source] serde_json::Error),
     #[error("cannot write the client's sandbox settings")]
@@ -59,6 +69,22 @@ pub(crate) enum RunError {
     PathList(#[source] JoinPathsError),
     #[error("`{}` has not been written, so the trial cannot run", .0.display())]
     NoPolicy(PathBuf),
+    #[error(
+        "`{}` is too long for `srt`'s sockets; choose an evaluation root with a shorter path",
+        .0.display()
+    )]
+    TmpTooLong(PathBuf),
+    #[error(
+        "Cargo or rustfmt would read `{}` while grading, which could change the result; choose an evaluation root beneath no readable Cargo manifests, Cargo configuration, or rustfmt configuration",
+        .0.display()
+    )]
+    AmbientGradingInput(PathBuf),
+    #[error("cannot check `{}` for an ambient grading input", .path.display())]
+    GradingInputCheck {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(
         "`srt` reports version `{found}`, but the runner is pinned to {}",
         super::SRT_VERSION
@@ -108,10 +134,10 @@ pub(crate) enum Unready {
     HookRecord,
     #[error("holds managed settings, which override the trial's own")]
     ManagedSettings,
-    #[error("puts `cargo-agents` on a baseline trial's `PATH`")]
-    CargoAgentsOnPath,
+    #[error("puts `symposium` on a baseline trial's `PATH`")]
+    SymposiumOnPath,
     #[error("is a Symposium config, in a baseline trial")]
     SymposiumConfig,
-    #[error("runs `cargo-agents`, in a baseline trial")]
+    #[error("runs `symposium`, in a baseline trial")]
     SymposiumEntry,
 }

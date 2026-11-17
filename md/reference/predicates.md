@@ -28,7 +28,7 @@ The available predicate functions are:
 | `any(<p>, <p>, …)` | At least one inner predicate holds (logical **OR**). |
 | `all(<p>, <p>, …)` | Every inner predicate holds (logical **AND**). |
 
-The cwd that `shell(...)` runs in and a relative `path_exists(...)` resolves against is the directory the workspace is found from: for a hook, the agent's working directory from the hook payload (on Antigravity, the first workspace path); for a command, the directory `cargo agents` runs in. A payload directory that does not exist falls back to the directory `cargo agents` runs in.
+The cwd that `shell(...)` runs in and a relative `path_exists(...)` resolves against is the directory the workspace is found from: for a hook, the agent's working directory from the hook payload (on Antigravity, the first workspace path); for a command, the directory `symposium` runs in. A payload directory that does not exist falls back to the directory `symposium` runs in.
 
 Predicates compose with **AND** semantics within a list: every entry must hold. `any(...)` gives OR within a single entry, `all(...)` gives an explicit AND group, and `not(...)` gives negation — together they form full boolean logic. They also compose with **AND** across levels (plugin ∧ group ∧ skill).
 
@@ -54,13 +54,13 @@ Predicates are evaluated at the same point the workspace's dependency predicates
 
 | Level | Evaluated |
 |-------|-----------|
-| Plugin `predicates` | At sync (gates skills & MCP), at every hook dispatch, and at subcommand lookup and `cargo agents --help` |
-| `[[plugins]]` edge `predicates` | Whenever the active plugin set is built: at sync, at every hook dispatch, at subcommand lookup, and at `cargo agents --help` |
+| Plugin `predicates` | At sync (gates skills & MCP), at every hook dispatch, and at subcommand lookup and `symposium --help` |
+| `[[plugins]]` edge `predicates` | Whenever the active plugin set is built: at sync, at every hook dispatch, at subcommand lookup, and at `symposium --help` |
 | Skill group `predicates` | At sync, before the group's skills are loaded (so before a `source.git` is fetched) |
 | Skill frontmatter `predicates` | At sync, after the skill loads |
 | Hook `predicates` | At hook dispatch, after the matcher passes |
 | MCP server `predicates` | At sync, when collecting servers to register |
-| Subcommand `predicates` | At subcommand lookup (`cargo agents <name>`) and at `cargo agents --help` |
+| Subcommand `predicates` | At subcommand lookup (`symposium <name>`) and at `symposium --help` |
 
 Hook-level predicates run at dispatch (not sync) so they observe live state — e.g. a hook gated on `path_exists(jq)` will silently disable itself if `jq` was uninstalled since the last sync, without forcing a re-sync.
 

@@ -37,7 +37,9 @@ evals/
 - a skill appears in both `installed` and `not_installed`, or both `used` and `not_used`;
 - a skill in `used` also appears in `not_installed`;
 - a `checks/` file does not hold exactly one test, or a named plugin or fixture does not exist;
-- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client.
+- a plugin holds a link or special file, which a trial cannot copy, or its `Symposium.toml` does not match the plugin schema;
+- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client;
+- a skill in `installed` or `used` is provided by none of the task's plugins, or any named skill is provided by more than one, since sync would then install neither under its own name. A plugin provides the skills its `[[skills]] source.path` groups hold, or, without a `Symposium.toml`, the `SKILL.md` at its root; a skill is named by its frontmatter `name`, and must be one Symposium would load. A source must be a directory inside the plugin.
 
 Fixture crates are not workspace members and have no `skills/` directory, so the only way their rule reaches the agent through Symposium is a registry plugin.
 
@@ -47,21 +49,26 @@ All batches live under one evaluation root:
 
 ```text
 <eval-root>/<batch>/
+  inputs/                        # the batch's one copy of the task, fixtures, and plugins
   tools/
     common/                      # staged clients, readable by every trial
-    symposium/                   # staged cargo-agents, readable by Symposium trials only
+    symposium/                   # staged symposium, readable by Symposium trials only
   trial-1-with-symposium/        # <run>
     home/         # HOME for every process in the trial
     project/      # copy of the starter
     fixtures/     # read-only copies of the task's fixture crates
-    bin/          # links to staged tools: the client, sh, and (Symposium only) cargo-agents
+    bin/          # links to staged tools: the client, sh, and (Symposium only) symposium
     cargo-home/   # CARGO_HOME, empty at start
     tmp/          # TMPDIR
     evidence/     # EVAL_EVIDENCE_DIR and SYMPOSIUM_HOOK_TRACE, outside the project
     registry/     # the task's plugins (Symposium configuration only)
 ```
 
-The executables a trial runs are **staged** once per batch: the client into `tools/common/` (a single binary for native installs; for npm installs, the package directory and the Node.js runtime), and the `cargo-agents` under evaluation into `tools/symposium/`. They are copied, not linked: on Linux, `srt` matches read rules by the name a path is opened under, so a link to a client under the developer's home would not launch. Staging also fixes the binaries for the whole batch, and their hashes go into each result.
+A batch copies its task, with the task's fixtures and plugins, into `inputs/` once, laid out as `evals/` is. Every trial and grading copy is made from it, and `content_hash` is its digest, so a change to `evals/` during a batch reaches no trial and the hash names what every trial ran. No trial can read `inputs/`, which holds the hidden checks.
+
+`content_hash` is the SHA-256 of `inputs/` encoded as follows: the bytes `symposium-eval tree v1\n`, then each entry under `inputs/`, sorted by the bytes of its `/`-joined relative path, as one kind byte (`d` for a directory, `f` for a file), the path's length as a little-endian `u64` and its bytes, and, for a file, its length as a little-endian `u64` and its bytes. A link or special file makes the digest fail. The `symposium` `sha256` is of the staged binary's bytes alone.
+
+The executables a trial runs are **staged** once per batch: the client into `tools/common/` (a single binary for native installs; for npm installs, the package directory and the Node.js runtime), and the `symposium` under evaluation into `tools/symposium/`. They are copied, not linked: on Linux, `srt` matches read rules by the name a path is opened under, so a link to a client under the developer's home would not launch. Staging also fixes the binaries for the whole batch, and their hashes go into each result.
 
 Claude Code (`~/.claude`), Codex (`~/.codex`), and Symposium (`~/.symposium`) keep their configuration and state under the home directory, so pointing `HOME` (and `USERPROFILE` on Windows) at `<run>/home` gives each trial fresh state.
 
@@ -71,9 +78,9 @@ The client starts with a cleared environment holding only `HOME`, `PATH`, `TMPDI
 2. the active toolchain's own `bin/` directory (the directory of `rustup which cargo`), which holds only Rust tools;
 3. the system directories (`/usr/bin`, `/bin`), which hold the linker and the tools the client needs.
 
-The developer's `~/.cargo/bin` is never on `PATH`, since it can hold their own `cargo-agents`.
+The developer's `~/.cargo/bin` is never on `PATH`, since it can hold their own `symposium`.
 
-In the Symposium configuration, the runner copies the task's plugins into `<run>/registry`, writes this config, and runs `cargo agents init --add-agent <client>`:
+In the Symposium configuration, the runner copies the task's plugins into `<run>/registry`, writes this config, and runs `symposium init --add-agent <client>`:
 
 ```toml
 auto-sync = true
@@ -91,7 +98,7 @@ path = "<run>/registry"
 
 `init` registers hooks without syncing. Global scope matters: project-scoped hooks only exist after a sync, which would install skills before the behavior under test. The prompt never mentions Symposium, and telemetry stays at its default (off).
 
-Before launch, the runner checks that the skill directory is empty and that the client's machine-wide managed-settings locations are empty. For a baseline, it also checks that `cargo-agents` resolves nowhere on `PATH` and that there is no `~/.symposium` and no Symposium entry in the client's hook or MCP configuration. A failed check is a setup failure.
+Before launch, the runner checks that the skill directory is empty and that the client's machine-wide managed-settings locations are empty. For a baseline, it also checks that `symposium` resolves nowhere on `PATH` and that there is no `~/.symposium` and no Symposium entry in the client's hook or MCP configuration. A failed check is a setup failure.
 
 The starter has no git history, so one trial cannot read another's work through it. Each trial starts a new conversation. The real API key never enters the sandbox: `srt` masks it (`credentials.envVars` with `mode: "mask"`), so the client and every tool the agent starts see a sentinel, and `srt`'s proxy, outside the sandbox, substitutes the key only into requests to the model API host over TLS it terminates and re-encrypts to a verified upstream. The key is never retained. The runner refuses clients older than a pinned minimum version, since hook and transcript formats change between versions.
 
@@ -99,16 +106,16 @@ The starter has no git history, so one trial cannot read another's work through 
 
 ### What "without Symposium" means
 
-`cargo-agents` stays installed on the developer's machine throughout. "Without Symposium" means no process in the trial can reach it. Nothing is installed or uninstalled between configurations.
+`symposium` stays installed on the developer's machine throughout. "Without Symposium" means no process in the trial can reach it. Nothing is installed or uninstalled between configurations.
 
 |                                     | Without Symposium | With Symposium                    |
 | ----------------------------------- | ----------------- | --------------------------------- |
-| `<run>/bin/cargo-agents`            | absent            | link to the staged binary         |
+| `<run>/bin/symposium`            | absent            | link to the staged binary         |
 | Staged binary in `tools/symposium/` | unreadable        | readable                          |
-| Hooks in `<run>/home`               | none              | registered by `cargo agents init` |
+| Hooks in `<run>/home`               | none              | registered by `symposium init` |
 | Developer's installed copies        | unreadable        | unreadable                        |
 
-Symposium registers its hooks as `cargo-agents hook <agent> <event>`, a bare name the client resolves on `PATH`. The trial's `PATH` holds no developer directories, and `srt` makes the developer's home unreadable, so an installed copy cannot be reached by any path.
+Symposium registers its hooks as `symposium hook <agent> <event>`, a bare name the client resolves on `PATH`. The trial's `PATH` holds no developer directories, and `srt` makes the developer's home unreadable, so an installed copy cannot be reached by any path.
 
 ### Enforced: `srt`
 
@@ -148,7 +155,7 @@ When `srt` is unavailable, or on Windows until its support leaves alpha, `--expl
 - **Claude Code**: through `--settings`, `sandbox.enabled`, `failIfUnavailable`, `allowUnsandboxedCommands: false`, `filesystem.denyRead` for the developer's home with `allowRead` for the trial and toolchain, `allowWrite` for `<run>/cargo-home`, and `permissions.blockReadsOutsideWorkingDirectories`, with `--permission-mode acceptEdits`.
 - **Codex**: `--sandbox workspace-write`, with `<run>/cargo-home`, `<run>/home`, and `<run>/evidence` as `sandbox_workspace_write.writable_roots`. Codex documents no way to restrict reads.
 
-An escape audit scans each transcript for paths outside the trial and for any `cargo-agents` call in a baseline. It parses command text, so it can be evaded and an empty audit proves nothing; that is why exploratory results are labeled and never compared. In enforced mode, the same audit runs as a secondary check.
+An escape audit scans each transcript for paths outside the trial and for any `symposium` call in a baseline. It parses command text, so it can be evaded and an empty audit proves nothing; that is why exploratory results are labeled and never compared. In enforced mode, the same audit runs as a secondary check.
 
 ## Running the client
 
@@ -173,7 +180,7 @@ The runner first keeps the submission as the agent left it, then builds a **grad
 - Only regular files and directories are accepted. A symlink or special file under an editable path invalidates the submission, which is a failed trial. Every destination is checked to resolve inside the grading copy before it is written.
 - Edits outside `editable` are listed in the result and never graded.
 
-Grading runs under `srt` with its own fresh writable paths, read-only fixtures, no network, and no credentials. Then, in order:
+Grading runs under `srt` with its own fresh writable paths, read-only fixtures, no network, and no credentials. The project, fixtures, and hidden checks are read-only to the submission, and every step starts from an empty build and temporary directory, so code the agent wrote cannot change a later check. Within one check it runs in the check's own process, so it could in principle forge that check's output; the agent never sees the hidden checks. Then, in order:
 
 1. `cargo build`. If it fails, the trial fails and the remaining checks are skipped.
 2. `cargo test --lib`, however many tests the agent wrote.
@@ -233,7 +240,7 @@ A hook record contradicted by the transcript, including more records than the tr
 
 ## Outcomes and counting
 
-A trial can succeed only if its client session completed. A timeout or client error is a failure even when the code it left would pass; that code is still graded and reported, and a grading infrastructure error during it does not move the trial out of the count. For a completed trial:
+A trial can succeed only if its client session completed. A timeout or client error is a failure even when the code it left would pass, and so is a session the runner lost hold of or whose ending its transcript cannot show, since it did not complete either; that code is still graded and reported, and a grading infrastructure error during it does not move the trial out of the count. For a completed trial:
 
 | Kind       | Succeeds when                                  | Inconclusive when                                               |
 | ---------- | ---------------------------------------------- | --------------------------------------------------------------- |
@@ -289,25 +296,32 @@ results/store-durability/claude/<batch>/
     symposium.log
 ```
 
-A trial's `result.json`:
+A trial's `result.json`. `schema_version` changes only when a field is removed or changes meaning; new fields are added without it, so a reader ignores fields it does not know. What a trial always has is always present. A phase's output (`session`, `code`, `expectations`) is `null` exactly when the trial stopped before it, and `reached` says where it stopped and, before launch, why (`{"phase": "prelaunch", "error": "..."}`). A value a phase reached but could not know has its own variant, such as `"usage": {"status": "unknown"}`, never `null`. A concern's `reason` is a stable code; its `detail` is for people. `order` arrives with repeated trials and `audit_findings` with the escape audit, each an added field.
 
 ```json
 {
-  "task": { "name": "store-durability", "kind": "capability", "content_hash": "<sha256 of task, fixture, and plugin dirs>" },
+  "schema_version": 1,
+  "task": { "name": "store-durability", "kind": "capability", "content_hash": "<sha256 of the batch's inputs/, encoded as in Preparing a trial>" },
   "client": { "name": "claude", "version": "<version>" },
-  "model": { "name": "<model>", "settings": {} },
+  "model": { "name": "<model as requested>", "settings": {}, "reported": "<model the client says it ran>" },
   "mode": "with-symposium",
   "trial": 3,
   "order": 2,
-  "symposium": { "version": "<cargo-agents --version>", "sha256": "<binary hash>", "revision": "<git sha or null>" },
+  "symposium": { "version": "<symposium --version>", "sha256": "<binary hash>", "revision": "<git sha or null>" },
   "os": "<os and arch>",
   "toolchain": "<rustc version>",
   "deadlines_secs": { "setup": 120, "agent": 600, "grading": 300 },
-  "elapsed_secs": 94,
-  "usage": { "input_tokens": 30100, "output_tokens": 4100, "cache_read_tokens": 7000, "cache_write_tokens": 0 },
-  "execution": "completed",
   "isolation": { "mode": "enforced", "srt_version": "<version>", "audit_findings": [], "config_changes": [] },
+  "reached": { "phase": "graded" },
+  "outcome": { "result": "succeeded" },
+  "session": {
+    "ended": { "status": "completed", "error": null },
+    "elapsed_secs": 94.2,
+    "usage": { "status": "reported", "input_tokens": 30100, "output_tokens": 4100, "cache_read_tokens": 7000, "cache_write_tokens": 0 },
+    "observed_loads": { "fixture-store": "loaded" }
+  },
   "code": {
+    "status": "graded",
     "build": "pass",
     "cargo_test_lib": "pass",
     "hidden": { "settings_persist": "pass" },
@@ -315,11 +329,18 @@ A trial's `result.json`:
     "edits_outside_editable": []
   },
   "expectations": {
-    "skills": { "fixture-store": { "installed": "pass", "used": "pass", "observed_load": "loaded" } },
+    "skills": {
+      "fixture-store": {
+        "installed": { "verdict": "pass", "evidence": "matching", "evidence_verdict": "pass", "concerns": [] },
+        "used": { "verdict": "pass", "observed_load": "loaded" }
+      }
+    },
     "hooks": {},
-    "sync": { "skill_dir_empty_before": "pass", "session_start": "pass", "sync_recorded": "pass" }
-  },
-  "success": "pass"
+    "sync": {
+      "session_start": { "verdict": "pass", "evidence": "succeeded", "evidence_verdict": "pass", "concerns": [] },
+      "sync_recorded": { "verdict": "pass", "evidence": "recorded", "evidence_verdict": "pass", "concerns": [] }
+    }
+  }
 }
 ```
 
@@ -405,7 +426,7 @@ fn baseline_cannot_reach_cargo_agents() -> anyhow::Result<()> {
     let status = run
         .env()
         .command("sh")
-        .args(["-c", "command -v cargo-agents || cat \"$DEVELOPER_CARGO_BIN/cargo-agents\""])
+        .args(["-c", "command -v symposium || cat \"$DEVELOPER_CARGO_BIN/symposium\""])
         .env("DEVELOPER_CARGO_BIN", opts.developer_cargo_bin())
         .status()?;
     assert!(!status.success());

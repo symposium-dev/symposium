@@ -6,10 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use symposium::cli::Cli;
+use symposium::cli::Binary;
 use symposium::config::Symposium;
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
@@ -230,7 +229,8 @@ impl Drop for TestContext {
 impl TestContext {
     /// Run a `symposium` CLI command in-process, returning captured output.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
-        let mut full_args = vec!["cargo-agents"];
+        let binary = Binary::Symposium;
+        let mut full_args = vec!["symposium"];
         full_args.extend_from_slice(args);
 
         let out = symposium::output::Output::capturing();
@@ -244,9 +244,10 @@ impl TestContext {
             .map(|fs| fs.to_string())
             .collect::<Vec<_>>();
 
-        let parse = Cli::try_parse_from(&full_args);
+        let parse = binary.parse(&full_args);
         if let Some(text) =
-            symposium::help_render::help_text(parse.as_ref(), &args_str, &self.sym, &cwd).await
+            symposium::help_render::help_text(binary, parse.as_ref(), &args_str, &self.sym, &cwd)
+                .await
         {
             out.println(text);
             return Ok(out.captured().join("\n"));
@@ -261,7 +262,7 @@ impl TestContext {
         Ok(out.captured().join("\n"))
     }
 
-    /// Run `cargo agents sync` with a report layer and return the captured
+    /// Run `symposium sync` with a report layer and return the captured
     /// report events as JSON values. The `level` controls verbosity:
     /// `tracing::Level::INFO` for install/remove only, `tracing::Level::DEBUG`
     /// for the full decision trace.
@@ -430,8 +431,8 @@ impl TestContext {
             .join("agent_harness/run_scenario.py");
 
         // Build CARGO_BIN_DIR from the binary path cargo gives us.
-        let bin_exe = std::env::var("CARGO_BIN_EXE_cargo-agents")
-            .expect("CARGO_BIN_EXE_cargo-agents must be set (run via cargo test)");
+        let bin_exe = std::env::var("CARGO_BIN_EXE_symposium")
+            .expect("CARGO_BIN_EXE_symposium must be set (run via cargo test)");
         let bin_dir = Path::new(&bin_exe)
             .parent()
             .expect("binary has parent dir")
@@ -554,8 +555,8 @@ pub fn install_tracing_baseline() {
 /// Create a test context by overlaying fixture fragments into a tempdir.
 ///
 /// Text files (`.toml`, `.md`, `.json`, `.txt`, `.ts`, `.js`) have variables expanded:
-/// - `$TEST_DIR` — the tempdir root
-/// - `$BINARY` — path to the `cargo-agents` binary (from `CARGO_BIN_EXE_cargo-agents`)
+/// - `$TEST_DIR`: the tempdir root
+/// - `$BINARY`: path to the `symposium` binary (from `CARGO_BIN_EXE_symposium`)
 async fn setup_fixture(fixtures: &[&str]) -> TestContext {
     install_tracing_baseline();
     let fixtures_base = Path::new(env!("SYMPOSIUM_FIXTURES_DIR"));
@@ -569,7 +570,7 @@ async fn setup_fixture(fixtures: &[&str]) -> TestContext {
         .to_str()
         .expect("tempdir path is UTF-8")
         .replace('\\', "/");
-    let binary = std::env::var("CARGO_BIN_EXE_cargo-agents")
+    let binary = std::env::var("CARGO_BIN_EXE_symposium")
         .unwrap_or_default()
         .replace('\\', "/");
 
@@ -787,8 +788,8 @@ async fn run_with_acp_session(
         .unwrap_or_else(|| ctx.sym.config_dir().to_path_buf());
 
     // Set env vars so the agent subprocess finds symposium and writes traces.
-    let bin_exe = std::env::var("CARGO_BIN_EXE_cargo-agents")
-        .expect("CARGO_BIN_EXE_cargo-agents must be set (run via cargo test)");
+    let bin_exe = std::env::var("CARGO_BIN_EXE_symposium")
+        .expect("CARGO_BIN_EXE_symposium must be set (run via cargo test)");
     let bin_dir = Path::new(&bin_exe).parent().expect("binary has parent dir");
     let path = format!(
         "{}:{}",

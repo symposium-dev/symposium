@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use crate::config::Symposium;
 use crate::crate_command::{self, DispatchResult};
@@ -27,8 +27,7 @@ use crate::use_command;
 /// Parsed CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
-    name = "cargo-agents",
-    bin_name = "cargo agents",
+    name = "symposium",
     version,
     about = "AI the Rust Way",
     allow_external_subcommands = true,
@@ -163,6 +162,34 @@ pub enum TelemetryCommand {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binary {
+    Symposium,
+    CargoAgents,
+}
+
+impl Binary {
+    pub fn name(self) -> &'static str {
+        match self {
+            Binary::Symposium => "symposium",
+            Binary::CargoAgents => "cargo agents",
+        }
+    }
+
+    pub fn command(self) -> clap::Command {
+        Cli::command().bin_name(self.name())
+    }
+
+    pub fn parse<I, T>(self, args: I) -> Result<Cli, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let mut matches = self.command().try_get_matches_from(args)?;
+        Cli::from_arg_matches_mut(&mut matches).map_err(|err| err.format(&mut self.command()))
+    }
+}
+
 /// Audience section a built-in subcommand belongs to in `--help`.
 ///
 /// `None` means the subcommand is hidden (omitted from help entirely).
@@ -271,7 +298,7 @@ pub async fn run(
         Commands::Sync => {
             sym.ensure_config_usable()?;
             let deps = sym.workspace(cwd);
-            // The consent prompt belongs to a human running `cargo agents
+            // The consent prompt belongs to a human running `symposium
             // sync`; it is inert unless `out` is interactive, and the
             // hook-triggered auto-sync path calls `sync::sync` directly and
             // never reaches here at all.
@@ -327,7 +354,7 @@ pub async fn run(
                     out.println(
                         "Telemetry enabled. Events are stored locally under the telemetry \
                          directory and are never uploaded automatically — review them with \
-                         `cargo agents telemetry show`.",
+                         `symposium telemetry show`.",
                     );
                 }
                 TelemetryCommand::Disable => {

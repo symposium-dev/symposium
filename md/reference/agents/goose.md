@@ -10,7 +10,7 @@ Config name: `goose`
 
 ## Plugins
 
-A plugin enabled with `cargo agents use --global` is installed for you as a plugin directory:
+A plugin enabled with `symposium use --global` is installed for you as a plugin directory:
 
 | Scope | Path |
 |-------|------|
@@ -20,7 +20,7 @@ Goose loads it in every project, under the skills' own names. Symposium leaves t
 
 ## Hooks
 
-**Not registered.** Goose has hooks of its own, but symposium does not register any for it, so `cargo agents hook` is never called by this agent.
+**Not registered.** Goose has hooks of its own, but symposium does not register any for it, so `symposium hook` is never called by this agent.
 
 ## MCP servers
 
