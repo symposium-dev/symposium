@@ -51,8 +51,11 @@ pub(crate) enum Failure {
 /// How far a trial got.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Session<'a> {
-    /// Setup or the pre-launch check failed, so the client was never started.
+    /// Setup or the pre-launch check failed, or the client could not be launched, so
+    /// it never started.
     NotStarted,
+    /// The client started, but its filesystem could not safely be inspected.
+    Uncontained,
     /// The session ended, and its submission was graded.
     Graded {
         ended: &'a Ended,
@@ -72,6 +75,9 @@ enum Code {
 /// Where a trial of a `kind` task ends, from how far it got and the verdicts of its
 /// expectations, which a baseline trial has none of.
 pub(crate) fn decide(kind: TaskKind, session: Session<'_>, expectations: &[Verdict]) -> Outcome {
+    if matches!(session, Session::Uncontained) {
+        return Outcome::Failed(Failure::Session);
+    }
     let Session::Graded { ended, grading } = session else {
         return Outcome::SetupFailure;
     };
@@ -181,7 +187,7 @@ mod tests {
 
     #[test]
     fn a_trial_that_never_launched_is_a_setup_failure() {
-        let not_launched = Ended::NotLaunched(process_error());
+        let not_launched = Ended::NotLaunched(process_error().into());
 
         assert_eq!(
             decide(Regression, Session::NotStarted, &[]),
@@ -191,6 +197,16 @@ mod tests {
             decide(Regression, graded(&not_launched, &passing()), &[Pass]),
             Outcome::SetupFailure
         );
+    }
+
+    #[test]
+    fn uncertain_containment_fails_the_session_without_grading() {
+        for kind in [Regression, Capability] {
+            assert_eq!(
+                decide(kind, Session::Uncontained, &[]),
+                Outcome::Failed(Failure::Session)
+            );
+        }
     }
 
     #[test]

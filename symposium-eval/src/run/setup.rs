@@ -240,7 +240,19 @@ mod tests {
             registry.as_table_mut().unwrap().remove("auto-update");
         }
         for (key, expected) in expected_config(trial) {
-            assert_eq!(config.get(&key), Some(&expected), "{key}: {config}");
+            let actual = config.get(&key);
+            if let toml::Value::Table(expected) = expected {
+                let actual = actual.and_then(toml::Value::as_table);
+                for (name, expected) in expected {
+                    assert_eq!(
+                        actual.and_then(|table| table.get(&name)),
+                        Some(&expected),
+                        "{key}.{name}: {config}"
+                    );
+                }
+            } else {
+                assert_eq!(actual, Some(&expected), "{key}: {config}");
+            }
         }
         let agents = config["agent"].as_array().unwrap();
         let names: Vec<_> = agents.iter().map(|agent| &agent["name"]).collect();

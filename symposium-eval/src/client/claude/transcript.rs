@@ -24,8 +24,8 @@ use super::hooks::{HookFields, Hooks};
 use super::loads::Skills;
 use super::version::Version;
 use crate::client::{
-    Completion, InstalledSkill, Load, Malformation, ProvenanceError, Reading, Summary, Tokens,
-    TranscriptError, Unusable, Usage,
+    Completion, InstalledSkill, Load, Malformation, ProvenanceError, Reading, SessionIntroduction,
+    Summary, Tokens, TranscriptError, Unusable, Usage,
 };
 use crate::jsonl::{self, Line, MAX_LINE};
 
@@ -102,6 +102,10 @@ struct Reader<'a> {
     /// Whether an `init` has been seen. One that cannot be read counts: the transcript
     /// is then malformed, not unattributed.
     introduced: bool,
+    /// A matching result appeared before an introduction. This is not itself a
+    /// provenance error: if no introduction follows, it proves only that the client
+    /// never reached the session boundary.
+    ended_before_introduction: bool,
     /// Why the transcript cannot say how the session ended, if it cannot.
     unusable: Option<Unusable>,
     calls: Calls,
@@ -158,6 +162,7 @@ impl<'a> Reader<'a> {
             usage: Usage::Unknown,
             response: None,
             introduced: false,
+            ended_before_introduction: false,
             unusable: None,
             calls: Calls::new(project),
             hooks: Hooks::new(),
@@ -241,12 +246,19 @@ impl<'a> Reader<'a> {
             Ok(()) => self.model = init.model,
             Err(error) => self.mismatched(error),
         }
+        if self.ended_before_introduction {
+            self.mismatched(ProvenanceError::Unstated);
+        }
     }
 
     fn ending(&mut self, ending: Ending<'_>) {
+        if !self.is_ours(&ending.session_id) {
+            return;
+        }
         if !self.introduced {
-            self.mismatched(ProvenanceError::Unstated);
-        } else if self.is_ours(&ending.session_id) {
+            self.ended_before_introduction = true;
+            self.damage();
+        } else {
             self.usage = ending.usage();
             (self.completion, self.response) = ending.completion();
             self.calls.finish();
@@ -334,6 +346,11 @@ impl<'a> Reader<'a> {
             },
         };
         Reading {
+            introduction: if self.introduced {
+                SessionIntroduction::Observed
+            } else {
+                SessionIntroduction::NotObserved
+            },
             summary,
             completion: self.unusable.map_or(Ok(self.completion), Err),
             loads: (self.calls.outcomes(&Skills::new(self.skills)))
@@ -427,6 +444,10 @@ mod tests {
         session: Uuid,
         version: Version,
     ) -> Result<Completion, Unusable> {
+        reading_as(transcript, session, version).completion
+    }
+
+    fn reading_as(transcript: &str, session: Uuid, version: Version) -> Reading {
         read_text(
             transcript,
             Path::new("/trial/project"),
@@ -434,7 +455,6 @@ mod tests {
             version,
             &[],
         )
-        .completion
     }
 
     /// As the recorded session, run by the version it was recorded with.
@@ -872,23 +892,84 @@ mod tests {
     }
 
     #[test]
-    fn a_result_without_an_init_is_unstated() {
+    fn a_matching_result_without_an_init_only_shows_no_introduction() {
         let transcript = without(FINISHED, "system/init");
+        let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
 
-        assert!(matches!(
-            completion(&transcript),
-            Err(Unusable::Provenance(ProvenanceError::Unstated))
-        ));
+        assert_eq!(reading.completion.unwrap(), Completion::Missing);
+        assert_eq!(reading.introduction, SessionIntroduction::NotObserved);
     }
 
     #[test]
     fn a_result_before_the_init_is_unstated() {
         let transcript = format!("{}\n{FINISHED}", recorded_result());
+        let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
 
         assert!(matches!(
-            completion(&transcript),
+            reading.completion,
             Err(Unusable::Provenance(ProvenanceError::Unstated))
         ));
+        assert_eq!(reading.introduction, SessionIntroduction::Observed);
+    }
+
+    #[test]
+    fn a_foreign_result_without_an_init_is_mismatched() {
+        let other = Uuid::new_v4();
+        let transcript = format!("{}\n", as_session(recorded_result(), other));
+        let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
+
+        assert!(matches!(
+            reading.completion,
+            Err(Unusable::Provenance(ProvenanceError::Session { .. }))
+        ));
+        assert_eq!(reading.introduction, SessionIntroduction::NotObserved);
+    }
+
+    #[test]
+    fn a_foreign_message_without_an_init_is_mismatched() {
+        let other = Uuid::new_v4();
+        let assistant = first(FINISHED, "assistant");
+        let transcript = format!("{}\n", as_session(assistant, other));
+        let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
+
+        assert!(matches!(
+            reading.completion,
+            Err(Unusable::Provenance(ProvenanceError::Session { .. }))
+        ));
+        assert_eq!(reading.introduction, SessionIntroduction::NotObserved);
+    }
+
+    #[test]
+    fn transcript_damage_outranks_a_matching_result_without_an_init_in_either_order() {
+        for transcript in [
+            format!("not json\n{}\n", recorded_result()),
+            format!("{}\nnot json\n", recorded_result()),
+        ] {
+            let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
+
+            assert!(matches!(
+                reading.completion,
+                Err(Unusable::Transcript(TranscriptError::Malformed { .. }))
+            ));
+            assert_eq!(reading.introduction, SessionIntroduction::NotObserved);
+        }
+    }
+
+    #[test]
+    fn foreign_evidence_outranks_a_matching_result_without_an_init_in_either_order() {
+        let foreign = as_session(first(FINISHED, "assistant"), Uuid::new_v4());
+        for transcript in [
+            format!("{}\n{foreign}\n", recorded_result()),
+            format!("{foreign}\n{}\n", recorded_result()),
+        ] {
+            let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
+
+            assert!(matches!(
+                reading.completion,
+                Err(Unusable::Provenance(ProvenanceError::Session { .. }))
+            ));
+            assert_eq!(reading.introduction, SessionIntroduction::NotObserved);
+        }
     }
 
     #[test]
@@ -963,8 +1044,26 @@ mod tests {
     fn an_init_without_its_version_is_malformed() {
         let init = without_field(recorded_init(), "claude_code_version");
         let transcript = format!("{init}\n{}\n", recorded_result());
+        let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
 
-        assert_eq!(malformed_line(completion(&transcript)), 1);
+        assert_eq!(malformed_line(reading.completion), 1);
+        assert_eq!(reading.introduction, SessionIntroduction::Observed);
+    }
+
+    #[test]
+    fn damaged_output_without_an_init_does_not_prove_absence() {
+        for transcript in [
+            "not json\n".to_owned(),
+            format!("{}\n", "x".repeat(MAX_LINE + 1)),
+        ] {
+            let reading = reading_as(&transcript, recorded_session(), version::MINIMUM);
+
+            assert!(matches!(
+                reading.completion,
+                Err(Unusable::Transcript(TranscriptError::Malformed { .. }))
+            ));
+            assert_eq!(reading.introduction, SessionIntroduction::NotObserved);
+        }
     }
 
     #[test]

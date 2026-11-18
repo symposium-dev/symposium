@@ -133,6 +133,9 @@ pub(crate) enum GradeError {
     },
     #[error("`cargo metadata` printed something other than its documented format")]
     Metadata(#[source] serde_json::Error),
+    /// Grading's sandbox could not be prepared, so nothing ran.
+    #[error("cannot prepare grading's sandbox")]
+    Sandbox(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Why a hidden check's listing cannot stand for exactly one test.

@@ -73,7 +73,7 @@ pub(crate) enum Arm {
 }
 
 impl Arm {
-    fn configuration(&self) -> Configuration {
+    pub(crate) fn configuration(&self) -> Configuration {
         match self {
             Self::Baseline => Configuration::Baseline,
             Self::Symposium(_) => Configuration::Symposium,
@@ -128,14 +128,20 @@ pub(crate) enum SetupStep {
 /// How far a trial got, with what each phase it reached left.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Reached<'a> {
+    /// The client started but its writers may survive; no filesystem evidence is read.
+    Uncontained { execution: &'a Execution },
     Setup {
         step: SetupStep,
         error: &'a dyn std::error::Error,
     },
+    /// The client could not be launched, so nothing was graded: a setup failure, with
+    /// the attempt kept.
+    Session {
+        execution: &'a Execution,
+        changes: &'a [ConfigChange],
+    },
     Graded {
         execution: &'a Execution,
-        /// The agent's time, setup and grading left out.
-        elapsed: Duration,
         grading: &'a Grading,
         changes: &'a [ConfigChange],
         /// A Symposium trial's, and only a Symposium trial's.
@@ -153,6 +159,10 @@ pub(crate) enum ResultError {
     },
     #[error("the session looked for {named} skills but showed {observed} loads")]
     Loads { named: usize, observed: usize },
+    #[error("a client that {} was {}", if *.launched { "launched" } else { "never launched" }, if *.launched { "left ungraded" } else { "graded" })]
+    SessionPhase { launched: bool },
+    #[error("a session with {} containment was recorded in the wrong phase", if *.certain { "proven" } else { "uncertain" })]
+    SessionContainment { certain: bool },
 }
 
 #[derive(Debug, Serialize)]
@@ -190,6 +200,7 @@ impl TrialResult {
         let task = planned.task;
         let configuration = planned.arm.configuration();
         reached.check_expectations(configuration)?;
+        reached.check_session_phase()?;
         Ok(Self {
             schema_version: SCHEMA_VERSION,
             task: TaskRecord::new(task, planned.content_hash),

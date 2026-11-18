@@ -158,9 +158,30 @@ impl RealSrt {
         tool: &super::stage::Tool,
         audience: super::stage::Audience,
     ) -> PathBuf {
+        self.stage_tool(name, tool, audience).command().to_owned()
+    }
+
+    /// As [`Self::stage`], returning what was staged.
+    pub(crate) fn stage_tool(
+        &mut self,
+        name: &str,
+        tool: &super::stage::Tool,
+        audience: super::stage::Audience,
+    ) -> super::stage::StagedTool {
         let name = crate::task::ToolName::new(name).unwrap();
-        let staged = self.batch.stage(name, tool, audience).unwrap();
-        staged.command().to_owned()
+        self.batch.stage(name, tool, audience).unwrap().clone()
+    }
+
+    pub(crate) fn srt(&self) -> &super::srt::Srt {
+        &self.srt
+    }
+
+    pub(crate) fn machine(&self) -> &Machine {
+        &self.machine
+    }
+
+    pub(crate) fn api_key(&self) -> &ApiKey {
+        &self.api_key
     }
 
     pub(crate) fn decoy_home(&self) -> &std::path::Path {
