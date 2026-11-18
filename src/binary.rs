@@ -16,6 +16,29 @@ use crate::state;
 use crate::subcommand_dispatch::dispatch_external;
 
 pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
+    // The Pi bridge requests cooperative shutdown: dropping CLI work lets
+    // each subprocess owner kill its own group, including nested groups.
+    #[cfg(unix)]
+    if env::var_os("SYMPOSIUM_PI_BRIDGE").is_some() {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                return tokio::select! {
+                    biased;
+                    _ = terminate.recv() => ExitCode::FAILURE,
+                    code = run_cli(binary, args) => code,
+                };
+            }
+            Err(error) => {
+                eprintln!("could not listen for Pi cancellation: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    run_cli(binary, args).await
+}
+
+async fn run_cli(binary: Binary, args: Vec<OsString>) -> ExitCode {
     let mut sym = config::Symposium::from_environment();
 
     let cwd = env::current_dir().expect("failed to get current directory");

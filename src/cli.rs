@@ -296,6 +296,7 @@ pub async fn run(
         }
 
         Commands::Sync => {
+            sym.ensure_config_usable()?;
             let deps = sym.workspace(cwd);
             // The consent prompt belongs to a human running `symposium
             // sync`; it is inert unless `out` is interactive, and the

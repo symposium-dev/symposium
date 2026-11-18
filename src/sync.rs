@@ -470,15 +470,19 @@ pub async fn sync(
     ws: &Arc<Workspace>,
     update: UpdateLevel,
 ) -> Result<Vec<(Agent, Vec<String>)>> {
-    if let Some(error) = sym.config_error() {
-        anyhow::bail!(
-            "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
-            display_path(&sym.config_dir().join("config.toml")),
-        );
-    }
+    sym.ensure_config_usable()?;
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();
+    // Pi discovers project configuration only in its session directory, not
+    // ancestors. Dependency resolution and shared skills stay workspace-wide.
+    let config_root = |agent| {
+        if agent == Agent::Pi {
+            ws.start().unwrap_or(&project_root)
+        } else {
+            &project_root
+        }
+    };
     let dep_ids = ws.dep_ids().await.to_vec();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
@@ -606,6 +610,8 @@ pub async fn sync(
                 message: "no agents configured, run `symposium init` to add one".into(),
             },
         );
+        // Still run cleanup so removing the final agent also removes its
+        // project hooks and managed skills.
     }
 
     // Track every skill directory this sync wants, even one whose refresh
@@ -685,18 +691,9 @@ pub async fn sync(
             continue;
         };
 
-        // Hooks: the project and global locations are genuinely different files
-        // for some agents - Antigravity writes `.agents/hooks.json` but
-        // `~/.gemini/config/hooks.json`, and Copilot `.github/hooks/` but
-        // `~/.copilot/settings.json` - so project scope cannot be produced by
-        // rooting the global path at the workspace.
-        let hooks = match sym.config.hook_scope {
-            crate::config::HookScope::Global => agent.register_hooks(sym.home_dir(), sym, out),
-            crate::config::HookScope::Project => {
-                agent.register_project_hooks(&project_root, sym, out)
-            }
-        };
-        if let Err(e) = hooks {
+        // Agent-specific paths and scope cleanup live in the agent module.
+        let agent_root = config_root(agent);
+        if let Err(e) = agent.register_scoped_hooks(agent_root, sym, out) {
             tracing::info!(
                 report = %crate::report::ReportEvent::Warning {
                     message: format!("failed to register hooks for {agent_name}: {e:#}"),
@@ -725,11 +722,11 @@ pub async fn sync(
                 },
             );
         }
-        match agent.register_mcp_servers(mcp_scope, &project_root, sym, &mcp_servers, out) {
+        match agent.register_mcp_servers(mcp_scope, agent_root, sym, &mcp_servers, out) {
             Ok(names) => {
-                let file = agent.mcp_config_path(mcp_scope, &project_root, sym);
+                let file = agent.mcp_config_path(mcp_scope, agent_root, sym);
                 let project_file =
-                    agent.mcp_config_path(crate::agents::McpScope::Project, &project_root, sym);
+                    agent.mcp_config_path(crate::agents::McpScope::Project, agent_root, sym);
                 let offered: &[String] = if file == project_file { &names } else { &[] };
                 if agent.supports_project_mcp_scope() && !skip_cleanup {
                     unregister_recorded_mcp_servers(
@@ -927,7 +924,7 @@ pub async fn sync(
                     agent.unregister_hooks(sym.home_dir(), sym, out)
                 }
                 crate::config::HookScope::Project => {
-                    agent.unregister_project_hooks(&project_root, sym, out)
+                    agent.unregister_project_hooks(config_root(agent), sym, out)
                 }
             }
         }
@@ -946,7 +943,7 @@ pub async fn sync(
         unregister_project_plugins(sym, &project_root);
     }
 
-    if to_install.is_empty() {
+    if !agent_names.is_empty() && to_install.is_empty() {
         tracing::info!(
             report = %crate::report::ReportEvent::Info {
                 message: "no applicable skills found for workspace dependencies".into(),
@@ -992,6 +989,7 @@ fn unregister_project_plugins(sym: &Symposium, project_root: &Path) {
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
 pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
+    sym.ensure_config_usable()?;
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     // `init` has no workspace to evaluate a plugin's gate against, so MCP
