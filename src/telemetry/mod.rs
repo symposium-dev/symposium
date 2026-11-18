@@ -11,6 +11,7 @@
 //! Every entry point here is best-effort: a failure to read or write the log
 //! must never break a hook, so errors are logged and swallowed.
 
+mod attribution_index;
 mod identity;
 mod policy;
 mod resolution_witness;
@@ -19,6 +20,13 @@ mod state;
 mod storage;
 mod sync_report;
 
+pub(crate) use attribution_index::{
+    InstallationBinding, InstallationIndexEntry, InstalledIndexSnapshot, LockedParent,
+    MARKER_FILE_NAME as INSTALLATION_MARKER_FILE, MarkerAction, MarkerChange, MarkerReconcileError,
+    MarkerReconciliation, ParentLockRequest, ParentWriteAcquisition, acquire_config_guard,
+    acquire_write_guards, is_reserved_skill_slot, load_index_snapshot, prepare_index,
+    prepare_unavailable_index, reconcile_marker, remove_index, replace_index, stage_rotated_marker,
+};
 pub(crate) use resolution_witness::{
     OptionalWitnessMode, ResolutionEvidence, chained_route as chained_resolution_evidence,
     evaluate_optional_predicates as evaluate_resolution_predicates,

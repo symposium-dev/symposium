@@ -433,14 +433,14 @@ impl Agent {
     pub(crate) fn deliver_project_plugins(
         &self,
         sym: &Symposium,
-        project_root: &Path,
+        skills_parent: &crate::telemetry::LockedParent<'_>,
         plugins: &[CompiledPlugin],
     ) -> Option<Delivery> {
         let Agent::Claude = self else {
             return None;
         };
-        let skills_dir = project_root.join(".claude").join("skills");
-        let delivery = plugin_registration::deliver_copies(sym, *self, &skills_dir, plugins);
+        let skills_dir = skills_parent.path();
+        let delivery = plugin_registration::deliver_copies(sym, *self, skills_dir, plugins);
         for name in &delivery.delivered {
             if let Err(e) = crate::sync::ignore_in_git(&skills_dir.join(name)) {
                 tracing::info!(

@@ -19,6 +19,25 @@ fn write(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
+fn with_project_skills_parent<R>(
+    sym: &Symposium,
+    project: &Path,
+    operation: impl FnOnce(&crate::telemetry::LockedParent<'_>) -> R,
+) -> R {
+    let requested = project.join(".claude/skills");
+    let config = crate::telemetry::acquire_config_guard(sym).unwrap();
+    let acquisition = crate::telemetry::acquire_write_guards(
+        sym,
+        &config,
+        [crate::telemetry::ParentLockRequest::desired(
+            requested.clone(),
+        )],
+    )
+    .unwrap();
+    let parent = acquisition.guards().parent(&requested).unwrap();
+    operation(&parent)
+}
+
 #[test]
 fn a_directory_symposium_does_not_own_keeps_its_slot() {
     let tmp = tempfile::tempdir().unwrap();
@@ -83,27 +102,29 @@ fn project_delivery_lands_in_the_project_and_stays_out_of_git() {
     let delivered = project.join(".claude/skills/fresh");
     let plugin = compiled(&staging, "fresh");
 
-    Agent::Claude.deliver_project_plugins(&sym, &project, std::slice::from_ref(&plugin));
-    assert!(delivered.join(".claude-plugin/plugin.json").is_file());
-    assert_eq!(
-        fs::read_to_string(delivered.join(".gitignore")).unwrap(),
-        "*\n"
-    );
-    assert!(!sym.home_dir().join(".claude").exists());
+    with_project_skills_parent(&sym, &project, |parent| {
+        Agent::Claude.deliver_project_plugins(&sym, parent, std::slice::from_ref(&plugin));
+        assert!(delivered.join(".claude-plugin/plugin.json").is_file());
+        assert_eq!(
+            fs::read_to_string(delivered.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        assert!(!sym.home_dir().join(".claude").exists());
 
-    write(&plugin.dir.join(".claude-plugin/plugin.json"), "v2");
-    Agent::Claude.deliver_project_plugins(&sym, &project, std::slice::from_ref(&plugin));
-    assert_eq!(
-        fs::read_to_string(delivered.join(".claude-plugin/plugin.json")).unwrap(),
-        "v2"
-    );
-    assert_eq!(
-        fs::read_to_string(delivered.join(".gitignore")).unwrap(),
-        "*\n",
-        "replacing the content keeps the directory out of git"
-    );
+        write(&plugin.dir.join(".claude-plugin/plugin.json"), "v2");
+        Agent::Claude.deliver_project_plugins(&sym, parent, std::slice::from_ref(&plugin));
+        assert_eq!(
+            fs::read_to_string(delivered.join(".claude-plugin/plugin.json")).unwrap(),
+            "v2"
+        );
+        assert_eq!(
+            fs::read_to_string(delivered.join(".gitignore")).unwrap(),
+            "*\n",
+            "replacing the content keeps the directory out of git"
+        );
 
-    Agent::Claude.deliver_project_plugins(&sym, &project, &[]);
+        Agent::Claude.deliver_project_plugins(&sym, parent, &[]);
+    });
     assert!(!delivered.exists());
 }
 
@@ -111,12 +132,12 @@ fn project_delivery_lands_in_the_project_and_stays_out_of_git() {
 fn only_claude_takes_project_plugins() {
     let tmp = tempfile::tempdir().unwrap();
     let sym = Symposium::from_dir(tmp.path());
-    for &agent in Agent::all() {
-        let takes = agent
-            .deliver_project_plugins(&sym, tmp.path(), &[])
-            .is_some();
-        assert_eq!(takes, agent == Agent::Claude, "{}", agent.config_name());
-    }
+    with_project_skills_parent(&sym, tmp.path(), |parent| {
+        for &agent in Agent::all() {
+            let takes = agent.deliver_project_plugins(&sym, parent, &[]).is_some();
+            assert_eq!(takes, agent == Agent::Claude, "{}", agent.config_name());
+        }
+    });
 }
 
 #[test]

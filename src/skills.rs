@@ -822,6 +822,15 @@ fn find_skill_files_in(
     if crate::sync::has_symposium_marker(dir) {
         return;
     }
+    if dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(crate::telemetry::is_reserved_skill_slot)
+    {
+        // `.agents/skills` can be both a workspace source and an installation
+        // parent. Its telemetry index is metadata, never another skill tree.
+        return;
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => {
@@ -988,6 +997,9 @@ fn load_skill_from(
         .context("SKILL.md frontmatter missing required `name` field")?;
     if !is_safe_dir_name(name) {
         bail!("SKILL.md `name` must be a plain directory name, got {name:?}");
+    }
+    if crate::telemetry::is_reserved_skill_slot(name) {
+        bail!("SKILL.md `name` is reserved by Symposium, got {name:?}");
     }
 
     // Validate description per agentskills.io spec
@@ -1175,6 +1187,21 @@ mod tests {
         assert!(find_skill_files_recursive(&skills, &mut found));
 
         assert_eq!(found, vec![skills.join("my-skill/SKILL.md")]);
+    }
+
+    #[test]
+    fn discovery_skips_the_attribution_index_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills = tmp.path().join("skills");
+        fs::create_dir_all(skills.join("ordinary")).unwrap();
+        fs::create_dir_all(skills.join(".symposium-index")).unwrap();
+        fs::write(skills.join("ordinary/SKILL.md"), "# skill").unwrap();
+        fs::write(skills.join(".symposium-index/SKILL.md"), "# metadata").unwrap();
+
+        let mut found = Vec::new();
+        assert!(find_skill_files_recursive(&skills, &mut found));
+
+        assert_eq!(found, vec![skills.join("ordinary/SKILL.md")]);
     }
 
     /// Reaching one SKILL.md through a symlinked prefix must yield one origin.
@@ -1757,6 +1784,21 @@ mod tests {
                 "{name:?}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn load_skill_rejects_the_reserved_attribution_index_slot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            "---\nname: .SYMPOSIUM-INDEX\ndescription: d\ndepends-on: serde\n---\n",
+        )
+        .unwrap();
+
+        let error = load_skill(&skill_md, false, &PredicateSet::default()).unwrap_err();
+
+        assert!(error.to_string().contains("reserved by Symposium"));
     }
 
     // --- Bare SKILL.md loading (see plugins::standalone_skill_manifest
