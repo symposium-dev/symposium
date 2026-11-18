@@ -11,6 +11,7 @@
 //! Every entry point here is best-effort: a failure to read or write the log
 //! must never break a hook, so errors are logged and swallowed.
 
+mod attribution_index;
 mod identity;
 mod policy;
 mod resolution_witness;
@@ -19,6 +20,9 @@ mod state;
 mod storage;
 mod sync_report;
 
+pub(crate) use attribution_index::{
+    MARKER_FILE_NAME as INSTALLATION_MARKER_FILE, is_reserved_skill_slot,
+};
 pub(crate) use resolution_witness::{
     OptionalWitnessMode, ResolutionEvidence, chained_route as chained_resolution_evidence,
     evaluate_optional_predicates as evaluate_resolution_predicates,
