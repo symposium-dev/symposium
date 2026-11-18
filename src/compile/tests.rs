@@ -53,6 +53,7 @@ fn skill(name: &str, origin: &str, skill_md: &Path, plugin_index: usize) -> Skil
 fn plugin(name: &str, skills: Vec<SkillWithGroupContext>) -> PluginSkills {
     PluginSkills {
         name: name.into(),
+        version: UNVERSIONED.into(),
         skills,
     }
 }
@@ -528,5 +529,58 @@ fn manifests_follow_the_agent_plugins_schema() {
           "name": "pdf-tools",
           "version": "0.0.0"
         }"#]]
-    .assert_eq(&serde_json::to_string_pretty(&manifest("pdf-tools")).unwrap());
+    .assert_eq(&serde_json::to_string_pretty(&manifest("pdf-tools", UNVERSIONED)).unwrap());
+}
+
+#[test]
+fn a_plugin_takes_the_version_it_declares_then_the_one_its_package_resolved_to() {
+    let package = |manifest: &str| {
+        crate::plugins::validate_plugin(
+            UnvalidatedPlugin::new(
+                PackageId::new("cargo", "widget", "1.4.2"),
+                "/nonexistent",
+                RawPluginManifest::parse(manifest).unwrap(),
+            ),
+            PluginKind::Package,
+        )
+        .unwrap()
+    };
+    let cases = [
+        (package(""), "1.4.2"),
+        (package("version = \"2.0.0\""), "2.0.0"),
+        (package("version = \"latest\""), "1.4.2"),
+        (registry("guide", ""), "0.0.0"),
+        (registry("guide", "version = \"3.1.0\""), "3.1.0"),
+        (registry("guide", "version = \"../3.1.0\""), "0.0.0"),
+    ];
+    for (plugin, expected) in cases {
+        let declared = plugin.manifest.version.clone();
+        let compiled = group_skills(
+            vec![plugin],
+            vec![skill("alpha", "aaaaaaaa", Path::new("SKILL.md"), 0)],
+        );
+        assert_eq!(compiled[0].version, expected, "declares {declared:?}");
+    }
+}
+
+#[test]
+fn the_compiled_manifest_says_which_version_was_compiled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let skill_md = write_skill(&tmp.path().join("sources/alpha"), "alpha");
+    let mut plugins = [plugin(
+        "widget",
+        vec![skill("alpha", "aaaaaaaa", &skill_md, 0)],
+    )];
+    plugins[0].version = "1.4.2".into();
+    let root = tmp.path().join("installed");
+
+    compile(&root, &plugins, Duration::ZERO, &mut BTreeSet::new(), false);
+
+    assert_eq!(compiled_version(&root.join("widget")).unwrap(), "1.4.2");
+    fs::write(
+        root.join("widget/plugin.json"),
+        r#"{"version": "../1.4.2"}"#,
+    )
+    .unwrap();
+    assert!(compiled_version(&root.join("widget")).is_err());
 }

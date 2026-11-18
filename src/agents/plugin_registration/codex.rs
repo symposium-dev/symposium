@@ -113,7 +113,8 @@ fn is_ours(entry: &Item, source: &str) -> bool {
 }
 
 fn copy(source: &Path, dest: &Path, debounce: Duration) -> Result<bool> {
-    let version = Path::new(compile::PLUGIN_VERSION);
+    let version = compile::compiled_version(source)?;
+    let version = Path::new(&version);
     if sync::recently_synced(dest, debounce)
         && compile::skill_dir_names(source) == compile::skill_dir_names(&dest.join(version))
     {

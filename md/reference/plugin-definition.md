@@ -35,7 +35,7 @@ source.path = "skills"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | registry manifests only | Plugin name. Used in logs and CLI output. Required in a registry manifest. A crate manifest defaults it to the crate name, and a workspace manifest to the name of its directory. |
-| `version` | string | no | Plugin version, shown by [`search`](./symposium-search.md) and [`status`](./symposium-status.md). Free-form. |
+| `version` | string | no | Plugin version, shown by [`search`](./symposium-search.md) and [`status`](./symposium-status.md). Free-form. When it is a semantic version, such as `1.2.0`, it is also the [version the plugin is installed under](./symposium-sync.md#plugins-enabled-for-every-workspace). |
 | `description` | string | no | Short description, shown by [`search`](./symposium-search.md). |
 | `depends-on` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
 | `predicates` | array of strings | no | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the plugin to apply. See [Predicates](./predicates.md). |

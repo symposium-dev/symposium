@@ -17,7 +17,7 @@ use crate::report::ReportEvent;
 use crate::skills::SkillWithGroupContext;
 use crate::sync::{self, TreeContents};
 
-pub(crate) const PLUGIN_VERSION: &str = "0.0.0";
+const UNVERSIONED: &str = "0.0.0";
 const AGENT_PLUGINS_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MANIFEST_FILE: &str = "plugin.json";
 const CLAUDE_MANIFEST_DIR: &str = ".claude-plugin";
@@ -50,6 +50,22 @@ async fn installs_globally(pms: &PmRegistry, used: &[PackageId], plugin: &Plugin
             .is_ok_and(|id| used.contains(&id))
 }
 
+pub(crate) async fn installed_for_user<'a>(
+    sym: &Symposium,
+    pms: &PmRegistry,
+    registry_plugins: &[Plugin],
+    plugins: impl IntoIterator<Item = &'a Plugin>,
+) -> Vec<&'a Plugin> {
+    let used = globally_used(&sym.config.plugins, pms, registry_plugins).await;
+    let mut selected = Vec::new();
+    for plugin in plugins {
+        if installs_globally(pms, &used, plugin).await {
+            selected.push(plugin);
+        }
+    }
+    selected
+}
+
 pub(crate) fn is_plugin_dir(dir: &Path) -> bool {
     dir.join(CLAUDE_MANIFEST_DIR).join(MANIFEST_FILE).is_file()
         && !dir.join(crate::pm::layout::SKILL_FILE).exists()
@@ -61,7 +77,35 @@ pub(crate) fn project_plugins_root(project_root: &Path) -> PathBuf {
 
 pub(crate) struct PluginSkills {
     name: String,
+    version: String,
     skills: Vec<SkillWithGroupContext>,
+}
+
+fn is_version(version: &str) -> bool {
+    semver::Version::parse(version).is_ok()
+}
+
+fn plugin_version(plugin: &Plugin) -> String {
+    let declared = plugin.manifest.version.as_deref();
+    let resolved = Some(plugin.canonical.version.as_str());
+    [declared, resolved]
+        .into_iter()
+        .flatten()
+        .find(|version| is_version(version))
+        .unwrap_or(UNVERSIONED)
+        .to_string()
+}
+
+pub(crate) fn compiled_version(plugin_dir: &Path) -> Result<String> {
+    let path = plugin_dir.join(MANIFEST_FILE);
+    let manifest = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&manifest).with_context(|| format!("parse {}", path.display()))?;
+    manifest["version"]
+        .as_str()
+        .filter(|version| is_version(version))
+        .map(str::to_string)
+        .with_context(|| format!("{} has no version", path.display()))
 }
 
 pub(crate) async fn global_plugins(
@@ -72,17 +116,16 @@ pub(crate) async fn global_plugins(
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
 ) -> Vec<PluginSkills> {
-    let used = globally_used(&sym.config.plugins, pms, &registry.plugins).await;
     let inactive = registry
         .plugins
         .iter()
         .filter(|plugin| !active.iter().any(|a| a.canonical == plugin.canonical));
-    let mut plugins = Vec::new();
-    for plugin in active.iter().chain(inactive) {
-        if installs_globally(pms, &used, plugin).await {
-            plugins.push(plugin.clone());
-        }
-    }
+    let mut plugins: Vec<Plugin> =
+        installed_for_user(sym, pms, &registry.plugins, active.iter().chain(inactive))
+            .await
+            .into_iter()
+            .cloned()
+            .collect();
     ctx.set_conditions_met(true);
     plugins.retain(|plugin| plugin.applies(ctx));
     let skills = crate::skills::collect_skills(sym, &plugins, ctx, update).await;
@@ -112,6 +155,7 @@ fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec
     let mut grouped: Vec<PluginSkills> = plugins
         .into_iter()
         .map(|plugin| PluginSkills {
+            version: plugin_version(&plugin),
             name: plugin.manifest.name,
             skills: Vec::new(),
         })
@@ -159,7 +203,8 @@ pub(crate) fn compile(
             continue;
         };
         let dir = root.join(&name);
-        match write_plugin(&dir, &name, &skill_dirs(plugin), debounce, warned) {
+        let manifest = manifest(&name, &plugin.version);
+        match write_plugin(&dir, &manifest, &skill_dirs(plugin), debounce, warned) {
             Ok(updated) => {
                 let origins = plugin.skills.iter().map(|s| s.origin_hash.clone());
                 compiled
@@ -289,7 +334,7 @@ fn skill_dirs(plugin: &PluginSkills) -> Vec<(String, &SkillWithGroupContext)> {
 
 fn write_plugin(
     dir: &Path,
-    name: &str,
+    manifest: &serde_json::Value,
     skills: &[(String, &SkillWithGroupContext)],
     debounce: Duration,
     warned: &mut BTreeSet<String>,
@@ -298,7 +343,7 @@ fn write_plugin(
     if sync::recently_synced(dir, debounce) && skill_dir_names(dir) == names {
         return Ok(false);
     }
-    let (contents, skipped) = plugin_contents(name, skills)?;
+    let (contents, skipped) = plugin_contents(manifest, skills)?;
     let updated = sync::sync_tree(dir, &contents)?;
     if updated {
         sync::report_skipped(skipped, warned);
@@ -314,10 +359,10 @@ pub(crate) fn skill_dir_names(plugin_dir: &Path) -> BTreeSet<OsString> {
 }
 
 fn plugin_contents(
-    name: &str,
+    manifest: &serde_json::Value,
     skills: &[(String, &SkillWithGroupContext)],
 ) -> Result<(TreeContents, Vec<String>)> {
-    let manifest = serde_json::to_vec_pretty(&manifest(name))?;
+    let manifest = serde_json::to_vec_pretty(manifest)?;
     let mut contents: TreeContents = vec![
         (PathBuf::from(MANIFEST_FILE), Some(manifest.clone())),
         (PathBuf::from(CLAUDE_MANIFEST_DIR), None),
@@ -344,11 +389,11 @@ fn plugin_contents(
     Ok((contents, skipped))
 }
 
-fn manifest(name: &str) -> serde_json::Value {
+fn manifest(name: &str, version: &str) -> serde_json::Value {
     json!({
         "$schema": AGENT_PLUGINS_SCHEMA,
         "name": name,
-        "version": PLUGIN_VERSION,
+        "version": version,
     })
 }
 

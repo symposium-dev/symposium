@@ -1,6 +1,7 @@
 //! The enablement commands: `symposium use`, `search`, and `status`,
 //! plus the discovery consent prompt they share a config section with.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use symposium::config::UseEntry;
@@ -46,6 +47,55 @@ fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
 
 fn read_config(ctx: &TestContext) -> String {
     std::fs::read_to_string(ctx.sym.config_dir().join("config.toml")).unwrap()
+}
+
+fn snapshot(ctx: &TestContext) -> BTreeMap<PathBuf, Option<String>> {
+    let mut entries = BTreeMap::new();
+    let mut pending = vec![ctx.tempdir.clone()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path == ctx.sym.cache_dir() {
+                continue;
+            }
+            let relative = path.strip_prefix(&ctx.tempdir).unwrap().to_path_buf();
+            if path.is_dir() {
+                entries.insert(relative, None);
+                pending.push(path);
+            } else {
+                entries.insert(relative, Some(std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    entries
+}
+
+fn record_git_fetch(ctx: &TestContext, url: &str) -> PathBuf {
+    let cached =
+        symposium_install::git::GitCacheManager::new(&ctx.sym.install_context(), "plugins")
+            .cache_path_for_url(url)
+            .unwrap();
+    std::fs::create_dir_all(&cached).unwrap();
+    std::fs::write(
+        cached.join(symposium_install::git::CACHE_META_FILENAME),
+        serde_json::json!({
+            "commit_sha": "0000000000000000000000000000000000000000",
+            "fetched_at": chrono::Utc::now().to_rfc3339(),
+            "source_url": url,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    cached
+}
+
+fn fetch_facet_review(ctx: &TestContext) {
+    let url = "https://github.com/example/facet-skills/tree/main/facet-review";
+    std::fs::write(
+        record_git_fetch(ctx, url).join("SKILL.md"),
+        "---\nname: facet-review\ndescription: Review guidance fetched by facet-kit\n---\n\nReview guidance.\n",
+    )
+    .unwrap();
 }
 
 /// Run `f` with a JSON report layer installed and return the drained events.
@@ -340,6 +390,452 @@ async fn a_global_package_reaches_a_workspace_it_does_not_match() {
             )
             .await?;
             assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn use_global_installs_a_crate_under_its_version() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            ctx.symposium(&["use", "--global", "crate-a"]).await?;
+
+            let plugin = ctx
+                .sym
+                .home_dir()
+                .join(".codex/plugins/cache/symposium/crate-a");
+            let versions: Vec<_> = std::fs::read_dir(&plugin)?
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name())
+                .collect();
+            assert_eq!(versions, ["0.1.0"]);
+            assert!(plugin.join("0.1.0/skills/a-guidance/SKILL.md").is_file());
+            let manifest: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(plugin.join("0.1.0/plugin.json"))?)?;
+            assert_eq!(manifest["version"], "0.1.0");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_global_again_changes_nothing() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0", "workspace-empty0"],
+        async |mut ctx| {
+            let home = ctx.sym.home_dir().to_path_buf();
+            let project = ctx.workspace_root.clone().unwrap();
+            let agents = [
+                (
+                    "claude",
+                    home.join(".claude/skills/facet-kit"),
+                    project.join(".mcp.json"),
+                ),
+                (
+                    "codex",
+                    home.join(".codex/plugins/cache/symposium/facet-kit/0.0.0"),
+                    home.join(".codex/config.toml"),
+                ),
+                (
+                    "copilot",
+                    ctx.sym.config_dir().join("installed/facet-kit"),
+                    home.join(".copilot/mcp-config.json"),
+                ),
+                (
+                    "antigravity",
+                    home.join(".gemini/config/plugins/facet-kit"),
+                    project.join(".agents/mcp_config.json"),
+                ),
+                (
+                    "goose",
+                    home.join(".agents/plugins/facet-kit"),
+                    home.join(".config/goose/config.yaml"),
+                ),
+                (
+                    "kiro",
+                    project.join(".kiro"),
+                    project.join(".kiro/settings/mcp.json"),
+                ),
+                (
+                    "opencode",
+                    project.join(".opencode"),
+                    project.join("opencode.json"),
+                ),
+            ];
+            let mut init = vec!["init"];
+            for (agent, ..) in &agents {
+                init.extend(["--add-agent", *agent]);
+            }
+            ctx.sym.config.sync_debounce_secs = 0;
+            ctx.symposium(&init).await?;
+
+            fetch_facet_review(&ctx);
+            ctx.symposium(&["use", "--global", "facet-kit"]).await?;
+            let installed = snapshot(&ctx);
+            fetch_facet_review(&ctx);
+            ctx.symposium(&["use", "--global", "facet-kit"]).await?;
+            let reinstalled = snapshot(&ctx);
+
+            let changed: BTreeMap<_, _> = installed
+                .keys()
+                .chain(reinstalled.keys())
+                .filter(|path| installed.get(*path) != reinstalled.get(*path))
+                .map(|path| (path, (installed.get(path), reinstalled.get(path))))
+                .collect();
+            assert!(
+                changed.is_empty(),
+                "the second run changed (before, after): {changed:#?}"
+            );
+
+            let config = read_config(&ctx);
+            assert!(config.contains(r#"use = ["facet-kit"]"#), "{config}");
+
+            let bookkeeping: Vec<_> = installed
+                .keys()
+                .filter(|path| path.ends_with(symposium_install::git::CACHE_META_FILENAME))
+                .collect();
+            assert!(bookkeeping.is_empty(), "installed: {bookkeeping:#?}");
+
+            for (agent, skills_root, mcp_config) in &agents {
+                for skill in ["facet-guidance", "facet-review"] {
+                    assert!(
+                        skills_root
+                            .join("skills")
+                            .join(skill)
+                            .join("SKILL.md")
+                            .is_file(),
+                        "{agent} has no {skill} under {}",
+                        skills_root.display()
+                    );
+                }
+                let mcp_config = std::fs::read_to_string(mcp_config)?;
+                assert_eq!(
+                    mcp_config.matches("--facet-kit-stdio").count(),
+                    1,
+                    "{agent} MCP servers: {mcp_config}"
+                );
+            }
+
+            for hooks in [
+                ".claude/settings.json",
+                ".codex/hooks.json",
+                ".github/hooks/symposium.json",
+                ".agents/hooks.json",
+                ".kiro/agents/symposium.json",
+            ] {
+                let registered = std::fs::read_to_string(project.join(hooks))?;
+                let commands: Vec<&str> = registered
+                    .split('"')
+                    .filter(|value| value.starts_with("symposium hook"))
+                    .collect();
+                let distinct: BTreeSet<&str> = commands.iter().copied().collect();
+                assert!(
+                    !commands.is_empty() && commands.len() == distinct.len(),
+                    "{hooks}: {commands:?}"
+                );
+            }
+
+            let fired = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Bash".to_string(),
+                        tool_input: serde_json::json!({ "command": "ls" }),
+                    }],
+                    symposium::hook_schema::HookAgent::Claude,
+                )
+                .await?;
+            let context = fired.hooks[0].output["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap_or_default();
+            assert_eq!(
+                context.matches("facet-kit-hook-fired").count(),
+                1,
+                "{:#?}",
+                fired.hooks
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_global_outside_a_workspace_installs_for_the_user() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0"],
+        async |mut ctx| {
+            assert!(ctx.workspace_root.is_none());
+            let home = ctx.sym.home_dir().to_path_buf();
+            let installed = [
+                (
+                    "claude",
+                    "Claude Code",
+                    home.join(".claude/skills/facet-kit"),
+                ),
+                (
+                    "codex",
+                    "Codex CLI",
+                    home.join(".codex/plugins/cache/symposium/facet-kit/0.0.0"),
+                ),
+                (
+                    "copilot",
+                    "GitHub Copilot",
+                    ctx.sym.config_dir().join("installed/facet-kit"),
+                ),
+                (
+                    "antigravity",
+                    "Antigravity CLI",
+                    home.join(".gemini/config/plugins/facet-kit"),
+                ),
+                ("goose", "Goose", home.join(".agents/plugins/facet-kit")),
+            ];
+            let mut init = vec!["init", "--add-agent", "kiro", "--add-agent", "opencode"];
+            for (agent, ..) in &installed {
+                init.extend(["--add-agent", *agent]);
+            }
+            ctx.symposium(&init).await?;
+            fetch_facet_review(&ctx);
+
+            let reported = with_report(async || {
+                ctx.symposium(&["use", "--global", "facet-kit"])
+                    .await
+                    .unwrap();
+            })
+            .await;
+
+            for (agent, _, plugin) in &installed {
+                for skill in ["facet-guidance", "facet-review"] {
+                    assert!(
+                        plugin.join("skills").join(skill).join("SKILL.md").is_file(),
+                        "{agent} has no {skill} under {}",
+                        plugin.display()
+                    );
+                }
+            }
+            for registered in [".codex/config.toml", ".copilot/settings.json"] {
+                let registered = std::fs::read_to_string(home.join(registered))?;
+                assert!(registered.contains("facet-kit@symposium"), "{registered}");
+            }
+            let not_installed: Vec<&str> = reported
+                .iter()
+                .filter(|event| event["kind"] == "info")
+                .filter_map(|event| event["message"].as_str())
+                .filter(|message| message.contains("Kiro") && message.contains("OpenCode"))
+                .collect();
+            assert_eq!(not_installed.len(), 1, "{reported:#?}");
+            for (_, name, _) in &installed {
+                assert!(!not_installed[0].contains(name), "{not_installed:?}");
+            }
+            let not_registered = reported
+                .iter()
+                .filter_map(|event| event["message"].as_str())
+                .filter(|message| message.contains("MCP"))
+                .count();
+            assert_eq!(not_registered, 1, "{reported:#?}");
+            for (agent, file) in user_mcp_files(&ctx) {
+                let registered = std::fs::read_to_string(&file).unwrap_or_default();
+                assert!(
+                    !registered.contains("--facet-kit-stdio"),
+                    "{agent}: {registered}"
+                );
+            }
+
+            ctx.symposium(&["use", "--global", "--remove", "facet-kit"])
+                .await?;
+            for (agent, _, plugin) in &installed {
+                assert!(!plugin.exists(), "{agent} keeps {}", plugin.display());
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_global_outside_a_workspace_evaluates_custom_predicates() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0"],
+        async |mut ctx| {
+            let kit = ctx.sym.config_dir().join("plugins/checked-kit");
+            std::fs::create_dir_all(&kit)?;
+            std::fs::write(kit.join("check.sh"), "exit 0\n")?;
+            let mut manifest = String::from(
+                "name = \"checked-kit\"\n\n\
+                 [[installations]]\nname = \"check\"\nscript = \"check.sh\"\n\n\
+                 [[predicate]]\nname = \"checked\"\ncommand = \"check\"\n",
+            );
+            for (server, gate) in [("passing", "checked(on)"), ("failing", "not(checked(on))")] {
+                manifest.push_str(&format!(
+                    "\n[[mcp_servers]]\nname = \"checked-kit-{server}\"\n\
+                     command = \"/usr/bin/true\"\nargs = []\nenv = []\npredicates = [\"{gate}\"]\n"
+                ));
+            }
+            std::fs::write(kit.join("Symposium.toml"), manifest)?;
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+
+            ctx.symposium(&["use", "--global", "checked-kit"]).await?;
+
+            let registered = std::fs::read_to_string(ctx.sym.home_dir().join(".claude.json"))?;
+            assert!(registered.contains("checked-kit-passing"), "{registered}");
+            assert!(!registered.contains("checked-kit-failing"), "{registered}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+fn user_mcp_files(ctx: &TestContext) -> [(&'static str, PathBuf); 7] {
+    let home = ctx.sym.home_dir();
+    [
+        ("claude", home.join(".claude.json")),
+        ("codex", home.join(".codex/config.toml")),
+        ("copilot", home.join(".copilot/mcp-config.json")),
+        ("antigravity", home.join(".gemini/config/mcp_config.json")),
+        ("goose", home.join(".config/goose/config.yaml")),
+        ("kiro", home.join(".kiro/settings/mcp.json")),
+        ("opencode", home.join(".config/opencode/opencode.json")),
+    ]
+}
+
+fn registrations_of_facet_kit(ctx: &TestContext) -> Vec<(&'static str, usize)> {
+    user_mcp_files(ctx)
+        .into_iter()
+        .map(|(agent, file)| {
+            let registered = std::fs::read_to_string(file).unwrap_or_default();
+            (agent, registered.matches("--facet-kit-stdio").count())
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_global_outside_a_workspace_registers_mcp_servers_for_the_user() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0"],
+        async |mut ctx| {
+            let mut init = vec!["init", "--hook-scope", "global"];
+            for (agent, _) in user_mcp_files(&ctx) {
+                init.extend(["--add-agent", agent]);
+            }
+            ctx.sym.config.sync_debounce_secs = 0;
+            ctx.symposium(&init).await?;
+            fetch_facet_review(&ctx);
+
+            ctx.symposium(&["use", "--global", "facet-kit"]).await?;
+            for (agent, count) in registrations_of_facet_kit(&ctx) {
+                assert_eq!(count, 1, "{agent}");
+            }
+
+            let installed = snapshot(&ctx);
+            fetch_facet_review(&ctx);
+            ctx.symposium(&["use", "--global", "facet-kit"]).await?;
+            let reinstalled = snapshot(&ctx);
+            let changed: Vec<_> = installed
+                .keys()
+                .chain(reinstalled.keys())
+                .filter(|path| installed.get(*path) != reinstalled.get(*path))
+                .collect();
+            assert!(changed.is_empty(), "the second run changed {changed:#?}");
+
+            ctx.symposium(&["use", "--global", "--remove", "facet-kit"])
+                .await?;
+            for (agent, count) in registrations_of_facet_kit(&ctx) {
+                assert_eq!(count, 0, "{agent}");
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_remove_unregisters_the_mcp_servers_of_the_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0", "workspace-empty0"],
+        async |mut ctx| {
+            let own_entry = project_mcp_entry(&ctx);
+            let mut init = vec!["init", "--hook-scope", "global"];
+            for (agent, _) in user_mcp_files(&ctx) {
+                init.extend(["--add-agent", agent]);
+            }
+            ctx.symposium(&init).await?;
+            fetch_facet_review(&ctx);
+
+            for scope in [&[][..], &["--global"]] {
+                ctx.symposium(&[&["use", "facet-kit"][..], scope].concat())
+                    .await?;
+                for (agent, count) in registrations_of_facet_kit(&ctx) {
+                    assert_eq!(count, 1, "{agent} {scope:?}");
+                }
+                ctx.symposium(&[&["use", "--remove", "facet-kit"][..], scope].concat())
+                    .await?;
+                for (agent, count) in registrations_of_facet_kit(&ctx) {
+                    assert_eq!(count, 0, "{agent} {scope:?}");
+                }
+            }
+            assert_eq!(project_mcp_entry(&ctx), own_entry);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+fn project_mcp_entry(ctx: &TestContext) -> String {
+    let file = ctx.workspace_root.as_ref().unwrap().join(".mcp.json");
+    if !file.exists() {
+        std::fs::write(
+            &file,
+            r#"{"mcpServers":{"facet-kit-server":{"command":"mine"}}}"#,
+        )
+        .unwrap();
+    }
+    std::fs::read_to_string(file).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_remove_unregisters_the_mcp_servers_of_a_nested_registry_entry() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-facets0"],
+        async |mut ctx| {
+            let entry = ctx.sym.config_dir().join("plugins/tools/widget");
+            std::fs::create_dir_all(&entry)?;
+            std::fs::write(
+                entry.join("Symposium.toml"),
+                "name = \"widget\"\n\n[[mcp_servers]]\nname = \"widget-server\"\n\
+                 command = \"/usr/bin/true\"\nargs = []\nenv = []\n",
+            )?;
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+            let claude = ctx.sym.home_dir().join(".claude.json");
+            let registered = || std::fs::read_to_string(&claude).unwrap_or_default();
+
+            ctx.symposium(&["use", "--global", "widget"]).await?;
+            assert!(registered().contains("widget-server"), "{}", registered());
+            ctx.symposium(&["use", "--global", "--remove", "widget"])
+                .await?;
+
+            assert!(!registered().contains("widget-server"), "{}", registered());
             Ok(())
         },
     )

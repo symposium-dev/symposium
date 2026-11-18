@@ -15,14 +15,16 @@
 //! when it applies. `--remove` is the inverse, and re-syncs so the plugin's
 //! skills are reaped straight away.
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 
 use crate::config::{Symposium, UseEntry};
 use crate::plugins::Plugin;
-use crate::pm::{PackageId, PmRegistry};
+use crate::pm::{PackageId, PmRegistry, Workspace};
 use crate::report::ReportEvent;
 
 /// Record an enablement for `name` and sync so its skills install now.
@@ -34,26 +36,29 @@ pub async fn use_plugin(
     update: UpdateLevel,
 ) -> Result<()> {
     let deps = sym.workspace(cwd);
+    use_in(sym, &deps, name, global, update).await
+}
+
+async fn use_in(
+    sym: &mut Symposium,
+    deps: &Arc<Workspace>,
+    name: &str,
+    global: bool,
+    update: UpdateLevel,
+) -> Result<()> {
     let pms = deps.pms();
     let registry = crate::plugins::load_registry(sym).await;
-    let id = match pms
-        .identify(&registry.plugins, name, UpdateLevel::Check)
-        .await
-    {
-        Ok(id) => id,
+    let found = match pms.find(&registry.plugins, name, UpdateLevel::Check).await {
+        Ok(found) => found,
         Err(e) => bail!("{e} (try `symposium search {name}`)"),
     };
+    let id = pms.identity(&found).await?;
 
     // `disable` outranks every way of enabling a plugin, `use` included, so
     // recording an entry here would report success and then install nothing.
     // Re-enabling is dropping the `disable` entry, which is a deliberate edit
     // rather than something `use` undoes on the user's behalf.
-    if sym
-        .config
-        .plugins
-        .is_disabled(pms, &PackageId::any_version(&id.pm, name))
-        .await
-    {
+    if sym.config.plugins.is_disabled(pms, &found).await {
         bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
     }
 
@@ -61,13 +66,7 @@ pub async fn use_plugin(
     // enabled by configuration, so there is nothing to record. The exceptions
     // are a dormant plugin, for which `use` is exactly the wake-up call, and
     // `--global`, which also installs the plugin for the user.
-    let mut registry_plugin = None;
-    for plugin in &registry.plugins {
-        if pms.identity(&plugin.canonical).await? == id {
-            registry_plugin = Some(plugin);
-            break;
-        }
-    }
+    let registry_plugin = registry_plugin_of(pms, &registry.plugins, &id).await?;
     let dormant = registry_plugin.is_some_and(|p| p.manifest.requires_use);
     let already_trusted = registry_plugin.is_some() && !dormant && !global;
     if already_trusted {
@@ -86,7 +85,7 @@ pub async fn use_plugin(
     // load, the same check every load route makes.
     if registry_plugin.is_none() {
         let audits = crate::audits::AuditIndex::configured(sym);
-        for plugin in pms.load_plugin(&id, UpdateLevel::Check).await {
+        for plugin in pms.load_plugin(&found, UpdateLevel::Check).await {
             if let Some(revocation) = audits.revocation(pms, &plugin.canonical).await {
                 bail!("`{name}` is {revocation}; it cannot be enabled");
             }
@@ -98,10 +97,11 @@ pub async fn use_plugin(
         bail!("{e}; pass --global to enable `{name}` everywhere");
     }
 
+    let recorded = registry_plugin.map_or(&found.name, |p| &p.manifest.name);
     let entry = match &workspace_root {
-        _ if global => UseEntry::Global(name.to_string()),
+        _ if global => UseEntry::Global(recorded.clone()),
         Some(root) => UseEntry::Workspace {
-            name: name.to_string(),
+            name: recorded.clone(),
             workspace: root.clone(),
         },
         None => unreachable!("checked above"),
@@ -127,7 +127,7 @@ pub async fn use_plugin(
         sym.save_config().context("failed to write user config")?;
         tracing::info!(
             report = %ReportEvent::PluginEnabled {
-                name: name.to_string(),
+                name: recorded.clone(),
                 global,
             },
         );
@@ -135,7 +135,9 @@ pub async fn use_plugin(
 
     // Install now rather than waiting for the next sync.
     if workspace_root.is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+        crate::sync::sync(sym, deps, update).await?;
+    } else {
+        crate::sync::sync_user_plugins(sym, deps, update, &BTreeSet::new()).await?;
     }
     Ok(())
 }
@@ -157,10 +159,14 @@ pub async fn remove_plugin(
     let workspace_root = deps.root().await.map(Path::to_path_buf);
     let pms = deps.pms();
     let registry = crate::plugins::load_registry(sym).await;
-    let id = pms
-        .identify(&registry.plugins, name, UpdateLevel::Check)
+    let found = pms
+        .find(&registry.plugins, name, UpdateLevel::Check)
         .await
         .ok();
+    let id = match &found {
+        Some(found) => pms.identity(found).await.ok(),
+        None => None,
+    };
 
     let used = std::mem::take(&mut sym.config.plugins.used);
     let before = used.len();
@@ -189,10 +195,39 @@ pub async fn remove_plugin(
         },
     );
 
+    let registry_plugin = match &id {
+        Some(id) => registry_plugin_of(pms, &registry.plugins, id)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let disabled = match (registry_plugin, &found) {
+        (Some(plugin), _) => crate::sync::declared_mcp_servers([plugin]),
+        (None, Some(found)) => {
+            crate::sync::declared_mcp_servers(&pms.load_plugin(found, UpdateLevel::None).await)
+        }
+        (None, None) => BTreeSet::new(),
+    };
     if workspace_root.is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+        crate::sync::sync_disabling(sym, &deps, update, &disabled).await?;
+    } else {
+        crate::sync::sync_user_plugins(sym, &deps, update, &disabled).await?;
     }
     Ok(())
+}
+
+async fn registry_plugin_of<'a>(
+    pms: &PmRegistry,
+    plugins: &'a [Plugin],
+    id: &PackageId,
+) -> Result<Option<&'a Plugin>> {
+    for plugin in plugins {
+        if pms.identity(&plugin.canonical).await? == *id {
+            return Ok(Some(plugin));
+        }
+    }
+    Ok(None)
 }
 
 fn in_scope(entry: &UseEntry, global: bool, workspace_root: Option<&Path>) -> bool {
@@ -222,3 +257,6 @@ async fn names(
                 .as_ref()
                 == id)
 }
+
+#[cfg(test)]
+mod tests;

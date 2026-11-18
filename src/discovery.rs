@@ -204,7 +204,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
 /// `auto-enable` intentionally contributes only (1): it is consent for what a
 /// dependency you already have carries, not a way to add crates. Declined
 /// packages are pruned. A `use` name is resolved through the package managers
-/// ([`PmRegistry::identify`]) at `update`: one that names a plugin in
+/// ([`PmRegistry::find`]) at `update`: one that names a plugin in
 /// `registry` is left out, since that plugin is loaded already and
 /// [`used_plugins`] wakes it, and one that no package manager has is skipped.
 pub async fn enabled_dependencies(
@@ -238,30 +238,34 @@ pub async fn enabled_dependencies(
             registry_ids.insert(id);
         }
     }
-    for (name, id) in used {
-        let named = PackageId::any_version(&id.pm, name);
+    for (found, id) in used {
         if !registry_ids.contains(&id)
-            && !plugins.is_disabled(pms, &named).await
+            && !plugins.is_disabled(pms, &found).await
             && known.insert(id)
         {
-            enabled.push(named);
+            enabled.push(found);
         }
     }
 
     enabled
 }
 
-pub(crate) async fn resolve_used<'a>(
-    sym: &'a Symposium,
+pub(crate) async fn resolve_used(
+    sym: &Symposium,
     pms: &PmRegistry,
     registry: &[Plugin],
     workspace_root: &Path,
     update: UpdateLevel,
-) -> Vec<(&'a str, PackageId)> {
+) -> Vec<(PackageId, PackageId)> {
     let mut used = Vec::new();
     for name in sym.config.plugins.used_names_in(workspace_root) {
-        match pms.identify(registry, name, update).await {
-            Ok(id) => used.push((name, id)),
+        let resolved = async {
+            let found = pms.find(registry, name, update).await?;
+            let id = pms.identity(&found).await?;
+            anyhow::Ok((found, id))
+        };
+        match resolved.await {
+            Ok(pair) => used.push(pair),
             Err(e) => tracing::warn!(error = %e, "skipping `[plugins] use` entry"),
         }
     }

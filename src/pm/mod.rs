@@ -428,11 +428,12 @@ impl PmRegistry {
         Ok(canonical[1..].iter().any(|name| *name == canonical[0]))
     }
 
-    /// The identity of the package a user-typed `name` refers to. A plugin in
-    /// `plugins` with that name under its registry's rule wins; otherwise the
-    /// first package manager whose [`find`](PmInstance::find) has the name at
-    /// `update` answers. A name no package manager has is an error.
-    pub async fn identify(
+    /// The package a user-typed `name` refers to, named as its package manager
+    /// has it. A plugin in `plugins` with that name under its registry's rule
+    /// wins; otherwise the first package manager whose
+    /// [`find`](PmInstance::find) has the name at `update` answers. A name no
+    /// package manager has is an error.
+    pub async fn find(
         &self,
         plugins: &[Plugin],
         name: &str,
@@ -447,15 +448,29 @@ impl PmRegistry {
                 .await
                 .unwrap_or(false)
             {
-                return self.identity(&plugin.canonical).await;
+                return Ok(PackageId::any_version(
+                    &plugin.canonical.pm,
+                    &plugin.canonical.name,
+                ));
             }
         }
         for inst in &self.instances {
             if let Some(id) = inst.find(name, update).await {
-                return self.identity(&id).await;
+                return Ok(PackageId::any_version(&id.pm, &id.name));
             }
         }
         anyhow::bail!("no package named `{name}`")
+    }
+
+    /// The identity of the package [`find`](Self::find) answers with.
+    pub async fn identify(
+        &self,
+        plugins: &[Plugin],
+        name: &str,
+        update: UpdateLevel,
+    ) -> Result<PackageId> {
+        self.identity(&self.find(plugins, name, update).await?)
+            .await
     }
 
     /// Fetch a package via the instance named in its id.

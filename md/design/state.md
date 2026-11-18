@@ -4,7 +4,7 @@ Documents the kind of state maintained by the Symposium agent.
 
 ## `state.toml`
 
-`state.toml` in the config directory (`~/.symposium/`) holds what Symposium needs to remember between runs, as opposed to what the user configures. It records the version of the binary that last wrote it, the last update check, the MCP server ledger, and the trial enablement below. A file that cannot be parsed loads as the defaults.
+`state.toml` in the config directory (`~/.symposium/`) holds what Symposium needs to remember between runs, as opposed to what the user configures. It records the version of the binary that last wrote it, the last update check, the MCP server ledger, and the trial enablement and trial MCP servers below. A file that cannot be parsed loads as the defaults.
 
 ## MCP server ledger
 
@@ -32,6 +32,17 @@ trial-use = ["dormant-kit"]
 ```
 
 `--remove` drops the entry only when the name is listed there. `symposium use --global --remove` clears the name too when it removes that entry, so an entry the user writes again afterwards is theirs. The user may have written the same entry before trying the plugin, and it must survive the trial; and the manifest may have gained a gate since, so whether the plugin is dormant now says nothing about who added the entry.
+
+## Trial MCP servers
+
+`symposium plugin try` also records the names of the MCP servers the tried plugin declares, under the plugin's name:
+
+```toml
+[trial-mcp-servers]
+served-kit = ["served-kit-server"]
+```
+
+`--remove` takes these names out of `state.toml` and unregisters them along with the ones the plugin declares when read through its link. That read fails once the plugin's directory is deleted or no longer loads, and without the record its servers would stay in the user-level files, which no project cleanup reaches. Trying the same directory again adds the names its manifest declares by then. Removal still goes through the [ledger](#mcp-server-ledger) only, and keeps a name an active plugin still declares.
 
 ## Agent choices
 

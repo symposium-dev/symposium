@@ -35,6 +35,26 @@ waiting for the next one. A `--global` entry installs the plugin once for you
 on the agents that support it, and per project on the others; see
 [`symposium sync`](./symposium-sync.md#plugins-enabled-for-every-workspace).
 
+Without `--global` the command must run inside a workspace. With it, it runs
+anywhere: outside a workspace it installs the plugin for you right away on
+every configured agent that keeps plugins at user level (Claude Code, Codex
+CLI, GitHub Copilot, Antigravity CLI and Goose). Kiro and OpenCode read skills
+from the project only, so nothing is installed for them there, and the output
+says so in one line:
+
+```text
+not installed for Kiro, OpenCode: the next sync in a workspace installs the skills there
+```
+
+Its MCP servers are registered right away as well, in each configured
+agent's user-level file. With `hook-scope = "project"` they belong in a
+project, so the next sync in a workspace registers them there instead, and the
+output says so:
+
+```text
+MCP servers not registered: with `hook-scope = "project"` the next sync in a workspace registers them there
+```
+
 Two things a `use` entry can enable:
 
 - **A dependency's embedded plugin.** Depending on a crate means compiling its
@@ -59,6 +79,8 @@ cargo matches crate names, so `widget-lib` and `widget_lib` are the same).
 When a registry plugin and a crate share the name, the registry plugin wins.
 Otherwise the command fails with `no package named <NAME>` and writes nothing.
 Use [`symposium search`](./symposium-search.md) to find the right name.
+The entry records the name the package goes by, so `symposium use widget_lib`
+records `widget-lib`.
 
 A crate the [audits list](./audits.md#revocations) revokes cannot be enabled:
 `use` fails with the revocation and its reason (for example ``revoked by the
@@ -71,8 +93,13 @@ refused the same way.
 
 Removes the entry in the matching scope: without `--global` the entry recorded
 for the current workspace, with it the unscoped one. A scope mismatch (or no
-entry at all) is an error rather than a silent success. The sync that follows
-reaps the plugin's installed skills.
+entry at all) is an error rather than a silent success. The name is matched
+the way `use` matches it, so either spelling of a crate removes its entry. The
+sync that follows reaps the plugin's installed skills and unregisters the MCP
+servers symposium registered for it, from your user-level agent files and this
+workspace's, unless a plugin still enabled declares a server of the same name.
+Outside a workspace, `--remove --global` removes what was installed for you,
+MCP servers included.
 
 ## Example
 

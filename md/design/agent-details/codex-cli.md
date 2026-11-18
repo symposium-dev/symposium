@@ -253,7 +253,9 @@ enabled = true
 ```
 
 and a copy of the compiled directory in Codex's plugin cache,
-`plugins/cache/symposium/<plugin>/0.0.0/`, named after the manifest version.
+`plugins/cache/symposium/<plugin>/<version>/`, named after the version in the
+compiled manifest (`compile::compiled_version` reads it back from the staged
+directory), which is the directory Codex looks for.
 
 - The marketplace is the staging root, whose `.claude-plugin/marketplace.json`
   symposium writes while Codex or the Copilot CLI has plugins. A `symposium`

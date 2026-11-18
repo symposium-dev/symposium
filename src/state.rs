@@ -3,9 +3,10 @@
 //! Tracks the version of the binary that last touched the config/cache
 //! directories, the last time an update check was performed, the MCP
 //! server entries Symposium wrote into agent configs, and the `use` entries
-//! `plugin try` added.
+//! `plugin try` added and the MCP servers each tried plugin declared.
 //! Future versions can use a version mismatch to trigger migrations.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -46,6 +47,12 @@ pub struct State {
     /// only these, since the user may have written the same entry.
     #[serde(rename = "trial-use")]
     pub trial_uses: Vec<String>,
+
+    #[serde(
+        rename = "trial-mcp-servers",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub trial_mcp_servers: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +75,8 @@ struct RawState {
     mcp_servers: Vec<McpRegistration>,
     #[serde(default, rename = "trial-use")]
     trial_uses: Vec<String>,
+    #[serde(default, rename = "trial-mcp-servers")]
+    trial_mcp_servers: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl RawState {
@@ -79,6 +88,7 @@ impl RawState {
             explicit_agents: self.explicit_agents,
             mcp_servers: self.mcp_servers,
             trial_uses: self.trial_uses,
+            trial_mcp_servers: self.trial_mcp_servers,
         }
     }
 }
@@ -92,6 +102,7 @@ impl Default for State {
             explicit_agents: None,
             mcp_servers: Vec::new(),
             trial_uses: Vec::new(),
+            trial_mcp_servers: BTreeMap::new(),
         }
     }
 }
@@ -207,6 +218,31 @@ pub fn forget_trial_use(config_dir: &Path, name: &str) {
     if state.trial_uses.len() != before {
         save(config_dir, &state);
     }
+}
+
+pub fn record_trial_mcp_servers(config_dir: &Path, plugin: &str, servers: BTreeSet<String>) {
+    if servers.is_empty() {
+        return;
+    }
+    let mut state = load(config_dir).unwrap_or_default();
+    let recorded = state
+        .trial_mcp_servers
+        .entry(plugin.to_string())
+        .or_default();
+    let before = recorded.len();
+    recorded.extend(servers);
+    if recorded.len() != before {
+        save(config_dir, &state);
+    }
+}
+
+pub fn take_trial_mcp_servers(config_dir: &Path, plugin: &str) -> BTreeSet<String> {
+    let mut state = load(config_dir).unwrap_or_default();
+    let Some(servers) = state.trial_mcp_servers.remove(plugin) else {
+        return BTreeSet::new();
+    };
+    save(config_dir, &state);
+    servers
 }
 
 /// Persist selection provenance without disturbing update checks or MCP registrations.
@@ -352,6 +388,22 @@ mod tests {
 
         forget_mcp_registrations(tmp.path(), &registrations[..1]);
         assert_eq!(mcp_registrations(tmp.path()), registrations[1..]);
+    }
+
+    #[test]
+    fn trial_mcp_servers_accumulate_and_are_taken_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<BTreeSet<_>>();
+        record_trial_use(tmp.path(), "kit");
+        record_trial_mcp_servers(tmp.path(), "kit", names(&["a"]));
+        record_trial_mcp_servers(tmp.path(), "kit", names(&["b"]));
+
+        assert_eq!(
+            take_trial_mcp_servers(tmp.path(), "kit"),
+            names(&["a", "b"])
+        );
+        assert!(take_trial_mcp_servers(tmp.path(), "kit").is_empty());
+        assert_eq!(trial_uses(tmp.path()), ["kit"]);
     }
 
     #[test]
