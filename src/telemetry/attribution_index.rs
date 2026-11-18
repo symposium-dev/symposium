@@ -170,6 +170,7 @@ impl MarkerReconciliation {
 pub(crate) enum MarkerReconcileError {
     UnsafeSlot,
     UnsafeDirectory,
+    OutsideLockedParent,
     Missing,
     Read(io::ErrorKind),
     Generate,
@@ -183,6 +184,9 @@ impl fmt::Display for MarkerReconcileError {
             Self::UnsafeSlot => formatter.write_str("installed skill slot is unsafe"),
             Self::UnsafeDirectory => {
                 formatter.write_str("installed skill slot is not a real directory")
+            }
+            Self::OutsideLockedParent => {
+                formatter.write_str("staged skill is outside its locked parent")
             }
             Self::Missing => formatter.write_str("installed skill marker is missing"),
             Self::Read(_) => formatter.write_str("failed to read installed skill marker"),
@@ -214,6 +218,37 @@ pub(crate) fn reconcile_marker(
     ensure_real_directory(&skill_dir).map_err(|_| MarkerReconcileError::UnsafeDirectory)?;
     reconcile_marker_at_with(&skill_dir, action, || {
         InstallationBinding::generate().map_err(|_| MarkerReconcileError::Generate)
+    })
+}
+
+/// Mint and write a marker into a staged directory under one locked parent.
+///
+/// The staged marker moves with the content when sync replaces the installed
+/// slot, so changed bytes can never retain the previous generation's binding.
+///
+/// # Errors
+///
+/// Returns a content-free path, I/O, serialization, or random-generation
+/// failure.
+pub(crate) fn stage_rotated_marker(
+    parent: &LockedParent<'_>,
+    staged_dir: &Path,
+) -> Result<MarkerReconciliation, MarkerReconcileError> {
+    ensure_real_directory(staged_dir).map_err(|_| MarkerReconcileError::UnsafeDirectory)?;
+    let staged_parent = staged_dir
+        .parent()
+        .ok_or(MarkerReconcileError::OutsideLockedParent)?;
+    let staged_parent = dunce::canonicalize(staged_parent)
+        .map_err(|_| MarkerReconcileError::OutsideLockedParent)?;
+    if staged_parent != parent.path() {
+        return Err(MarkerReconcileError::OutsideLockedParent);
+    }
+
+    let binding = InstallationBinding::generate().map_err(|_| MarkerReconcileError::Generate)?;
+    write_marker(&staged_dir.join(MARKER_FILE_NAME), binding)?;
+    Ok(MarkerReconciliation {
+        binding,
+        change: MarkerChange::Rotated,
     })
 }
 
@@ -1023,7 +1058,7 @@ pub(in crate::telemetry) fn lookup_installed_skill(
 
 /// Content-free failure while loading a present index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IndexReadError {
+pub(crate) enum IndexReadError {
     Io(io::ErrorKind),
     TooLarge { maximum: usize },
     Malformed { line: usize, column: usize },
@@ -1033,6 +1068,7 @@ enum IndexReadError {
     ReservedSlot,
     DuplicateSlot,
     UnavailableWithEntries,
+    DocumentUnavailable,
     Unsafe,
 }
 
@@ -1041,10 +1077,28 @@ enum DecodedIndex {
     Unavailable,
 }
 
+/// One index decoded under the write guard for its physical parent.
+///
+/// The snapshot deliberately has no `Debug` or serialization implementation:
+/// it retains its project-local parent path. Sync loads it once and reuses it
+/// for every slot in that parent, avoiding a full bounded-index decode per
+/// installed skill.
+pub(crate) struct InstalledIndexSnapshot {
+    parent: PathBuf,
+    contents: Result<Option<BTreeMap<String, InstallationIndexEntry>>, IndexReadError>,
+}
+
 fn read_index(skills_parent: &Path) -> Result<Option<DecodedIndex>, IndexReadError> {
-    let path = skills_parent
-        .join(INDEX_DIRECTORY_NAME)
-        .join(INDEX_FILE_NAME);
+    let directory = skills_parent.join(INDEX_DIRECTORY_NAME);
+    match ensure_real_directory_or_absent(&directory) {
+        Ok(false) => return Ok(None),
+        Ok(true) => {}
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(IndexReadError::Unsafe);
+        }
+        Err(error) => return Err(IndexReadError::Io(error.kind())),
+    }
+    let path = directory.join(INDEX_FILE_NAME);
     let Some(bytes) =
         read_bounded_regular(&path, MAX_INDEX_BYTES).map_err(|error| match error {
             BoundedReadError::Io(kind) => IndexReadError::Io(kind),
@@ -1055,6 +1109,61 @@ fn read_index(skills_parent: &Path) -> Result<Option<DecodedIndex>, IndexReadErr
         return Ok(None);
     };
     decode_index(&bytes).map(Some)
+}
+
+/// Decode the existing index once while its physical parent is write-locked.
+///
+/// Read failures are retained inside the snapshot so every slot observes the
+/// same unavailable state without re-reading the file.
+pub(crate) fn load_index_snapshot(parent: &LockedParent<'_>) -> InstalledIndexSnapshot {
+    let contents = match read_index(parent.path()) {
+        Ok(None) => Ok(None),
+        Ok(Some(DecodedIndex::Complete(entries))) => Ok(Some(
+            entries
+                .into_iter()
+                .map(|entry| (entry.slot.clone(), entry))
+                .collect(),
+        )),
+        Ok(Some(DecodedIndex::Unavailable)) => Err(IndexReadError::DocumentUnavailable),
+        Err(error) => Err(error),
+    };
+    InstalledIndexSnapshot {
+        parent: parent.path().to_path_buf(),
+        contents,
+    }
+}
+
+impl InstalledIndexSnapshot {
+    /// Recover one prior entry only when its exact slot and binding agree.
+    ///
+    /// A missing index, slot, or mismatched generation is a definite absence.
+    /// Unreadable or document-level unavailable metadata remains unavailable.
+    pub(crate) fn matching_entry(
+        &self,
+        parent: &LockedParent<'_>,
+        slot: &str,
+        binding: InstallationBinding,
+    ) -> Result<Option<InstallationIndexEntry>, IndexReadError> {
+        if parent.path() != self.parent {
+            return Err(IndexReadError::Unsafe);
+        }
+        validate_slot(slot).map_err(|error| match error {
+            PrepareIndexError::UnsafeSlot => IndexReadError::UnsafeSlot,
+            PrepareIndexError::ReservedSlot => IndexReadError::ReservedSlot,
+            PrepareIndexError::DuplicateSlot
+            | PrepareIndexError::Serialize
+            | PrepareIndexError::SizeAccounting => {
+                unreachable!("slot validation returns only slot errors")
+            }
+        })?;
+        let Some(entries) = self.contents.as_ref().map_err(|error| *error)? else {
+            return Ok(None);
+        };
+        Ok(entries
+            .get(slot)
+            .filter(|entry| entry.binding == binding)
+            .cloned())
+    }
 }
 
 fn decode_index(bytes: &[u8]) -> Result<DecodedIndex, IndexReadError> {
@@ -1317,6 +1426,56 @@ mod tests {
         let encoded_attribution = serde_json::to_string(&attribution("debugging")).unwrap();
 
         assert!(!encoded_attribution.contains(encoded_binding.trim_matches('"')));
+    }
+
+    #[test]
+    fn staged_marker_is_bound_to_its_locked_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(root.path());
+        let parent = root.path().join("project/.agents/skills");
+
+        with_locked_parent(&sym, &parent, |locked| {
+            let staging = tempfile::tempdir_in(locked.path()).unwrap();
+            let marker = stage_rotated_marker(locked, staging.path()).unwrap();
+
+            assert_eq!(marker.change(), MarkerChange::Rotated);
+            assert!(
+                read_marker(&staging.path().join(MARKER_FILE_NAME)).unwrap()
+                    == Some(marker.binding())
+            );
+
+            let outside = tempfile::tempdir_in(root.path()).unwrap();
+            assert!(matches!(
+                stage_rotated_marker(locked, outside.path()),
+                Err(MarkerReconcileError::OutsideLockedParent)
+            ));
+        });
+    }
+
+    #[test]
+    fn prior_index_snapshot_is_bound_to_its_locked_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(root.path());
+        let first = root.path().join("project/.agents/skills");
+        let second = root.path().join("project/.claude/skills");
+        let config = acquire_config_guard(&sym).unwrap();
+        let acquisition = acquire_write_guards(
+            &sym,
+            &config,
+            [
+                ParentLockRequest::desired(first.clone()),
+                ParentLockRequest::desired(second.clone()),
+            ],
+        )
+        .unwrap();
+        let first = acquisition.guards().parent(&first).unwrap();
+        let second = acquisition.guards().parent(&second).unwrap();
+        let snapshot = load_index_snapshot(&first);
+
+        assert!(matches!(
+            snapshot.matching_entry(&second, "debugging", binding(1)),
+            Err(IndexReadError::Unsafe)
+        ));
     }
 
     #[test]
@@ -1872,6 +2031,41 @@ mod tests {
             )
             .unwrap();
         });
+        assert_eq!(
+            lookup_installed_skill(&sym, [parent], "debugging"),
+            InstalledSkillAttribution::AttributionUnavailable
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_directory_symlink_is_unavailable_to_lookup_and_prior_snapshot() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(root.path());
+        let parent = root.path().join("project/.agents/skills");
+        let external = root.path().join("external-index");
+        fs::create_dir_all(parent.join("debugging")).unwrap();
+        fs::create_dir(&external).unwrap();
+
+        with_locked_parent(&sym, &parent, |locked| {
+            let marker = reconcile_marker(locked, "debugging", MarkerAction::Rotate).unwrap();
+            let prepared = prepare_index(vec![InstallationIndexEntry::ineligible(
+                "debugging".into(),
+                marker.binding(),
+            )])
+            .unwrap();
+            fs::write(external.join(INDEX_FILE_NAME), prepared.encoded).unwrap();
+            symlink(&external, locked.path().join(INDEX_DIRECTORY_NAME)).unwrap();
+
+            let snapshot = load_index_snapshot(locked);
+            assert!(matches!(
+                snapshot.matching_entry(locked, "debugging", marker.binding()),
+                Err(IndexReadError::Unsafe)
+            ));
+        });
+
         assert_eq!(
             lookup_installed_skill(&sym, [parent], "debugging"),
             InstalledSkillAttribution::AttributionUnavailable

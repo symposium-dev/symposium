@@ -91,8 +91,12 @@ Opt-in, per-user usage telemetry. Off by default. When enabled, Symposium
 appends anonymous events as JSON lines to a local, per-day log under
 `~/.symposium/telemetry/`. **Nothing is uploaded automatically** — you inspect
 and share the data yourself with `cargo agents telemetry show`. The preference
-is also collected during `cargo agents init`. See the
-[telemetry design chapter](../design/telemetry.md) for the event format.
+is also collected during `cargo agents init`. Sync also writes a gitignored
+`.symposium-index/` beside the managed skills in each project skills directory
+so later invocations can be attributed to the exact installed generation.
+Disabling telemetry removes those generated indexes best-effort without
+removing the installed skills or their ownership markers. See the [telemetry
+design chapter](../design/telemetry.md) for the event format.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -219,6 +223,7 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | `~/.symposium/config.toml` | User configuration |
 | `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
 | `~/.symposium/telemetry/` | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
+| `<project>/<skills-parent>/.symposium-index/` | Gitignored local bindings between managed skill slots and safe telemetry attribution (created only while telemetry is enabled) |
 | `~/.symposium/plugins/` | User-defined plugins |
 | `~/.symposium/installed/` | Plugins enabled with `use --global`, compiled for the agents to install |
 | `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |

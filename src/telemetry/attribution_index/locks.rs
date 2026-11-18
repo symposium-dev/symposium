@@ -685,8 +685,9 @@ enum RealPathError {
 }
 
 fn canonical_real_directory(path: &Path) -> Result<PathBuf, RealPathError> {
-    ensure_real_directory(path)?;
-    dunce::canonicalize(path).map_err(|error| RealPathError::Io(error.kind()))
+    let canonical = dunce::canonicalize(path).map_err(|error| RealPathError::Io(error.kind()))?;
+    ensure_real_directory(&canonical)?;
+    Ok(canonical)
 }
 
 fn ensure_real_directory(path: &Path) -> Result<(), RealPathError> {
@@ -843,6 +844,29 @@ mod tests {
         let parent = temporary.path().join("project/.agents/skills");
         fs::create_dir_all(&parent).unwrap();
         let alias = parent.join(".");
+
+        let acquisition = acquire_write_guards_in(
+            temporary.path().join("locks"),
+            [request(&parent), request(&alias)],
+        )
+        .unwrap();
+        let direct = acquisition.guards().parent(&parent).unwrap();
+        let through_alias = acquisition.guards().parent(&alias).unwrap();
+
+        assert_eq!(direct.path(), through_alias.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_symlink_aliases_share_one_physical_parent_guard() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().join("project/.agents/skills");
+        let alias = temporary.path().join("project/.codex/skills");
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        symlink(&parent, &alias).unwrap();
 
         let acquisition = acquire_write_guards_in(
             temporary.path().join("locks"),

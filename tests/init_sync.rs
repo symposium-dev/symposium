@@ -17,12 +17,15 @@ async fn sync_preserves_installed_skill_after_failed_update() {
         &["plugins0", "workspace0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            ctx.sym.config.telemetry.enabled = true;
             ctx.symposium(&["sync"]).await?;
             ctx.sym.config.sync_debounce_secs = 0;
 
             let root = ctx.workspace_root.clone().unwrap();
             let installed = find_installed_skill(&root.join(".agents/skills"), "serde-guidance");
             let old_content = std::fs::read(installed.join("SKILL.md"))?;
+            let old_marker = std::fs::read(installed.join(".symposium"))?;
+            let old_index = std::fs::read(root.join(".agents/skills/.symposium-index/index.json"))?;
             assert!(installed.join(".symposium").exists());
 
             // Adding a file forces a refresh. Making it unreadable lets source
@@ -53,6 +56,11 @@ async fn sync_preserves_installed_skill_after_failed_update() {
                 old_content
             );
             assert!(installed.join(".symposium").exists());
+            assert_eq!(std::fs::read(installed.join(".symposium"))?, old_marker);
+            assert_eq!(
+                std::fs::read(root.join(".agents/skills/.symposium-index/index.json"))?,
+                old_index,
+            );
             Ok(())
         },
     )
@@ -107,6 +115,96 @@ fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
         hits,
     );
     hits.pop().unwrap()
+}
+
+/// Telemetry consent controls only the local attribution index. The installed
+/// skill and its structured ownership marker survive disabling it.
+#[tokio::test]
+async fn sync_publishes_and_removes_installed_attribution_metadata() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            ctx.sym.config.agents.push(symposium::config::AgentEntry {
+                name: "copilot".into(),
+            });
+            ctx.sym.config.plugins.auto_enable.push("crate-a".into());
+            ctx.sym.config.telemetry.enabled = true;
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+
+            let project = ctx.workspace_root.clone().unwrap();
+            let parent = project.join(".agents/skills");
+            let installed = find_installed_skill(&parent, "a-guidance");
+            let slot = installed.file_name().unwrap().to_str().unwrap();
+            let marker_bytes = std::fs::read(installed.join(".symposium"))?;
+            let marker: Value = serde_json::from_slice(&marker_bytes)?;
+            let index_dir = parent.join(".symposium-index");
+            let index: Value =
+                serde_json::from_slice(&std::fs::read(index_dir.join("index.json"))?)?;
+            let entry = index["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["slot"] == slot)
+                .expect("installed slot must appear in its parent index");
+
+            assert_eq!(entry["binding"], marker["binding"]);
+            assert_eq!(marker["version"], 1);
+
+            // A real comparison of identical content refreshes the marker
+            // mtime but retains the same attribution generation.
+            ctx.sym.config.sync_debounce_secs = 0;
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+            let unchanged_marker = std::fs::read(installed.join(".symposium"))?;
+            assert_eq!(unchanged_marker, marker_bytes);
+
+            // Replacing delivered content stages a new marker with it. The
+            // rebuilt index must bind the new generation, never the old one.
+            let source = project.join("crate-a/skills/a-guidance/SKILL.md");
+            std::fs::write(
+                &source,
+                "---\nname: a-guidance\ndescription: updated\ndepends-on: crate-a\n---\nupdated\n",
+            )?;
+            ctx.symposium(&["sync"]).await?;
+            let updated_marker_bytes = std::fs::read(installed.join(".symposium"))?;
+            let updated_marker: Value = serde_json::from_slice(&updated_marker_bytes)?;
+            let updated_index: Value =
+                serde_json::from_slice(&std::fs::read(index_dir.join("index.json"))?)?;
+            let updated_entry = updated_index["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["slot"] == slot)
+                .expect("updated slot must remain in its parent index");
+            assert_ne!(updated_marker["binding"], marker["binding"]);
+            assert_eq!(updated_entry["binding"], updated_marker["binding"]);
+
+            ctx.sym.config.telemetry.enabled = false;
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(!index_dir.exists());
+            assert!(installed.join(".symposium").is_file());
+            assert_eq!(
+                std::fs::read(installed.join(".symposium"))?,
+                updated_marker_bytes
+            );
+
+            ctx.sym.config.telemetry.enabled = true;
+            ctx.sym.config.plugins.auto_enable.clear();
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(!installed.exists());
+            assert!(!index_dir.exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
 }
 
 /// A first `init` records the agents it detected in `state.toml`.

@@ -21,7 +21,11 @@ mod storage;
 mod sync_report;
 
 pub(crate) use attribution_index::{
-    MARKER_FILE_NAME as INSTALLATION_MARKER_FILE, is_reserved_skill_slot,
+    InstallationBinding, InstallationIndexEntry, InstalledIndexSnapshot, LockedParent,
+    MARKER_FILE_NAME as INSTALLATION_MARKER_FILE, MarkerAction, MarkerChange, MarkerReconcileError,
+    MarkerReconciliation, ParentLockRequest, ParentWriteAcquisition, acquire_config_guard,
+    acquire_write_guards, is_reserved_skill_slot, load_index_snapshot, prepare_index,
+    prepare_unavailable_index, reconcile_marker, remove_index, replace_index, stage_rotated_marker,
 };
 pub(crate) use resolution_witness::{
     OptionalWitnessMode, ResolutionEvidence, chained_route as chained_resolution_evidence,

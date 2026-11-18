@@ -54,6 +54,7 @@ struct SyncResolutionInputs<'a> {
     custom_predicates: std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry>,
     predicate_cache_path: &'a Path,
     update: UpdateLevel,
+    retain_evidence: bool,
 }
 
 /// One deduplicated skill ready for installation.
@@ -86,6 +87,25 @@ impl SkillSyncStatus {
     }
 }
 
+/// Content result with changed generations carrying their installed binding.
+enum SkillSyncResult {
+    Debounced,
+    Unchanged,
+    Updated(crate::telemetry::InstallationBinding),
+    Installed(crate::telemetry::InstallationBinding),
+}
+
+impl SkillSyncResult {
+    fn status(&self) -> SkillSyncStatus {
+        match self {
+            Self::Debounced => SkillSyncStatus::Debounced,
+            Self::Unchanged => SkillSyncStatus::Unchanged,
+            Self::Updated(_) => SkillSyncStatus::Updated,
+            Self::Installed(_) => SkillSyncStatus::Installed,
+        }
+    }
+}
+
 /// One managed installation retained for cleanup and attribution indexing.
 ///
 /// This type deliberately has no `Debug`: its surrounding layout contains
@@ -96,19 +116,58 @@ struct InstalledSkill {
     /// `None` preserves a managed slot after a failed refresh without counting
     /// the failed attempt as an installation or update.
     status: Option<SkillSyncStatus>,
+    attribution: InstalledAttributionState,
+}
+
+/// Attribution state for content that survived one sync pass.
+///
+/// `Current` is backed by content and marker work completed in this pass.
+/// `Preserved` was read from an exact prior slot-and-binding match.
+/// `Unavailable` carries a known binding when possible so the rebuilt index
+/// can remain complete without authorizing fresh evidence.
+enum InstalledAttributionState {
+    Current(crate::telemetry::InstallationIndexEntry),
+    Preserved(crate::telemetry::InstallationIndexEntry),
+    Unavailable(Option<crate::telemetry::InstallationIndexEntry>),
+}
+
+impl InstalledAttributionState {
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Unavailable(None) => 0,
+            Self::Unavailable(Some(_)) => 1,
+            Self::Preserved(_) => 2,
+            Self::Current(_) => 3,
+        }
+    }
+
+    fn merge(&mut self, newer: Self) {
+        // Equal-strength states follow the last pass over a shared parent:
+        // that pass may have refreshed or rotated the marker after another
+        // agent recorded the same destination. Status precedence is folded
+        // separately and still retains the strongest filesystem outcome.
+        if newer.rank() >= self.rank() {
+            *self = newer;
+        }
+    }
+
+    fn entry(&self) -> Option<crate::telemetry::InstallationIndexEntry> {
+        match self {
+            Self::Current(entry) | Self::Preserved(entry) => Some(entry.clone()),
+            Self::Unavailable(entry) => entry.clone(),
+        }
+    }
 }
 
 /// Private filesystem result kept separate from the telemetry-safe report.
 struct InstalledLayout {
     skills: BTreeMap<PathBuf, InstalledSkill>,
-    managed_parents: BTreeSet<PathBuf>,
 }
 
 impl InstalledLayout {
     fn new() -> Self {
         Self {
             skills: BTreeMap::new(),
-            managed_parents: BTreeSet::new(),
         }
     }
 
@@ -118,12 +177,19 @@ impl InstalledLayout {
         slot: String,
         skill_index: usize,
         status: SkillSyncStatus,
+        attribution: InstalledAttributionState,
     ) {
-        self.record_present(destination, slot, skill_index, Some(status));
+        self.record_present(destination, slot, skill_index, Some(status), attribution);
     }
 
-    fn preserve(&mut self, destination: PathBuf, slot: String, skill_index: usize) {
-        self.record_present(destination, slot, skill_index, None);
+    fn preserve(
+        &mut self,
+        destination: PathBuf,
+        slot: String,
+        skill_index: usize,
+        attribution: InstalledAttributionState,
+    ) {
+        self.record_present(destination, slot, skill_index, None, attribution);
     }
 
     fn record_present(
@@ -132,16 +198,11 @@ impl InstalledLayout {
         slot: String,
         skill_index: usize,
         status: Option<SkillSyncStatus>,
+        attribution: InstalledAttributionState,
     ) {
-        let parent = destination
-            .parent()
-            .expect("BUG: an installed skill directory must have a parent")
-            .to_path_buf();
-        self.managed_parents.insert(parent);
-
-        self.skills
-            .entry(destination)
-            .and_modify(|installed| {
+        match self.skills.entry(destination) {
+            std::collections::btree_map::Entry::Occupied(mut occupied) => {
+                let installed = occupied.get_mut();
                 debug_assert_eq!(
                     installed.skill_index, skill_index,
                     "one installed slot must identify one resolved skill"
@@ -155,12 +216,17 @@ impl InstalledLayout {
                 if let Some(status) = status {
                     installed.status = Some(installed.status.map_or(status, |old| old.max(status)));
                 }
-            })
-            .or_insert(InstalledSkill {
-                slot,
-                skill_index,
-                status,
-            });
+                installed.attribution.merge(attribution);
+            }
+            std::collections::btree_map::Entry::Vacant(vacant) => {
+                vacant.insert(InstalledSkill {
+                    slot,
+                    skill_index,
+                    status,
+                    attribution,
+                });
+            }
+        }
     }
 }
 
@@ -179,10 +245,8 @@ pub(crate) struct SyncCompletion {
     pub(crate) report: crate::telemetry::SyncReport,
 }
 
-/// Complete private result before filesystem layout is handed to indexing.
 struct CompletedSync {
     completion: SyncCompletion,
-    layout: InstalledLayout,
 }
 
 /// Hard sync failure paired with the safe progress report accumulated so far.
@@ -364,7 +428,6 @@ impl SyncProgress {
                 plugin_changes,
                 report,
             },
-            layout: self.layout,
         }
     }
 
@@ -382,24 +445,6 @@ fn promote_to_partial(outcome: &mut crate::telemetry::SyncOutcome) {
     }
 }
 
-/// Create `path` and any missing ancestors up to `boundary`.
-///
-/// `boundary` is the workspace root — we never walk above it.
-pub(crate) fn create_managed_dir_all(path: &Path, boundary: &Path) -> Result<()> {
-    if path.exists() {
-        return Ok(());
-    }
-    if path == boundary {
-        fs::create_dir_all(path).with_context(|| format!("create {}", path.display()))?;
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        create_managed_dir_all(parent, boundary)?;
-    }
-    fs::create_dir(path).with_context(|| format!("create {}", path.display()))?;
-    Ok(())
-}
-
 /// Skills parent directory for an agent (e.g. `.claude/skills/` or
 /// `.agents/skills/`), derived from `Agent::project_skill_dir`.
 fn skills_parent_dir(agent: Agent, project_root: &Path) -> PathBuf {
@@ -408,21 +453,6 @@ fn skills_parent_dir(agent: Agent, project_root: &Path) -> PathBuf {
         .parent()
         .expect("skill dir must have parent")
         .to_path_buf()
-}
-
-/// Mark a directory as symposium-generated: drop the `.symposium` marker
-/// and a `.gitignore` containing `*` so the directory is recognized on
-/// future syncs and kept out of version control.
-///
-/// Idempotent — overwrites any pre-existing marker or `.gitignore` in
-/// `dir`. Callers use this both for freshly-installed plugin skills and
-/// for skills propagated by the agents-syncing feature.
-fn mark_generated_skill_directory(dir: &Path) -> Result<()> {
-    fs::write(dir.join(MARKER_FILE), "")
-        .with_context(|| format!("write marker in {}", dir.display()))?;
-    fs::write(dir.join(".gitignore"), "*\n")
-        .with_context(|| format!("write .gitignore in {}", dir.display()))?;
-    Ok(())
 }
 
 /// The install directory name a skill falls back to when its plain name is
@@ -440,11 +470,32 @@ fn slot_taken(path: &Path) -> bool {
 /// symposium-managed skill directory? Returns `false` for user-authored skills,
 /// for any directory symposium did not create, and for any symlink.
 fn is_managed_skill_dir(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) && has_symposium_marker(path)
+    fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.file_type().is_dir()
+            && !metadata.file_type().is_symlink()
+            && !has_reparse_point(&metadata)
+    }) && has_symposium_marker(path)
 }
 
 pub(crate) fn has_symposium_marker(dir: &Path) -> bool {
-    dir.join(MARKER_FILE).is_file()
+    fs::symlink_metadata(dir.join(MARKER_FILE)).is_ok_and(|metadata| {
+        metadata.file_type().is_file()
+            && !metadata.file_type().is_symlink()
+            && !has_reparse_point(&metadata)
+    })
+}
+
+#[cfg(windows)]
+fn has_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+const fn has_reparse_point(_: &fs::Metadata) -> bool {
+    false
 }
 
 pub(crate) fn ignore_in_git(dir: &Path) -> Result<()> {
@@ -712,86 +763,400 @@ fn dir_contents_differ(
     Ok(src != dst)
 }
 
-/// Synchronize a skill directory from `source_dir` into `dest_dir`.
+/// Synchronize a skill directory into one slot of a locked parent.
 ///
 /// This is the single function used by both the plugin-skill and
 /// user-authored-skill code paths. It:
 /// 1. Checks whether `dest_dir` is debounce-fresh (marker mtime < `debounce`)
 ///    — if so, skips entirely.
-/// 2. Compares source and dest content — if identical, touches the marker
-///    to reset the debounce window and returns without modifying content.
-/// 3. Otherwise builds a complete, marked copy beside `dest_dir` and swaps it
-///    in, so a failed copy leaves the slot as it was.
+/// 2. Compares source and destination content. Identical content is returned
+///    to the caller for attribution-aware marker reconciliation.
+/// 3. Otherwise builds a complete copy and structured marker beside the slot
+///    and swaps them in together, so a failed copy leaves the slot as it was.
 ///
 /// Returns the exact filesystem outcome so the safe report can distinguish a
 /// new install from an update without inspecting paths or mtimes again.
 fn sync_skill_dir(
     source_dir: &Path,
-    dest_dir: &Path,
-    project_root: &Path,
+    parent: &crate::telemetry::LockedParent<'_>,
+    slot: &str,
     debounce: Duration,
     warned: &mut BTreeSet<String>,
     package_root: Option<&Path>,
-) -> Result<SkillSyncStatus> {
+) -> Result<SkillSyncResult> {
+    let dest_dir = parent.path().join(slot);
     if dest_dir == source_dir {
-        return Ok(SkillSyncStatus::Unchanged);
+        return Ok(SkillSyncResult::Unchanged);
     }
 
     // If the destination doesn't exist yet, do a fresh install.
-    if !slot_taken(dest_dir) {
-        install_skill_dir(source_dir, dest_dir, project_root, warned, package_root)?;
-        return Ok(SkillSyncStatus::Installed);
+    if !slot_taken(&dest_dir) {
+        let binding = install_skill_dir(source_dir, parent, slot, warned, package_root)?;
+        return Ok(SkillSyncResult::Installed(binding));
     }
 
     // Debounce: if we synced recently, skip the content comparison.
-    if recently_synced(dest_dir, debounce) {
+    if recently_synced(&dest_dir, debounce) {
         tracing::debug!(dest = %dest_dir.display(), "skill sync debounced");
-        return Ok(SkillSyncStatus::Debounced);
+        return Ok(SkillSyncResult::Debounced);
     }
 
     // Compare content (excluding managed metadata).
-    let marker_path = dest_dir.join(MARKER_FILE);
-    if !dir_contents_differ(source_dir, dest_dir, package_root)? {
+    if !dir_contents_differ(source_dir, &dest_dir, package_root)? {
         // Content is identical — just touch the marker to reset debounce.
-        touch_marker(&marker_path)?;
-        return Ok(SkillSyncStatus::Unchanged);
+        return Ok(SkillSyncResult::Unchanged);
     }
 
     // Content changed: replace entirely.
-    install_skill_dir(source_dir, dest_dir, project_root, warned, package_root)?;
-    Ok(SkillSyncStatus::Updated)
+    let binding = install_skill_dir(source_dir, parent, slot, warned, package_root)?;
+    Ok(SkillSyncResult::Updated(binding))
 }
 
 fn install_skill_dir(
     source_dir: &Path,
-    dest_dir: &Path,
-    project_root: &Path,
+    parent: &crate::telemetry::LockedParent<'_>,
+    slot: &str,
     warned: &mut BTreeSet<String>,
     package_root: Option<&Path>,
-) -> Result<()> {
-    let parent = dest_dir.parent().expect("skill dir must have parent");
-    create_managed_dir_all(parent, project_root)?;
-    install_staged(dest_dir, |staging| {
-        mark_generated_skill_directory(staging)?;
+) -> Result<crate::telemetry::InstallationBinding> {
+    let dest_dir = parent.path().join(slot);
+    install_staged(&dest_dir, |staging| {
         copy_dir_recursive(source_dir, staging, package_root, warned)?;
-        mark_generated_skill_directory(staging)
+        ignore_in_git(staging)?;
+        crate::telemetry::stage_rotated_marker(parent, staging)
+            .map(|marker| marker.binding())
+            .map_err(anyhow::Error::new)
     })
 }
 
-fn install_staged(dest: &Path, fill: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+fn install_staged<T>(dest: &Path, fill: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
     let parent = dest.parent().expect("install slot must have parent");
     let mut staging = tempfile::Builder::new()
         .prefix(".symposium-tmp-")
         .tempdir_in(parent)
         .with_context(|| format!("create staging dir in {}", parent.display()))?;
-    fill(staging.path())?;
+    let result = fill(staging.path())?;
     if slot_taken(dest) {
         fs::remove_dir_all(dest).with_context(|| format!("remove {}", dest.display()))?;
     }
     fs::rename(staging.path(), dest)
         .with_context(|| format!("rename {} -> {}", staging.path().display(), dest.display()))?;
     staging.disable_cleanup(true);
-    Ok(())
+    Ok(result)
+}
+
+fn current_attribution(
+    slot: &str,
+    binding: crate::telemetry::InstallationBinding,
+    evidence: Option<&crate::telemetry::ResolutionEvidence>,
+) -> InstalledAttributionState {
+    InstalledAttributionState::Current(
+        crate::telemetry::InstallationIndexEntry::from_skill_evidence(
+            slot.to_owned(),
+            binding,
+            evidence,
+        ),
+    )
+}
+
+fn unavailable_attribution(
+    slot: &str,
+    binding: crate::telemetry::InstallationBinding,
+) -> InstalledAttributionState {
+    InstalledAttributionState::Unavailable(Some(
+        crate::telemetry::InstallationIndexEntry::unavailable(slot.to_owned(), binding),
+    ))
+}
+
+fn matching_prior_attribution(
+    parent: &crate::telemetry::LockedParent<'_>,
+    prior: &crate::telemetry::InstalledIndexSnapshot,
+    slot: &str,
+    binding: crate::telemetry::InstallationBinding,
+) -> Option<crate::telemetry::InstallationIndexEntry> {
+    match prior.matching_entry(parent, slot, binding) {
+        Ok(entry) => entry,
+        Err(reason) => {
+            tracing::debug!(?reason, "prior installed attribution is unavailable");
+            None
+        }
+    }
+}
+
+/// Preserve only an entry whose slot and binding still match the installed
+/// marker. Repair may restore ownership metadata, but never authorizes fresh
+/// evidence for content this pass did not inspect.
+fn preserve_installed_attribution(
+    parent: &crate::telemetry::LockedParent<'_>,
+    prior: &crate::telemetry::InstalledIndexSnapshot,
+    slot: &str,
+) -> InstalledAttributionState {
+    let marker = match crate::telemetry::reconcile_marker(
+        parent,
+        slot,
+        crate::telemetry::MarkerAction::Ensure,
+    ) {
+        Ok(marker) => marker,
+        Err(reason) => {
+            tracing::debug!(?reason, "installed attribution marker is unavailable");
+            return InstalledAttributionState::Unavailable(None);
+        }
+    };
+    let unavailable = || unavailable_attribution(slot, marker.binding());
+    if marker.change() != crate::telemetry::MarkerChange::Preserved {
+        return unavailable();
+    }
+    matching_prior_attribution(parent, prior, slot, marker.binding())
+        .map(InstalledAttributionState::Preserved)
+        .unwrap_or_else(unavailable)
+}
+
+/// Bind freshly compared content to its current evidence.
+///
+/// Reusing a binding requires the complete persisted attribution to agree.
+/// Otherwise the marker rotates before fresh evidence can enter the index. A
+/// failed marker write retains only a previously verified entry.
+fn reconcile_unchanged_attribution(
+    parent: &crate::telemetry::LockedParent<'_>,
+    prior: Option<&crate::telemetry::InstalledIndexSnapshot>,
+    slot: &str,
+    evidence: Option<&crate::telemetry::ResolutionEvidence>,
+    retain_attribution: bool,
+) -> InstalledAttributionState {
+    reconcile_unchanged_attribution_with(
+        parent,
+        prior,
+        slot,
+        evidence,
+        retain_attribution,
+        |action| crate::telemetry::reconcile_marker(parent, slot, action),
+    )
+}
+
+fn reconcile_unchanged_attribution_with(
+    parent: &crate::telemetry::LockedParent<'_>,
+    prior: Option<&crate::telemetry::InstalledIndexSnapshot>,
+    slot: &str,
+    evidence: Option<&crate::telemetry::ResolutionEvidence>,
+    retain_attribution: bool,
+    mut reconcile: impl FnMut(
+        crate::telemetry::MarkerAction,
+    ) -> std::result::Result<
+        crate::telemetry::MarkerReconciliation,
+        crate::telemetry::MarkerReconcileError,
+    >,
+) -> InstalledAttributionState {
+    let marker = match reconcile(crate::telemetry::MarkerAction::Ensure) {
+        Ok(marker) => marker,
+        Err(reason) => {
+            tracing::debug!(?reason, "installed attribution marker is unavailable");
+            return InstalledAttributionState::Unavailable(None);
+        }
+    };
+    if marker.change() != crate::telemetry::MarkerChange::Preserved {
+        return unavailable_attribution(slot, marker.binding());
+    }
+
+    // Consent changes whether sync retains attribution, not the ownership
+    // marker lifecycle. With retention disabled there is no fresh evidence to
+    // compare, so refresh the verified generation and remove its index later.
+    if !retain_attribution {
+        return match reconcile(crate::telemetry::MarkerAction::Refresh) {
+            Ok(refreshed) => unavailable_attribution(slot, refreshed.binding()),
+            Err(reason) => {
+                tracing::debug!(?reason, "failed to refresh installed skill marker");
+                unavailable_attribution(slot, marker.binding())
+            }
+        };
+    }
+
+    let Some(prior_index) = prior else {
+        debug_assert!(
+            false,
+            "enabled attribution retention requires a parent snapshot"
+        );
+        return unavailable_attribution(slot, marker.binding());
+    };
+    let prior = matching_prior_attribution(parent, prior_index, slot, marker.binding());
+    let candidate = crate::telemetry::InstallationIndexEntry::from_skill_evidence(
+        slot.to_owned(),
+        marker.binding(),
+        evidence,
+    );
+    let action = if prior
+        .as_ref()
+        .is_some_and(|entry| entry.has_same_attribution(&candidate))
+    {
+        crate::telemetry::MarkerAction::Refresh
+    } else {
+        crate::telemetry::MarkerAction::Rotate
+    };
+    match reconcile(action) {
+        Ok(reconciled) => current_attribution(slot, reconciled.binding(), evidence),
+        Err(reason) => {
+            tracing::debug!(?reason, "failed to reconcile installed attribution marker");
+            prior.map_or_else(
+                || unavailable_attribution(slot, marker.binding()),
+                InstalledAttributionState::Preserved,
+            )
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum InstalledInventoryError {
+    Read(std::io::ErrorKind),
+    Inspect(std::io::ErrorKind),
+    InvalidSlot,
+}
+
+impl fmt::Display for InstalledInventoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read(kind) => write!(formatter, "failed to read skills parent ({kind:?})"),
+            Self::Inspect(kind) => {
+                write!(
+                    formatter,
+                    "failed to inspect skills-parent entry ({kind:?})"
+                )
+            }
+            Self::InvalidSlot => formatter.write_str("skills parent contains an invalid slot"),
+        }
+    }
+}
+
+/// List every managed standalone skill that remains in one locked parent.
+///
+/// Installed plugin directories are separate agent artifacts and do not map
+/// one invocation slot to one resolution witness, so they are excluded.
+fn installed_skill_slots(
+    parent: &crate::telemetry::LockedParent<'_>,
+) -> std::result::Result<Vec<String>, InstalledInventoryError> {
+    let entries = match fs::read_dir(parent.path()) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(InstalledInventoryError::Read(error.kind())),
+    };
+    let mut slots = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| InstalledInventoryError::Read(error.kind()))?;
+        let kind = entry
+            .file_type()
+            .map_err(|error| InstalledInventoryError::Inspect(error.kind()))?;
+        if !kind.is_dir() || kind.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if crate::compile::is_plugin_dir(&path) || !has_symposium_marker(&path) {
+            continue;
+        }
+        let slot = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| InstalledInventoryError::InvalidSlot)?;
+        if !skills::is_safe_dir_name(&slot) || crate::telemetry::is_reserved_skill_slot(&slot) {
+            return Err(InstalledInventoryError::InvalidSlot);
+        }
+        slots.push(slot);
+    }
+    slots.sort();
+    Ok(slots)
+}
+
+/// Publish or remove complete per-parent attribution metadata.
+///
+/// This is deliberately best-effort. Skill delivery and stale cleanup have
+/// already completed under the same parent guards; metadata failure can only
+/// reduce later attribution availability and never changes the sync result.
+fn maintain_attribution_indexes(
+    enabled: bool,
+    project_root: &Path,
+    acquisition: &crate::telemetry::ParentWriteAcquisition,
+    prior_indexes: &BTreeMap<PathBuf, crate::telemetry::InstalledIndexSnapshot>,
+    layout: &InstalledLayout,
+) {
+    let mut visited = BTreeSet::new();
+    for &agent in Agent::all() {
+        let requested = skills_parent_dir(agent, project_root);
+        let Some(parent) = acquisition.guards().parent(&requested) else {
+            continue;
+        };
+        if !visited.insert(parent.path().to_path_buf()) {
+            continue;
+        }
+        if !enabled {
+            let report = crate::telemetry::remove_index(&parent);
+            tracing::debug!(?report, "removed installed attribution index");
+            continue;
+        }
+
+        let slots = match installed_skill_slots(&parent) {
+            Ok(slots) => slots,
+            Err(reason) => {
+                tracing::debug!(%reason, "installed attribution inventory is unavailable");
+                match crate::telemetry::prepare_unavailable_index() {
+                    Ok(prepared) => match crate::telemetry::replace_index(&parent, &prepared) {
+                        Ok(report) => {
+                            tracing::debug!(?report, "published unavailable attribution index");
+                        }
+                        Err(reason) => {
+                            tracing::debug!(
+                                ?reason,
+                                "failed to publish unavailable attribution index"
+                            );
+                        }
+                    },
+                    Err(reason) => {
+                        tracing::debug!(?reason, "failed to prepare unavailable attribution index");
+                    }
+                }
+                continue;
+            }
+        };
+        if slots.is_empty() {
+            let report = crate::telemetry::remove_index(&parent);
+            tracing::debug!(?report, "removed empty installed attribution index");
+            continue;
+        }
+
+        let mut entries = Vec::with_capacity(slots.len());
+        let mut complete = true;
+        let prior = prior_indexes.get(parent.path());
+        for slot in slots {
+            let destination = parent.path().join(&slot);
+            let entry = layout
+                .skills
+                .get(&destination)
+                .and_then(|installed| installed.attribution.entry())
+                .or_else(|| {
+                    prior.and_then(|prior| {
+                        preserve_installed_attribution(&parent, prior, &slot).entry()
+                    })
+                });
+            match entry {
+                Some(entry) => entries.push(entry),
+                None => complete = false,
+            }
+        }
+        let prepared = if complete {
+            crate::telemetry::prepare_index(entries)
+        } else {
+            crate::telemetry::prepare_unavailable_index()
+        };
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(reason) => {
+                tracing::debug!(?reason, "failed to prepare installed attribution index");
+                continue;
+            }
+        };
+        match crate::telemetry::replace_index(&parent, &prepared) {
+            Ok(report) => tracing::debug!(?report, "published installed attribution index"),
+            Err(reason) => {
+                tracing::debug!(?reason, "failed to publish installed attribution index")
+            }
+        }
+    }
 }
 
 /// Update the marker file's mtime to now without changing content.
@@ -884,6 +1249,7 @@ async fn resolve_sync(
         custom_predicates,
         predicate_cache_path,
         update,
+        retain_evidence,
     } = inputs;
     let pms = ws.pms();
     let used = crate::discovery::used(
@@ -906,7 +1272,6 @@ async fn resolve_sync(
         .with_used(&used.plugins)
         .with_cwd(ws.start())
         .with_disk_cache(predicate_cache_path);
-    let retain_evidence = crate::telemetry::is_enabled(sym);
     let active = plugins::resolve_active_plugins_with_evidence(
         sym,
         registry,
@@ -1020,10 +1385,7 @@ pub(crate) async fn sync_with_report(
     ws: &Arc<Workspace>,
     update: UpdateLevel,
 ) -> std::result::Result<SyncCompletion, SyncFailure> {
-    let CompletedSync { completion, layout } = run_sync(sym, ws, update).await?;
-    // Attribution indexing consumes the private layout in the next slice. It
-    // is deliberately discarded before the safe completion leaves sync.
-    drop(layout);
+    let CompletedSync { completion } = run_sync(sym, ws, update).await?;
     Ok(completion)
 }
 
@@ -1033,7 +1395,8 @@ async fn run_sync(
     ws: &Arc<Workspace>,
     update: UpdateLevel,
 ) -> std::result::Result<CompletedSync, SyncFailure> {
-    let mut progress = SyncProgress::new(crate::telemetry::is_enabled(sym));
+    let telemetry_enabled = crate::telemetry::is_enabled(sym);
+    let mut progress = SyncProgress::new(telemetry_enabled);
     if let Some(error) = sym.config_error() {
         return Err(progress.fail(anyhow::anyhow!(
             "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
@@ -1056,7 +1419,7 @@ async fn run_sync(
     let registry = plugins::load_registry_with_workspace(sym, Some(&loaded)).await;
 
     if !registry.warnings.is_empty() {
-        progress.mark_partial();
+        promote_to_partial(&mut progress.outcome);
     }
 
     for warning in &registry.warnings {
@@ -1097,6 +1460,7 @@ async fn run_sync(
             custom_predicates: custom.entries,
             predicate_cache_path: &predicate_cache_path,
             update,
+            retain_evidence: telemetry_enabled,
         },
     )
     .await;
@@ -1143,9 +1507,9 @@ async fn run_sync(
         "sync started"
     );
 
-    let _lock = match lock_sync(sym) {
+    let config_guard = match crate::telemetry::acquire_config_guard(sym) {
         Ok(lock) => lock,
-        Err(error) => return Err(progress.fail(error)),
+        Err(error) => return Err(progress.fail(anyhow::Error::new(error))),
     };
 
     if agent_names.is_empty() {
@@ -1195,15 +1559,99 @@ async fn run_sync(
     progress.record_compilation(compiled.outcome);
     progress.record_compilation(project_compiled.outcome);
 
-    let mut plugin_changes = Vec::new();
-    let mut copied: std::collections::BTreeMap<_, BTreeSet<_>> = std::collections::BTreeMap::new();
-    let mut copies: std::collections::BTreeMap<&str, Vec<_>> = std::collections::BTreeMap::new();
+    // User-level delivery does not touch project skill parents. Run it first
+    // so parent planning can omit standalone copies already carried by those
+    // plugins. Project delivery waits for the matching parent token below.
+    let mut user_deliveries = BTreeMap::new();
+    let mut parents_with_work = BTreeSet::new();
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
             continue;
         };
         let user = agent.deliver_user_plugins(sym, &compiled.plugins);
-        let project = agent.deliver_project_plugins(sym, &project_root, &project_compiled.plugins);
+        let mut delivered_origins = BTreeSet::new();
+        if let Some(delivery) = &user {
+            delivered_origins.extend(compiled.skill_origins_of(&delivery.delivered));
+        }
+        let needs_standalone_copy = progress
+            .skills
+            .iter()
+            .any(|skill| !delivered_origins.contains(&skill.origin_hash));
+        let needs_project_delivery = agent == Agent::Claude && !project_compiled.plugins.is_empty();
+        if needs_standalone_copy || needs_project_delivery {
+            parents_with_work.insert(agent_name.clone());
+        }
+        user_deliveries.insert(agent_name.clone(), user);
+    }
+
+    // Lock every skills parent that this pass can install into, clean up, or
+    // publish metadata for. Configured parents with copy work are established;
+    // unconfigured and cleanup-only parents remain absent when they do not
+    // already exist.
+    let mut parent_requests: Vec<_> = Agent::all()
+        .iter()
+        .map(|&agent| {
+            crate::telemetry::ParentLockRequest::existing(skills_parent_dir(agent, &project_root))
+        })
+        .collect();
+    parent_requests.extend(agent_names.iter().filter_map(|agent_name| {
+        let agent = Agent::from_config_name(agent_name).ok()?;
+        parents_with_work.contains(agent_name).then(|| {
+            crate::telemetry::ParentLockRequest::desired(skills_parent_dir(agent, &project_root))
+        })
+    }));
+    let parent_acquisition =
+        match crate::telemetry::acquire_write_guards(sym, &config_guard, parent_requests) {
+            Ok(acquisition) => acquisition,
+            Err(error) => return Err(progress.fail(anyhow::Error::new(error))),
+        };
+    for excluded in parent_acquisition.excluded() {
+        promote_to_partial(&mut progress.outcome);
+        tracing::info!(
+            report = %crate::report::ReportEvent::Warning {
+                message: format!(
+                    "failed to prepare skills directory {}: {:?}",
+                    display_path(excluded.path()),
+                    excluded.reason(),
+                ),
+            },
+        );
+    }
+
+    // Decode each prior index once before any marker can change. Every slot in
+    // one physical parent then compares against the same guarded snapshot.
+    let mut prior_indexes = BTreeMap::new();
+    if telemetry_enabled {
+        for &agent in Agent::all() {
+            let requested = skills_parent_dir(agent, &project_root);
+            let Some(parent) = parent_acquisition.guards().parent(&requested) else {
+                continue;
+            };
+            prior_indexes
+                .entry(parent.path().to_path_buf())
+                .or_insert_with(|| crate::telemetry::load_index_snapshot(&parent));
+        }
+    }
+
+    // Project plugin delivery writes and reaps inside the same skills parents
+    // as standalone copies. Perform it only after the physical parent token
+    // exists, then compute the final copy set from what both delivery modes
+    // actually accepted.
+    let mut plugin_changes = Vec::new();
+    let mut copied: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+    let mut copies: BTreeMap<&str, Vec<_>> = BTreeMap::new();
+    for agent_name in &agent_names {
+        let Ok(agent) = Agent::from_config_name(agent_name) else {
+            continue;
+        };
+        let requested_parent = skills_parent_dir(agent, &project_root);
+        let project = parent_acquisition
+            .guards()
+            .parent(&requested_parent)
+            .and_then(|parent| {
+                agent.deliver_project_plugins(sym, &parent, &project_compiled.plugins)
+            });
+        let user = user_deliveries.remove(agent_name).flatten();
         let mut as_plugins = BTreeSet::new();
         if let Some(delivery) = &user {
             as_plugins.extend(compiled.skill_origins_of(&delivery.delivered));
@@ -1211,7 +1659,7 @@ async fn run_sync(
         if let Some(delivery) = &project {
             as_plugins.extend(project_compiled.skill_origins_of(&delivery.delivered));
         }
-        if user.is_some() || project.is_some() {
+        if user.is_some() || agent == Agent::Claude {
             let updated = user.into_iter().chain(project).flat_map(|d| d.updated);
             plugin_changes.push((agent, updated.collect()));
         }
@@ -1221,14 +1669,11 @@ async fn run_sync(
             .enumerate()
             .filter(|(_, skill)| !as_plugins.contains(&skill.origin_hash))
             .collect();
-        copied
-            .entry(skills_parent_dir(agent, &project_root))
-            .or_default()
-            .extend(
-                agent_copies
-                    .iter()
-                    .map(|(_, skill)| (&skill.name, &skill.origin_hash)),
-            );
+        copied.entry(requested_parent).or_default().extend(
+            agent_copies
+                .iter()
+                .map(|(_, skill)| (&skill.name, &skill.origin_hash)),
+        );
         copies.insert(agent_name, agent_copies);
     }
 
@@ -1313,8 +1758,16 @@ async fn run_sync(
             }
         }
 
+        let requested_parent = skills_parent_dir(agent, &project_root);
+        let Some(locked_parent) = parent_acquisition.guards().parent(&requested_parent) else {
+            // A missing cleanup-only parent is ordinary. A desired parent that
+            // failed establishment was reported from `excluded()` above.
+            continue;
+        };
+        let prior_index = prior_indexes.get(locked_parent.path());
+
         let mut name_counts = std::collections::BTreeMap::new();
-        for (skill_name, _) in &copied[&skills_parent_dir(agent, &project_root)] {
+        for (skill_name, _) in &copied[&requested_parent] {
             *name_counts.entry(*skill_name).or_default() += 1;
         }
 
@@ -1335,7 +1788,7 @@ async fn run_sync(
                 }
             };
 
-            let plain_dir = agent.project_skill_dir(&project_root, skill_name);
+            let plain_dir = locked_parent.path().join(skill_name);
             let shared_dir = project_root.join(".agents").join("skills").join(skill_name);
             let is_source = |dir: &Path| match (source_dir.canonicalize(), dir.canonicalize()) {
                 (Ok(a), Ok(b)) => a == b,
@@ -1361,7 +1814,7 @@ async fn run_sync(
             } else {
                 suffixed_skill_dir(skill_name, origin_hash)
             };
-            let dest_dir = agent.project_skill_dir(&project_root, &dir_name);
+            let dest_dir = locked_parent.path().join(&dir_name);
 
             // If the dest exists but is user-managed, skip it.
             if slot_taken(&dest_dir) && !is_managed_skill_dir(&dest_dir) {
@@ -1379,16 +1832,40 @@ async fn run_sync(
 
             match sync_skill_dir(
                 source_dir,
-                &dest_dir,
-                &project_root,
+                &locked_parent,
+                &dir_name,
                 debounce,
                 &mut warned,
                 skill.package_root.as_deref(),
             ) {
-                Ok(status) => {
-                    progress
-                        .layout
-                        .record(dest_dir.clone(), dir_name.clone(), skill_index, status);
+                Ok(result) => {
+                    let status = result.status();
+                    let attribution = match result {
+                        SkillSyncResult::Installed(binding) | SkillSyncResult::Updated(binding) => {
+                            current_attribution(&dir_name, binding, skill.evidence.as_ref())
+                        }
+                        SkillSyncResult::Debounced => {
+                            if let Some(prior) = prior_index {
+                                preserve_installed_attribution(&locked_parent, prior, &dir_name)
+                            } else {
+                                InstalledAttributionState::Unavailable(None)
+                            }
+                        }
+                        SkillSyncResult::Unchanged => reconcile_unchanged_attribution(
+                            &locked_parent,
+                            prior_index,
+                            &dir_name,
+                            skill.evidence.as_ref(),
+                            telemetry_enabled,
+                        ),
+                    };
+                    progress.layout.record(
+                        dest_dir.clone(),
+                        dir_name.clone(),
+                        skill_index,
+                        status,
+                        attribution,
+                    );
                     if status.changed() {
                         tracing::info!(
                             report = %crate::report::ReportEvent::SkillInstalled {
@@ -1401,9 +1878,17 @@ async fn run_sync(
                 }
                 Err(e) => {
                     if is_managed_skill_dir(&dest_dir) {
-                        progress
-                            .layout
-                            .preserve(dest_dir.clone(), dir_name.clone(), skill_index);
+                        let attribution = if let Some(prior) = prior_index {
+                            preserve_installed_attribution(&locked_parent, prior, &dir_name)
+                        } else {
+                            InstalledAttributionState::Unavailable(None)
+                        };
+                        progress.layout.preserve(
+                            dest_dir.clone(),
+                            dir_name.clone(),
+                            skill_index,
+                            attribution,
+                        );
                     }
                     promote_to_partial(&mut progress.outcome);
                     tracing::info!(
@@ -1446,32 +1931,15 @@ async fn run_sync(
     // and remove subdirs containing the marker that we didn't just install.
     // Compared by resolved path, since one agent's skills dir can be a symlink
     // to another's. A symlink entry is user content and is never followed.
-    let installed: BTreeSet<PathBuf> = progress
-        .layout
-        .skills
-        .keys()
-        .filter_map(|dir| dir.canonicalize().ok())
-        .collect();
+    let installed: BTreeSet<PathBuf> = progress.layout.skills.keys().cloned().collect();
     let mut scanned: BTreeSet<PathBuf> = BTreeSet::new();
     for &agent in Agent::all() {
         let requested_parent = skills_parent_dir(agent, &project_root);
-        let parent = match requested_parent.canonicalize() {
-            Ok(parent) => parent,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                progress.mark_partial();
-                tracing::info!(
-                    report = %crate::report::ReportEvent::Warning {
-                        message: format!(
-                            "failed to inspect skills directory {}: {error}",
-                            display_path(&requested_parent),
-                        ),
-                    },
-                );
-                continue;
-            }
+        let Some(locked_parent) = parent_acquisition.guards().parent(&requested_parent) else {
+            continue;
         };
-        if (skip_cleanup && revoked_dirs.is_empty()) || !scanned.insert(parent.clone()) {
+        let parent = locked_parent.path();
+        if (skip_cleanup && revoked_dirs.is_empty()) || !scanned.insert(parent.to_path_buf()) {
             continue;
         }
         // While cleanup is skipped, only directories named like a revoked
@@ -1479,7 +1947,7 @@ async fn run_sync(
         // to another, currently unreadable origin can be removed too; its
         // source is untouched, so the next sync that can read it
         // reinstalls it.
-        let reaped = reap_unlisted(&parent, |dir| {
+        let reaped = reap_unlisted(parent, |dir| {
             installed.contains(dir)
                 || compile::is_plugin_dir(dir)
                 || (skip_cleanup
@@ -1541,7 +2009,7 @@ async fn run_sync(
     );
     if !skip_cleanup {
         unregister_user_plugins(sym);
-        unregister_project_plugins(sym, &project_root);
+        unregister_project_plugins(sym, &project_root, &parent_acquisition);
     }
 
     if !warned.is_empty() {
@@ -1556,22 +2024,15 @@ async fn run_sync(
         );
     }
 
-    Ok(progress.finish(plugin_changes))
-}
+    maintain_attribution_indexes(
+        telemetry_enabled,
+        &project_root,
+        &parent_acquisition,
+        &prior_indexes,
+        &progress.layout,
+    );
 
-fn lock_sync(sym: &Symposium) -> Result<fs::File> {
-    let cache_dir = sym.cache_dir();
-    fs::create_dir_all(cache_dir).with_context(|| format!("create {}", cache_dir.display()))?;
-    let path = cache_dir.join("sync.lock");
-    let file = fs::File::options()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("open {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("lock {}", path.display()))?;
-    Ok(file)
+    Ok(progress.finish(plugin_changes))
 }
 
 pub(crate) fn unregister_user_plugins(sym: &Symposium) {
@@ -1582,11 +2043,20 @@ pub(crate) fn unregister_user_plugins(sym: &Symposium) {
     }
 }
 
-fn unregister_project_plugins(sym: &Symposium, project_root: &Path) {
+fn unregister_project_plugins(
+    sym: &Symposium,
+    project_root: &Path,
+    acquisition: &crate::telemetry::ParentWriteAcquisition,
+) {
     for &agent in Agent::all() {
-        if !agent.is_configured(sym) {
-            agent.deliver_project_plugins(sym, project_root, &[]);
+        if agent.is_configured(sym) {
+            continue;
         }
+        let requested = skills_parent_dir(agent, project_root);
+        let Some(parent) = acquisition.guards().parent(&requested) else {
+            continue;
+        };
+        agent.deliver_project_plugins(sym, &parent, &[]);
     }
 }
 
@@ -1800,46 +2270,58 @@ mod tests {
     #[test]
     fn skill_sync_reports_each_filesystem_outcome() {
         let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
         let source = tmp.path().join("source");
-        let destination = tmp.path().join("skills/example");
+        let parent = tmp.path().join("skills");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("SKILL.md"), "first").unwrap();
         let mut warned = BTreeSet::new();
+        let config = crate::telemetry::acquire_config_guard(&sym).unwrap();
+        let acquisition = crate::telemetry::acquire_write_guards(
+            &sym,
+            &config,
+            [crate::telemetry::ParentLockRequest::desired(parent.clone())],
+        )
+        .unwrap();
+        let locked = acquisition.guards().parent(&parent).unwrap();
 
         assert_eq!(
             sync_skill_dir(
                 &source,
-                &destination,
-                tmp.path(),
+                &locked,
+                "example",
                 Duration::ZERO,
                 &mut warned,
                 None,
             )
-            .unwrap(),
+            .unwrap()
+            .status(),
             SkillSyncStatus::Installed,
         );
         assert_eq!(
             sync_skill_dir(
                 &source,
-                &destination,
-                tmp.path(),
+                &locked,
+                "example",
                 Duration::MAX,
                 &mut warned,
                 None,
             )
-            .unwrap(),
+            .unwrap()
+            .status(),
             SkillSyncStatus::Debounced,
         );
         assert_eq!(
             sync_skill_dir(
                 &source,
-                &destination,
-                tmp.path(),
+                &locked,
+                "example",
                 Duration::ZERO,
                 &mut warned,
                 None,
             )
-            .unwrap(),
+            .unwrap()
+            .status(),
             SkillSyncStatus::Unchanged,
         );
 
@@ -1847,15 +2329,182 @@ mod tests {
         assert_eq!(
             sync_skill_dir(
                 &source,
-                &destination,
-                tmp.path(),
+                &locked,
+                "example",
                 Duration::ZERO,
                 &mut warned,
                 None,
             )
-            .unwrap(),
+            .unwrap()
+            .status(),
             SkillSyncStatus::Updated,
         );
+    }
+
+    #[test]
+    fn disabled_retention_does_not_rotate_an_unchanged_public_generation() {
+        use symposium_sdk::pm::PackageSourceClaim;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(temporary.path());
+        let source = temporary.path().join("source");
+        let parent = temporary.path().join("skills");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "content").unwrap();
+        let config = crate::telemetry::acquire_config_guard(&sym).unwrap();
+        let acquisition = crate::telemetry::acquire_write_guards(
+            &sym,
+            &config,
+            [crate::telemetry::ParentLockRequest::desired(parent.clone())],
+        )
+        .unwrap();
+        let locked = acquisition.guards().parent(&parent).unwrap();
+        let installed = sync_skill_dir(
+            &source,
+            &locked,
+            "example",
+            Duration::ZERO,
+            &mut BTreeSet::new(),
+            None,
+        )
+        .unwrap();
+        let SkillSyncResult::Installed(binding) = installed else {
+            panic!("first sync must install the skill")
+        };
+
+        let dependency = crate::pm::ResolvedDependency::for_test(
+            0,
+            crate::pm::PackageId::new(crate::pm::CARGO_PM, "runtime", "1.0.0"),
+            PackageSourceClaim::CratesIo,
+            crate::pm::PackageNamingAuthority::BuiltinCargo,
+        );
+        let extension_id = crate::pm::PackageId::new(crate::pm::CARGO_PM, "example", "1.0.0");
+        let extension = crate::pm::PackageNamingView::for_test(
+            &extension_id,
+            PackageSourceClaim::CratesIo,
+            crate::pm::PackageNamingAuthority::BuiltinCargo,
+        );
+        let evidence = crate::telemetry::skill_resolution_evidence(
+            Some(dependency_evidence(&dependency)),
+            None,
+            None,
+            crate::skills::SkillNamingView::for_test("example", Some(extension)),
+        )
+        .unwrap();
+        let entry = current_attribution("example", binding, Some(&evidence))
+            .entry()
+            .unwrap();
+        let prepared = crate::telemetry::prepare_index(vec![entry]).unwrap();
+        crate::telemetry::replace_index(&locked, &prepared).unwrap();
+
+        let reconciled = reconcile_unchanged_attribution(&locked, None, "example", None, false);
+        let marker = crate::telemetry::reconcile_marker(
+            &locked,
+            "example",
+            crate::telemetry::MarkerAction::Ensure,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            reconciled,
+            InstalledAttributionState::Unavailable(Some(_))
+        ));
+        assert!(marker.binding() == binding);
+    }
+
+    #[test]
+    fn failed_attribution_rotation_preserves_prior_without_failing_delivery() {
+        use symposium_sdk::pm::PackageSourceClaim;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(temporary.path());
+        let source = temporary.path().join("source");
+        let parent = temporary.path().join("skills");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "content").unwrap();
+        let config = crate::telemetry::acquire_config_guard(&sym).unwrap();
+        let acquisition = crate::telemetry::acquire_write_guards(
+            &sym,
+            &config,
+            [crate::telemetry::ParentLockRequest::desired(parent.clone())],
+        )
+        .unwrap();
+        let locked = acquisition.guards().parent(&parent).unwrap();
+        let installed = sync_skill_dir(
+            &source,
+            &locked,
+            "example",
+            Duration::ZERO,
+            &mut BTreeSet::new(),
+            None,
+        )
+        .unwrap();
+        let SkillSyncResult::Installed(binding) = installed else {
+            panic!("first sync must install the skill")
+        };
+        let dependency = crate::pm::ResolvedDependency::for_test(
+            0,
+            crate::pm::PackageId::new(crate::pm::CARGO_PM, "runtime", "1.0.0"),
+            PackageSourceClaim::CratesIo,
+            crate::pm::PackageNamingAuthority::BuiltinCargo,
+        );
+        let extension_id = crate::pm::PackageId::new(crate::pm::CARGO_PM, "example", "1.0.0");
+        let extension = crate::pm::PackageNamingView::for_test(
+            &extension_id,
+            PackageSourceClaim::CratesIo,
+            crate::pm::PackageNamingAuthority::BuiltinCargo,
+        );
+        let evidence = crate::telemetry::skill_resolution_evidence(
+            Some(dependency_evidence(&dependency)),
+            None,
+            None,
+            crate::skills::SkillNamingView::for_test("example", Some(extension)),
+        )
+        .unwrap();
+        let entry = current_attribution("example", binding, Some(&evidence))
+            .entry()
+            .unwrap();
+        let prepared = crate::telemetry::prepare_index(vec![entry]).unwrap();
+        crate::telemetry::replace_index(&locked, &prepared).unwrap();
+        let prior = crate::telemetry::load_index_snapshot(&locked);
+        let mut actions = Vec::new();
+
+        let reconciled = reconcile_unchanged_attribution_with(
+            &locked,
+            Some(&prior),
+            "example",
+            None,
+            true,
+            |action| {
+                actions.push(action);
+                if action == crate::telemetry::MarkerAction::Rotate {
+                    Err(crate::telemetry::MarkerReconcileError::Write(
+                        std::io::ErrorKind::PermissionDenied,
+                    ))
+                } else {
+                    crate::telemetry::reconcile_marker(&locked, "example", action)
+                }
+            },
+        );
+        let marker = crate::telemetry::reconcile_marker(
+            &locked,
+            "example",
+            crate::telemetry::MarkerAction::Ensure,
+        )
+        .unwrap();
+
+        assert_eq!(
+            actions,
+            [
+                crate::telemetry::MarkerAction::Ensure,
+                crate::telemetry::MarkerAction::Rotate,
+            ]
+        );
+        assert!(matches!(
+            reconciled,
+            InstalledAttributionState::Preserved(_)
+        ));
+        assert!(marker.binding() == binding);
     }
 
     #[test]
@@ -1868,22 +2517,20 @@ mod tests {
             "example".into(),
             0,
             SkillSyncStatus::Installed,
+            InstalledAttributionState::Unavailable(None),
         );
         layout.record(
             destination.clone(),
             "example".into(),
             0,
             SkillSyncStatus::Debounced,
+            InstalledAttributionState::Unavailable(None),
         );
 
         assert_eq!(layout.skills.len(), 1);
         assert_eq!(
             layout.skills[&destination].status,
             Some(SkillSyncStatus::Installed),
-        );
-        assert_eq!(
-            layout.managed_parents,
-            BTreeSet::from([PathBuf::from("project/.agents/skills")]),
         );
     }
 
@@ -1892,14 +2539,14 @@ mod tests {
         let destination = PathBuf::from("project/.agents/skills/example");
         let mut layout = InstalledLayout::new();
 
-        layout.preserve(destination.clone(), "example".into(), 0);
+        layout.preserve(
+            destination.clone(),
+            "example".into(),
+            0,
+            InstalledAttributionState::Unavailable(None),
+        );
 
         assert_eq!(layout.skills[&destination].status, None);
-        assert!(
-            layout
-                .managed_parents
-                .contains(&PathBuf::from("project/.agents/skills"))
-        );
     }
 
     #[test]
@@ -1969,12 +2616,14 @@ mod tests {
             "new".into(),
             0,
             SkillSyncStatus::Installed,
+            InstalledAttributionState::Unavailable(None),
         );
         progress.layout.record(
             PathBuf::from("project/.agents/skills/changed"),
             "changed".into(),
             1,
             SkillSyncStatus::Updated,
+            InstalledAttributionState::Unavailable(None),
         );
 
         let completed = progress.finish(Vec::new());
@@ -2287,7 +2936,8 @@ mod tests {
         let dst = tmp.path().join("dst");
 
         copy_dir_recursive(&src, &dst, None, &mut BTreeSet::new()).unwrap();
-        mark_generated_skill_directory(&dst).unwrap();
+        fs::write(dst.join(MARKER_FILE), "managed marker").unwrap();
+        fs::write(dst.join(".gitignore"), "*\n").unwrap();
 
         assert!(!dir_contents_differ(&src, &dst, None).unwrap());
     }
@@ -2295,6 +2945,7 @@ mod tests {
     #[test]
     fn install_preserves_unmarked_directory_at_staging_path() {
         let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).unwrap();
         fs::write(src.join("SKILL.md"), "skill").unwrap();
@@ -2305,13 +2956,21 @@ mod tests {
         let notes = user_dir.join("notes.txt");
         fs::write(&notes, "user-owned notes").unwrap();
         assert!(!user_dir.join(MARKER_FILE).exists());
+        let config = crate::telemetry::acquire_config_guard(&sym).unwrap();
+        let acquisition = crate::telemetry::acquire_write_guards(
+            &sym,
+            &config,
+            [crate::telemetry::ParentLockRequest::desired(skills.clone())],
+        )
+        .unwrap();
+        let locked = acquisition.guards().parent(&skills).unwrap();
 
         // Either choose another staging path or fail safely. Neither outcome
         // may delete or adopt this pre-existing, unmarked directory.
         let _ = sync_skill_dir(
             &src,
-            &skills.join("alpha"),
-            tmp.path(),
+            &locked,
+            "alpha",
             Duration::ZERO,
             &mut BTreeSet::new(),
             None,
@@ -2330,6 +2989,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).unwrap();
         fs::write(src.join("SKILL.md"), "skill").unwrap();
@@ -2341,12 +3001,20 @@ mod tests {
         }
         let skills = tmp.path().join("skills");
         let dst = skills.join("alpha");
+        let config = crate::telemetry::acquire_config_guard(&sym).unwrap();
+        let acquisition = crate::telemetry::acquire_write_guards(
+            &sym,
+            &config,
+            [crate::telemetry::ParentLockRequest::desired(skills.clone())],
+        )
+        .unwrap();
+        let locked = acquisition.guards().parent(&skills).unwrap();
 
         assert!(
             sync_skill_dir(
                 &src,
-                &dst,
-                tmp.path(),
+                &locked,
+                "alpha",
                 Duration::ZERO,
                 &mut BTreeSet::new(),
                 None
@@ -2359,13 +3027,14 @@ mod tests {
         assert_eq!(
             sync_skill_dir(
                 &src,
-                &dst,
-                tmp.path(),
+                &locked,
+                "alpha",
                 Duration::ZERO,
                 &mut BTreeSet::new(),
                 None
             )
-            .unwrap(),
+            .unwrap()
+            .status(),
             SkillSyncStatus::Installed,
         );
         assert!(dst.join(MARKER_FILE).exists());
