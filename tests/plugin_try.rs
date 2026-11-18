@@ -209,19 +209,138 @@ async fn try_leaves_a_gated_plugin_to_its_gate() {
         &["plugin-try0"],
         async |mut ctx| {
             init(&mut ctx).await?;
+            fake_agent(&ctx, "codex", "[]");
+            fake_agent(&ctx, "copilot", "[]");
 
             let kit = plugin_path(&ctx, "gated-kit");
-            let messages = report_messages(&mut ctx, &["plugin", "try", &kit]).await;
+            let events = report_events(&mut ctx, &["plugin", "try", &kit]).await;
+            let messages = messages(&events);
 
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "plugin_tried" && e["global"] == false),
+                "{events:#?}"
+            );
             for expected in [
                 "`gated-kit` activates only in workspaces that depend on `serde`, as it does for its users",
-                "`gated-kit` does not apply in this workspace, so nothing is installed here",
+                "no skill of `gated-kit` applies in this workspace, so none is installed here",
             ] {
                 assert!(messages.iter().any(|m| m == expected), "{messages:#?}");
             }
+            assert!(!messages.iter().any(|m| m.contains("list")), "{messages:#?}");
             assert!(user_plugins(&ctx).join("gated-kit").is_dir());
             assert!(!config(&ctx).contains("gated-kit"), "{}", config(&ctx));
             assert!(!installed_anywhere(&ctx, &workspace(&ctx), "gated-guidance"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn try_checks_a_gated_plugin_the_user_enabled_everywhere() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            init(&mut ctx).await?;
+            let own = symposium::config::UseEntry::Global("gated-kit".into());
+            ctx.sym.config.plugins.used.push(own);
+            ctx.sym.save_config()?;
+            fake_agent(&ctx, "codex", "[]");
+
+            let kit = plugin_path(&ctx, "gated-kit");
+            let events = report_events(&mut ctx, &["plugin", "try", &kit]).await;
+            let messages = messages(&events);
+
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "plugin_tried" && e["global"] == true),
+                "{events:#?}"
+            );
+            assert!(
+                messages.iter().any(|m| m
+                    == "Codex CLI does not list gated-guidance (checked with `codex debug prompt-input hi`)"),
+                "{messages:#?}"
+            );
+            assert!(
+                !messages.iter().any(|m| m.contains("none is installed")),
+                "{messages:#?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn try_predicate_kit(ctx: &mut TestContext, check: &str) -> anyhow::Result<Vec<String>> {
+    init(ctx).await?;
+    std::fs::write(
+        ctx.tempdir.join("ready-check.sh"),
+        format!("#!/bin/sh\n{check}\n"),
+    )?;
+    fake_agent(
+        ctx,
+        "codex",
+        r#"[{"content":[{"text":"- predicate-guidance: Guidance (file: r0/predicate-guidance/SKILL.md)"}]}]"#,
+    );
+    let kit = plugin_path(ctx, "predicate-kit");
+    Ok(report_messages(ctx, &["plugin", "try", &kit]).await)
+}
+
+#[tokio::test]
+async fn try_checks_a_plugin_whose_custom_predicate_holds() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let messages = try_predicate_kit(&mut ctx, "exit 0").await?;
+
+            assert!(installed_in_every_agent(
+                &ctx,
+                &workspace(&ctx),
+                "predicate-guidance"
+            ));
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m == "Codex CLI lists predicate-guidance"),
+                "{messages:#?}"
+            );
+            assert!(
+                !messages.iter().any(|m| m.contains("none is installed")),
+                "{messages:#?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn try_skips_the_check_when_the_custom_predicate_fails() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let messages = try_predicate_kit(&mut ctx, "exit 1").await?;
+
+            assert!(!installed_anywhere(
+                &ctx,
+                &workspace(&ctx),
+                "predicate-guidance"
+            ));
+            assert!(
+                messages.iter().any(|m| m
+                    == "no skill of `predicate-kit` applies in this workspace, so none is installed here"),
+                "{messages:#?}"
+            );
+            assert!(!messages.iter().any(|m| m.contains("list")), "{messages:#?}");
             Ok(())
         },
     )
@@ -535,7 +654,7 @@ fn fake_agent(ctx: &TestContext, program: &str, stdout: &str) {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-async fn report_messages(ctx: &mut TestContext, args: &[&str]) -> Vec<String> {
+async fn report_events(ctx: &mut TestContext, args: &[&str]) -> Vec<serde_json::Value> {
     use symposium::report::{ReportLayer, ReportMode};
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -544,11 +663,18 @@ async fn report_messages(ctx: &mut TestContext, args: &[&str]) -> Vec<String> {
     let guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
     ctx.symposium(args).await.unwrap();
     drop(guard);
-    handle
-        .drain()
+    handle.drain()
+}
+
+fn messages(events: &[serde_json::Value]) -> Vec<String> {
+    events
         .iter()
         .filter_map(|event| event["message"].as_str().map(str::to_string))
         .collect()
+}
+
+async fn report_messages(ctx: &mut TestContext, args: &[&str]) -> Vec<String> {
+    messages(&report_events(ctx, args).await)
 }
 
 #[tokio::test]
@@ -558,7 +684,7 @@ async fn try_reports_what_each_agent_lists() {
         fake_agent(
             &ctx,
             "codex",
-            r#"[{"content":[{"text":"<skills_instructions>\n### Available skills\n- kit-guidance: Guidance (file: r0/kit-guidance/SKILL.md)"}]}]"#,
+            r#"[{"content":[{"text":"<skills_instructions>\n### Available skills\n- dormant-kit:kit-guidance: Guidance (file: r1/dormant-kit/0.0.0/skills/kit-guidance/SKILL.md)"}]}]"#,
         );
         fake_agent(&ctx, "copilot", "[]");
         let kit = plugin_path(&ctx, "dormant-kit");

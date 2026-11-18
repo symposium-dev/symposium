@@ -463,13 +463,14 @@ async fn resolve_custom_predicate_entries(
     entries
 }
 
+pub struct Synced {
+    pub plugin_changes: Vec<(Agent, Vec<String>)>,
+    pub skill_origins: BTreeSet<String>,
+}
+
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(
-    sym: &Symposium,
-    ws: &Arc<Workspace>,
-    update: UpdateLevel,
-) -> Result<Vec<(Agent, Vec<String>)>> {
+pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> Result<Synced> {
     if let Some(error) = sym.config_error() {
         anyhow::bail!(
             "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
@@ -954,7 +955,16 @@ pub async fn sync(
         );
     }
 
-    Ok(plugin_changes)
+    let skill_origins = to_install
+        .iter()
+        .map(|(_, origin_hash, _, _)| origin_hash)
+        .chain(compiled.skill_origins.values().flatten())
+        .cloned()
+        .collect();
+    Ok(Synced {
+        plugin_changes,
+        skill_origins,
+    })
 }
 
 fn lock_sync(sym: &Symposium) -> Result<fs::File> {
