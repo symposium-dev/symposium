@@ -1,6 +1,6 @@
 [package]
 name = "symposium"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "AI the Rust Way"
@@ -35,7 +35,7 @@ pkg-url = "{ repo }/releases/download/{ name }-v{ version }/symposium-{ target }
 pkg-fmt = "zip"
 
 [dependencies]
-symposium-pm-cargo = { path = "symposium-pm-cargo", version = "0.1.0" }
+symposium-pm-cargo = { path = "symposium-pm-cargo", version = "0.1.1" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 async-trait = "0.1"
@@ -63,7 +63,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "regist
 bytes = "1.11.1"
 dialoguer = "0.12.0"
 toml_edit = "0.25.11"
-symposium-install = { version = "0.1.2", path = "symposium-install", features = ["clap"] }
+symposium-install = { version = "0.1.3", path = "symposium-install", features = ["clap"] }
 url = "2.5.8"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 hmac = "0.12.1"
