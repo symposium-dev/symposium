@@ -18,6 +18,20 @@ mod schema;
 mod state;
 mod storage;
 
+pub(crate) use resolution_witness::{
+    OptionalWitnessMode, ResolutionEvidence, chained_route as chained_resolution_evidence,
+    evaluate_optional_predicates as evaluate_resolution_predicates,
+    plugin_route as plugin_resolution_evidence, skill_route as skill_resolution_evidence,
+};
+
+/// Whether this invocation may retain telemetry-only resolution evidence.
+///
+/// Keeping the consent decision here gives sync, indexing, and recording one
+/// seam if the enablement rule grows beyond the raw config flag.
+pub(crate) fn is_enabled(sym: &crate::config::Symposium) -> bool {
+    sym.config.telemetry.enabled
+}
+
 /// Namespace reserved for temporary files owned by telemetry storage.
 ///
 /// Lazy cleanup may delete every file carrying this prefix, and status excludes

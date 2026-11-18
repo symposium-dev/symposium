@@ -5,20 +5,15 @@
 //! boundary that applies public naming policy and replaces everything else
 //! with fixed opaque nodes. It never re-evaluates a predicate and never sees
 //! either candidate from an ambiguous match.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the structured sync report consumes resolution witnesses in the next commit"
-    )
-)]
+use std::collections::HashSet;
 
 use crate::{
-    pm::PackageNamingView,
+    pm::{PackageHandle, ResolvedPackage},
     predicate::{
         DependencyMatch, PredicateEvaluationMode, PredicateWitnessEval, ResolvedDependencies,
-        ResolvedPredicateContext,
+        ResolvedDependencyView, ResolvedPredicateContext,
     },
+    skills::SkillNamingView,
 };
 use symposium_sdk::predicate::syntax::PredicateSet;
 
@@ -27,15 +22,132 @@ use super::{
     schema::ResolutionWitness,
 };
 
-/// Evaluate a predicate set once and retain only safe evidence from that pass.
+/// Private one-pass resolution evidence.
 ///
-/// A successful empty set returns an empty witness so its parent can flatten
-/// the set without inventing a wire node.
+/// The contributor handles retain exact local identity but expose no supplier
+/// key. This working value deliberately has neither `Debug` nor serialization;
+/// only its witness has crossed the public-naming boundary.
+#[derive(Clone)]
+pub(crate) struct ResolutionEvidence {
+    contributors: HashSet<PackageHandle>,
+    witness: ResolutionWitness,
+}
+
+impl ResolutionEvidence {
+    fn empty() -> Self {
+        Self {
+            contributors: HashSet::new(),
+            witness: ResolutionWitness::empty(),
+        }
+    }
+
+    fn from_witness(witness: ResolutionWitness) -> Self {
+        Self {
+            contributors: HashSet::new(),
+            witness,
+        }
+    }
+
+    fn from_dependency(dependency: ResolvedDependencyView<'_>) -> Self {
+        Self {
+            contributors: HashSet::from([dependency.handle()]),
+            witness: package(&super::policy::package(dependency.naming())),
+        }
+    }
+
+    fn from_package(resolved: &ResolvedPackage) -> Self {
+        Self {
+            contributors: HashSet::from([resolved.handle()]),
+            witness: package(&super::policy::package(resolved.naming_view())),
+        }
+    }
+
+    fn append(&mut self, other: Self) {
+        self.contributors.extend(other.contributors);
+        self.witness.append(other.witness);
+    }
+
+    /// Add contributor identities from another successful route.
+    ///
+    /// Returns whether the set grew, so a fixed-point traversal can replay
+    /// only newly learned contributors through descendants.
+    pub(crate) fn union_contributors(&mut self, other: &Self) -> bool {
+        let previous_len = self.contributors.len();
+        self.contributors.extend(other.contributors.iter().copied());
+        self.contributors.len() != previous_len
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contributors(&self) -> &HashSet<PackageHandle> {
+        &self.contributors
+    }
+
+    #[cfg(test)]
+    fn into_witness(self) -> ResolutionWitness {
+        self.witness
+    }
+}
+
+/// Runtime-selectable evidence retention for the sync traversal.
+///
+/// Disabled traversal follows the same branches and executes the same custom
+/// predicates, but performs no naming-policy calls and retains no child nodes.
+pub(crate) struct OptionalWitnessMode {
+    retain: bool,
+}
+
+impl OptionalWitnessMode {
+    #[must_use]
+    pub(crate) const fn new(retain: bool) -> Self {
+        Self { retain }
+    }
+
+    #[must_use]
+    pub(crate) const fn retains_evidence(&self) -> bool {
+        self.retain
+    }
+
+    #[must_use]
+    pub(crate) fn start(&self) -> Option<ResolutionEvidence> {
+        self.retain.then(ResolutionEvidence::empty)
+    }
+}
+
+/// Evaluate a predicate set once and optionally retain safe evidence.
+///
+/// The outer option is predicate success. The inner option is present only
+/// when retention is enabled. A successful empty set retains an empty witness
+/// so its parent can flatten the set without inventing a wire node.
+pub(crate) fn evaluate_optional_predicates<'a>(
+    predicates: &PredicateSet,
+    context: &mut ResolvedPredicateContext<'a>,
+    mode: &mut OptionalWitnessMode,
+) -> Option<Option<ResolutionEvidence>> {
+    predicates.evaluate_witness(context, mode)
+}
+
+/// Evaluate a predicate set once and retain only its safe witness.
+///
+/// This narrower seam remains useful to schema tests. Production sync uses
+/// [`evaluate_optional_predicates`] so contributor handles stay attached.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "schema tests use the witness-only projection; sync retains full evidence"
+    )
+)]
 pub(in crate::telemetry) fn evaluate_predicates<'a>(
     predicates: &PredicateSet,
     context: &mut ResolvedPredicateContext<'a>,
 ) -> Option<ResolutionWitness> {
-    predicates.evaluate_witness(context, &mut SafeResolutionMode)
+    evaluate_optional_predicates(predicates, context, &mut OptionalWitnessMode::new(true)).map(
+        |evidence| {
+            evidence
+                .expect("retained predicate evaluation must carry evidence")
+                .witness
+        },
+    )
 }
 
 /// Convert one package naming decision into a safe path fragment.
@@ -56,47 +168,141 @@ pub(in crate::telemetry) fn extension(naming: &ExtensionNaming) -> ResolutionWit
     }
 }
 
-struct SafeResolutionMode;
-
-impl<'a> PredicateEvaluationMode<ResolvedDependencies<'a>> for SafeResolutionMode {
-    type Evidence = ResolutionWitness;
+impl<'a> PredicateEvaluationMode<ResolvedDependencies<'a>> for OptionalWitnessMode {
+    type Evidence = Option<ResolutionEvidence>;
     const DISTINGUISH_DEPENDENCY_MATCHES: bool = true;
+
+    fn retains_evidence(&self) -> bool {
+        self.retain
+    }
 
     fn dependency(
         &mut self,
-        matched: DependencyMatch<'_, PackageNamingView<'a>>,
+        matched: DependencyMatch<'_, ResolvedDependencyView<'a>>,
     ) -> Self::Evidence {
+        if !self.retain {
+            return None;
+        }
         match matched {
-            DependencyMatch::Unique(view) => package(&super::policy::package(*view)),
+            DependencyMatch::Unique(dependency) => {
+                Some(ResolutionEvidence::from_dependency(*dependency))
+            }
             // Several packages may all be public. Ambiguity still cannot pick
             // one exact origin, so decide it before applying naming policy.
-            DependencyMatch::Ambiguous => ResolutionWitness::private_source(),
+            DependencyMatch::Ambiguous => Some(ResolutionEvidence::from_witness(
+                ResolutionWitness::private_source(),
+            )),
         }
     }
 
     fn non_package(&mut self) -> Self::Evidence {
-        ResolutionWitness::non_package_predicate()
+        self.retain
+            .then(|| ResolutionEvidence::from_witness(ResolutionWitness::non_package_predicate()))
     }
 
     fn not(&mut self) -> Self::Evidence {
-        ResolutionWitness::not()
+        self.retain
+            .then(|| ResolutionEvidence::from_witness(ResolutionWitness::not()))
     }
 
     fn any(&mut self, child: Self::Evidence) -> Self::Evidence {
-        ResolutionWitness::any(child)
+        child.map(|mut child| {
+            child.witness = ResolutionWitness::any(child.witness);
+            child
+        })
     }
 
     fn all(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence {
-        ResolutionWitness::all(children)
+        // Disabled traversal discards children, while a retained zero-child
+        // `all` is a real syntax node. The retention flag distinguishes them.
+        if children.is_empty() {
+            return self
+                .retain
+                .then(|| ResolutionEvidence::from_witness(ResolutionWitness::all(Vec::new())));
+        }
+        combine_children(children, ResolutionWitness::all)
     }
 
     fn set(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence {
-        let mut witness = ResolutionWitness::empty();
+        let mut evidence = self.start()?;
+        // `evaluate_all` stores children only when this mode retains evidence,
+        // so every child in a non-disabled traversal must be present.
         for child in children {
-            witness.append(child);
+            evidence.append(child.expect("retained predicate child must carry evidence"));
         }
-        witness
+        Some(evidence)
     }
+}
+
+fn combine_children(
+    children: Vec<Option<ResolutionEvidence>>,
+    combine: impl FnOnce(Vec<ResolutionWitness>) -> ResolutionWitness,
+) -> Option<ResolutionEvidence> {
+    let mut contributors = HashSet::new();
+    let mut witnesses = Vec::with_capacity(children.len());
+    for child in children {
+        let child = child.expect("retained predicate child must carry evidence");
+        contributors.extend(child.contributors);
+        witnesses.push(child.witness);
+    }
+    Some(ResolutionEvidence {
+        contributors,
+        witness: combine(witnesses),
+    })
+}
+
+/// Complete one plugin route in package, predicate, extension order.
+pub(crate) fn plugin_route(
+    route: Option<ResolutionEvidence>,
+    package: Option<&ResolvedPackage>,
+    predicates: Option<ResolutionEvidence>,
+    extension_package: Option<&ResolvedPackage>,
+    plugin_name: &str,
+) -> Option<ResolutionEvidence> {
+    let mut route = route?;
+    if let Some(package) = package {
+        route.append(ResolutionEvidence::from_package(package));
+    }
+    if let Some(predicates) = predicates {
+        route.append(predicates);
+    }
+    let naming = extension_package.map_or(ExtensionNaming::Unnamed, |package| {
+        super::policy::plugin(package.naming_view(), plugin_name)
+    });
+    route.witness.append(extension(&naming));
+    Some(route)
+}
+
+/// Extend an admitted plugin route with one successful chained edge.
+pub(crate) fn chained_route(
+    route: Option<ResolutionEvidence>,
+    predicates: Option<ResolutionEvidence>,
+) -> Option<ResolutionEvidence> {
+    let mut route = route?;
+    if let Some(predicates) = predicates {
+        route.append(predicates);
+    }
+    Some(route)
+}
+
+/// Complete one skill route in group, skill, extension order.
+pub(crate) fn skill_route(
+    route: Option<ResolutionEvidence>,
+    group_predicates: Option<ResolutionEvidence>,
+    skill_predicates: Option<ResolutionEvidence>,
+    skill: SkillNamingView<'_>,
+) -> Option<ResolutionEvidence> {
+    let mut route = route?;
+    if let Some(predicates) = group_predicates {
+        route.append(predicates);
+    }
+    if let Some(predicates) = skill_predicates {
+        route.append(predicates);
+    }
+    route
+        .witness
+        .append(extension(&super::policy::skill(skill)));
+    Some(route)
 }
 
 #[cfg(test)]
@@ -109,7 +315,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        pm::{CARGO_PM, PackageNamingAuthority, ResolvedDependency},
+        pm::{CARGO_PM, PackageNamingAuthority, PackageNamingView, ResolvedDependency},
         telemetry::{policy, schema::UnnamedPackageReason},
     };
 
@@ -160,6 +366,41 @@ mod tests {
 
         assert_eq!(
             path_json(witness),
+            json!([{
+                "type": "package",
+                "ecosystem": "cargo",
+                "name": "example-runtime",
+                "version": "1.2.3"
+            }])
+        );
+    }
+
+    #[test]
+    fn optional_retention_changes_only_the_retained_value() {
+        let dependency = crates_io(0, "example-runtime");
+        let dependencies = [dependency.clone()];
+        let predicates = predicate_set("example-runtime");
+
+        let mut disabled_context = ResolvedPredicateContext::new(&dependencies);
+        let disabled = evaluate_optional_predicates(
+            &predicates,
+            &mut disabled_context,
+            &mut OptionalWitnessMode::new(false),
+        );
+        assert!(matches!(disabled, Some(None)));
+
+        let mut enabled_context = ResolvedPredicateContext::new(&dependencies);
+        let retained = evaluate_optional_predicates(
+            &predicates,
+            &mut enabled_context,
+            &mut OptionalWitnessMode::new(true),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(retained.contributors().len(), 1);
+        assert!(retained.contributors().contains(&dependency.handle()));
+        assert_eq!(
+            path_json(retained.into_witness()),
             json!([{
                 "type": "package",
                 "ecosystem": "cargo",
@@ -368,6 +609,22 @@ mod tests {
         );
         assert_eq!(
             path_json(extension(&unnamed)),
+            json!([{ "type": "opaque", "reason": "private_source" }])
+        );
+    }
+
+    #[test]
+    fn detached_skill_routes_cannot_borrow_package_naming() {
+        let evidence = skill_route(
+            OptionalWitnessMode::new(true).start(),
+            OptionalWitnessMode::new(true).start(),
+            OptionalWitnessMode::new(true).start(),
+            SkillNamingView::for_test("detached-skill", None),
+        )
+        .unwrap();
+
+        assert_eq!(
+            path_json(evidence.into_witness()),
             json!([{ "type": "opaque", "reason": "private_source" }])
         );
     }

@@ -39,7 +39,7 @@
 
 use std::path::Path;
 
-use crate::pm::Workspace;
+use crate::pm::{AdmittedDependencies, Workspace};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use symposium_install::UpdateLevel;
@@ -486,18 +486,59 @@ pub(crate) async fn enabled_dependencies(
     spellings: &Spellings,
     update: UpdateLevel,
 ) -> Vec<crate::pm::PackageRequest> {
+    enabled_dependencies_with(sym, pms, dep_ids, None, used, spellings, update).await
+}
+
+/// [`enabled_dependencies`] using the exact admitted dependency snapshot.
+///
+/// Sync uses this form so activation and witnessed predicate evaluation borrow
+/// one owning collection. Coordinate requests remain only for `use` entries
+/// that name packages outside the dependency snapshot.
+pub(crate) async fn enabled_admitted_dependencies(
+    sym: &Symposium,
+    pms: &PmRegistry,
+    dependencies: &crate::pm::AdmittedDependencies,
+    used: &Used,
+    spellings: &Spellings,
+    update: UpdateLevel,
+) -> Vec<crate::pm::PackageRequest> {
+    enabled_dependencies_with(
+        sym,
+        pms,
+        dependencies.package_ids(),
+        Some(dependencies),
+        used,
+        spellings,
+        update,
+    )
+    .await
+}
+
+async fn enabled_dependencies_with(
+    sym: &Symposium,
+    pms: &PmRegistry,
+    dep_ids: &[PackageId],
+    dependencies: Option<&crate::pm::AdmittedDependencies>,
+    used: &Used,
+    spellings: &Spellings,
+    update: UpdateLevel,
+) -> Vec<crate::pm::PackageRequest> {
     let plugins = &sym.config.plugins;
     let found = find_unknown(pms, &used.unknown, update).await;
     let used: Vec<&PluginRef> = used.plugins.iter().chain(&found).collect();
-    let selected_dependencies: Vec<PackageId> = dep_ids
-        .iter()
-        .filter(|id| !plugins.is_disabled(id, spellings))
-        .filter(|id| {
-            plugins.is_auto_enabled(id, dep_ids, spellings) || used.iter().any(|u| u.matches(id))
-        })
-        .cloned()
-        .collect();
-    let mut requests = pms.dependency_requests(&selected_dependencies).await;
+    let selected = |id: &PackageId| {
+        !plugins.is_disabled(id, spellings)
+            && (plugins.is_auto_enabled(id, dep_ids, spellings)
+                || used.iter().any(|entry| entry.matches(id)))
+    };
+    let mut requests = match dependencies {
+        Some(dependencies) => dependencies.requests_matching(selected),
+        None => {
+            let selected_dependencies: Vec<PackageId> =
+                dep_ids.iter().filter(|id| selected(id)).cloned().collect();
+            pms.dependency_requests(&selected_dependencies).await
+        }
+    };
 
     for used in used {
         // A wildcard names dependencies, which the first pass covered.
@@ -1309,6 +1350,57 @@ mod tests {
                 .count(),
             2,
             "equal coordinates with distinct admitted keys must both activate"
+        );
+
+        let dependencies = pms.admitted_dependencies(&deps).await;
+        let mut disabled_context =
+            crate::predicate::ResolvedPredicateContext::new(dependencies.packages());
+        let disabled = crate::plugins::resolve_active_plugins_with_evidence(
+            &sym,
+            &registry,
+            &pms,
+            Some(tmp.path()),
+            &dependencies,
+            &mut disabled_context,
+            crate::plugins::ResolvedPluginOptions::new(UpdateLevel::None, false),
+        )
+        .await;
+        let mut enabled_context =
+            crate::predicate::ResolvedPredicateContext::new(dependencies.packages());
+        let enabled = crate::plugins::resolve_active_plugins_with_evidence(
+            &sym,
+            &registry,
+            &pms,
+            Some(tmp.path()),
+            &dependencies,
+            &mut enabled_context,
+            crate::plugins::ResolvedPluginOptions::new(UpdateLevel::None, true),
+        )
+        .await;
+
+        assert_eq!(
+            disabled
+                .active
+                .iter()
+                .map(|resolved| &resolved.plugin.canonical)
+                .collect::<Vec<_>>(),
+            enabled
+                .active
+                .iter()
+                .map(|resolved| &resolved.plugin.canonical)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            disabled
+                .active
+                .iter()
+                .all(|resolved| resolved.evidence.is_none())
+        );
+        assert!(
+            enabled
+                .active
+                .iter()
+                .all(|resolved| resolved.evidence.is_some())
         );
     }
 

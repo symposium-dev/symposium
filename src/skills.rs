@@ -113,14 +113,12 @@ pub struct SkillWithGroupContext {
     pub agent_plugin_root: Option<PathBuf>,
     /// Proof that this skill's canonical `SKILL.md` belonged to its admitted
     /// package. Kept private so it cannot be paired with another skill.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "resolution producers activate skill naming in a later slice"
-        )
-    )]
     package_content: Option<PackageContent>,
+    /// Private evidence from the route that selected this skill.
+    ///
+    /// It has no diagnostic or serialization implementation and is retained
+    /// only for an enabled telemetry projection.
+    pub(crate) evidence: Option<crate::telemetry::ResolutionEvidence>,
 }
 
 /// Proof that this record's canonical skill file belonged to one admitted
@@ -130,26 +128,12 @@ pub struct SkillWithGroupContext {
 /// containing record preserves the same skill/proof pairing; callers cannot
 /// project the proof without the skill name it was bound to.
 #[derive(Clone)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "resolution producers activate skill naming in a later slice"
-    )
-)]
 struct PackageContent {
     package: crate::pm::ResolvedPackage,
     canonical_file: PathBuf,
 }
 
 impl PackageContent {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "resolution producers activate skill naming in a later slice"
-        )
-    )]
     fn naming_view(&self) -> crate::pm::PackageNamingView<'_> {
         debug_assert!(
             self.canonical_file.is_absolute(),
@@ -183,6 +167,7 @@ impl SkillWithGroupContext {
             plugin_index,
             agent_plugin_root,
             package_content: None,
+            evidence: None,
         }
     }
 
@@ -197,13 +182,6 @@ impl SkillWithGroupContext {
         &self.origin_hash
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "resolution producers activate skill naming in a later slice"
-        )
-    )]
     pub(crate) fn naming_view(&self) -> SkillNamingView<'_> {
         SkillNamingView {
             name: self.skill.name(),
@@ -310,6 +288,88 @@ where
     results
 }
 
+/// Applicable skills resolved from an already-witnessed active set.
+pub(crate) struct ResolvedSkills {
+    pub(crate) skills: Vec<SkillWithGroupContext>,
+}
+
+/// Resolve skills without re-running their plugins' selection gates.
+///
+/// Group and skill predicates are evaluated once. With retention disabled the
+/// same traversal returns the same skills but stores no evidence.
+pub(crate) async fn resolve_skills<'a>(
+    sym: &Symposium,
+    active: &[crate::plugins::ResolvedPlugin],
+    ctx: &mut crate::predicate::ResolvedPredicateContext<'a>,
+    update: UpdateLevel,
+    retain_evidence: bool,
+) -> ResolvedSkills {
+    let mut results = Vec::new();
+    let mut witnesses = crate::telemetry::OptionalWitnessMode::new(retain_evidence);
+
+    for (plugin_index, resolved) in active.iter().enumerate() {
+        let plugin = &resolved.plugin;
+        ctx.set_workspace_member(plugin.workspace_member);
+        for group in &plugin.manifest.skills {
+            let predicates_display = predicates_display(&group.predicates);
+            let Some(group_evidence) = crate::telemetry::evaluate_resolution_predicates(
+                &group.predicates,
+                ctx,
+                &mut witnesses,
+            ) else {
+                report_skill_group(
+                    plugin,
+                    group,
+                    predicates_display,
+                    false,
+                    None,
+                    Some("group predicates not satisfied".into()),
+                );
+                continue;
+            };
+
+            let skills = load_skill_group_contents(sym, plugin, group, update).await;
+            report_skill_group(
+                plugin,
+                group,
+                predicates_display,
+                true,
+                Some(skills.len()),
+                None,
+            );
+
+            for (skill, origin_hash, package_content) in skills {
+                let Some(skill_evidence) = crate::telemetry::evaluate_resolution_predicates(
+                    &skill.predicates,
+                    ctx,
+                    &mut witnesses,
+                ) else {
+                    report_skill(plugin, &skill, false);
+                    continue;
+                };
+                report_skill(plugin, &skill, true);
+                let mut selected = SkillWithGroupContext {
+                    skill,
+                    origin_hash,
+                    plugin_index,
+                    agent_plugin_root: plugin.agent_plugin_root.clone(),
+                    package_content,
+                    evidence: None,
+                };
+                selected.evidence = crate::telemetry::skill_resolution_evidence(
+                    resolved.evidence.clone(),
+                    group_evidence.clone(),
+                    skill_evidence,
+                    selected.naming_view(),
+                );
+                results.push(selected);
+            }
+        }
+    }
+
+    ResolvedSkills { skills: results }
+}
+
 /// Every skill `plugins` could have installed, as `(name, origin hash)`,
 /// found without running anything the plugins carry.
 ///
@@ -340,6 +400,57 @@ pub(crate) fn skills_on_disk(sym: &Symposium, plugins: &[Plugin]) -> Vec<(String
     out
 }
 
+fn predicates_display(predicates: &PredicateSet) -> Option<String> {
+    let display = predicates
+        .predicates
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    (!display.is_empty()).then_some(display)
+}
+
+fn report_skill_group(
+    plugin: &Plugin,
+    group: &SkillGroup,
+    predicates: Option<String>,
+    matched: bool,
+    skills_found: Option<usize>,
+    reason: Option<String>,
+) {
+    tracing::debug!(
+        report = %crate::report::ReportEvent::SkillGroupConsidered {
+            plugin: plugin.manifest.name.clone(),
+            group_crates: predicates,
+            source: Some(group_source_label(group)),
+            matched,
+            skills_found,
+            reason,
+        },
+    );
+}
+
+fn report_skill(plugin: &Plugin, skill: &Skill, matched: bool) {
+    tracing::debug!(
+        report = %crate::report::ReportEvent::SkillConsidered {
+            skill: skill.name().to_string(),
+            plugin: plugin.manifest.name.clone(),
+            matched,
+            reason: (!matched).then(|| "skill-level predicates not satisfied".into()),
+        },
+    );
+}
+
+async fn load_skill_group_contents(
+    sym: &Symposium,
+    plugin: &Plugin,
+    group: &SkillGroup,
+    update: UpdateLevel,
+) -> Vec<(Skill, String, Option<PackageContent>)> {
+    let resolved = resolve_group_dirs(sym, plugin, group, update).await;
+    collect_skills_from_dirs(resolved, group)
+}
+
 /// Discover and load skills for a group, applying pre-fetch filtering.
 ///
 /// Checks group-level `depends-on` predicates against `for_crates` before
@@ -362,42 +473,30 @@ where
     // Pre-fetch filtering: skip groups whose predicates don't hold (crate
     // matching and runtime checks alike). Done before any git/crates fetch so
     // we don't pay network cost when the group doesn't apply.
-    let predicates_display = group
-        .predicates
-        .predicates
-        .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let predicates_display = (!predicates_display.is_empty()).then_some(predicates_display);
+    let predicates_display = predicates_display(&group.predicates);
 
     if !group.predicates.evaluate(ctx) {
         tracing::debug!(plugin = %plugin.name, "skill group predicates failed, skipping");
-        tracing::debug!(
-            report = %crate::report::ReportEvent::SkillGroupConsidered {
-                plugin: plugin.name.clone(),
-                group_crates: predicates_display,
-                source: Some(group_source_label(group)),
-                matched: false,
-                skills_found: None,
-                reason: Some("group predicates not satisfied".into()),
-            },
+        report_skill_group(
+            parsed,
+            group,
+            predicates_display,
+            false,
+            None,
+            Some("group predicates not satisfied".into()),
         );
         return Vec::new();
     }
 
-    let resolved = resolve_group_dirs(sym, parsed, group, update).await;
-    let skills = collect_skills_from_dirs(resolved, group);
+    let skills = load_skill_group_contents(sym, parsed, group, update).await;
 
-    tracing::debug!(
-        report = %crate::report::ReportEvent::SkillGroupConsidered {
-            plugin: plugin.name.clone(),
-            group_crates: predicates_display,
-            source: Some(group_source_label(group)),
-            matched: true,
-            skills_found: Some(skills.len()),
-            reason: None,
-        },
+    report_skill_group(
+        parsed,
+        group,
+        predicates_display,
+        true,
+        Some(skills.len()),
+        None,
     );
 
     skills
@@ -887,31 +986,18 @@ fn collect_skill_applicable_to<D>(
     D: PredicateDependencies,
 {
     if !skill.predicates.evaluate(ctx) {
-        tracing::debug!(
-            report = %crate::report::ReportEvent::SkillConsidered {
-                skill: skill.name().to_string(),
-                plugin: plugin.manifest.name.clone(),
-                matched: false,
-                reason: Some("skill-level predicates not satisfied".into()),
-            },
-        );
+        report_skill(plugin, &skill, false);
         return;
     }
 
-    tracing::debug!(
-        report = %crate::report::ReportEvent::SkillConsidered {
-            skill: skill.name().to_string(),
-            plugin: plugin.manifest.name.clone(),
-            matched: true,
-            reason: None,
-        },
-    );
+    report_skill(plugin, &skill, true);
     results.push(SkillWithGroupContext {
         skill,
         origin_hash,
         plugin_index,
         agent_plugin_root: plugin.agent_plugin_root.clone(),
         package_content,
+        evidence: None,
     });
 }
 
@@ -1078,6 +1164,7 @@ mod tests {
             plugin_index: 0,
             agent_plugin_root: None,
             package_content: discovered.package_content,
+            evidence: None,
         };
         let naming = resolved.naming_view();
 
@@ -1136,6 +1223,7 @@ mod tests {
             plugin_index: 0,
             agent_plugin_root: None,
             package_content: discovered.package_content,
+            evidence: None,
         };
 
         assert!(resolved.naming_view().package().is_none());
@@ -1192,7 +1280,10 @@ mod tests {
         let resolved = SkillWithGroupContext {
             origin_hash: discovered.origin_hash,
             skill: discovered.skill,
+            plugin_index: 0,
+            agent_plugin_root: None,
             package_content: discovered.package_content,
+            evidence: None,
         };
 
         assert_eq!(resolved.skill().path, bundle.join("SKILL.md"));
@@ -1843,6 +1934,104 @@ mod tests {
             "Should find one skill when all levels match"
         );
         assert_eq!(skills[0].skill.name(), "serde-basics");
+    }
+
+    #[tokio::test]
+    async fn evidence_retention_does_not_change_skill_selection() {
+        use crate::plugins::{Plugin, PluginManifest, PluginSource, ResolvedPlugin, SkillGroup};
+        use symposium_sdk::pm::PackageSourceClaim;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+        let skill_dir = tmp.path().join("serde-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: serde-basics
+                description: Basic serde usage
+                depends-on: serde
+                ---
+
+                Use derive macros.
+            "},
+        )
+        .unwrap();
+        let dependency = crate::pm::ResolvedDependency::for_test(
+            0,
+            PackageId::new(crate::pm::CARGO_PM, "serde", "1.0.0"),
+            PackageSourceClaim::CratesIo,
+            crate::pm::PackageNamingAuthority::BuiltinCargo,
+        );
+        let plugin = Plugin {
+            manifest: PluginManifest {
+                name: "serde-plugin".into(),
+                version: None,
+                description: None,
+                predicates: pred_set("serde"),
+                hooks: Vec::new(),
+                skills: vec![SkillGroup {
+                    predicates: pred_set("serde"),
+                    source: PluginSource::Path(skill_dir),
+                    source_label: None,
+                    workspace_member: false,
+                }],
+                mcp_servers: Vec::new(),
+                installations: Vec::new(),
+                subcommands: Default::default(),
+                custom_predicates: Vec::new(),
+                chained: Vec::new(),
+                requires_use: false,
+            },
+            workspace_member: false,
+            agent_plugin_root: None,
+            root: PathBuf::new(),
+            canonical: PackageId::any_version("test", "serde-plugin"),
+            resolved_content: None,
+        };
+
+        let resolve = |retain| {
+            let dependency = dependency.clone();
+            let plugin = plugin.clone();
+            let sym = &sym;
+            async move {
+                let dependencies = [dependency];
+                let mut context = crate::predicate::ResolvedPredicateContext::new(&dependencies);
+                let active = [ResolvedPlugin {
+                    plugin,
+                    evidence: crate::telemetry::OptionalWitnessMode::new(retain).start(),
+                }];
+                resolve_skills(sym, &active, &mut context, UpdateLevel::None, retain)
+                    .await
+                    .skills
+                    .into_iter()
+                    .map(|skill| {
+                        (
+                            skill.skill().name().to_owned(),
+                            skill.origin_hash().to_owned(),
+                            skill.evidence.is_some(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let without_evidence = resolve(false).await;
+        let with_evidence = resolve(true).await;
+
+        assert_eq!(
+            without_evidence
+                .iter()
+                .map(|(name, origin, _)| (name, origin))
+                .collect::<Vec<_>>(),
+            with_evidence
+                .iter()
+                .map(|(name, origin, _)| (name, origin))
+                .collect::<Vec<_>>()
+        );
+        assert!(without_evidence.iter().all(|(_, _, retained)| !retained));
+        assert!(with_evidence.iter().all(|(_, _, retained)| *retained));
     }
 
     #[tokio::test]

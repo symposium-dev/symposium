@@ -60,16 +60,17 @@ pub(crate) struct PluginSkills {
     skills: Vec<SkillWithGroupContext>,
 }
 
-pub(crate) async fn global_plugins<D>(
+pub(crate) async fn global_plugins<D, P>(
     sym: &Symposium,
     pms: &PmRegistry,
     registry: &PluginRegistry,
-    active: &[Plugin],
+    active: &[P],
     ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
 ) -> Vec<PluginSkills>
 where
     D: PredicateDependencies,
+    P: AsRef<Plugin>,
 {
     let used = globally_used(
         &sym.config.plugins,
@@ -80,12 +81,13 @@ where
     .await;
     let names = crate::discovery::Names::new(&registry.plugins, ctx.package_ids(), pms);
     let mut spellings = names.spellings(&sym.config.plugins).await;
-    let inactive = registry
-        .plugins
-        .iter()
-        .filter(|plugin| !active.iter().any(|a| a.canonical == plugin.canonical));
+    let inactive = registry.plugins.iter().filter(|plugin| {
+        !active
+            .iter()
+            .any(|active| active.as_ref().canonical == plugin.canonical)
+    });
     let mut plugins = Vec::new();
-    for plugin in active.iter().chain(inactive) {
+    for plugin in active.iter().map(AsRef::as_ref).chain(inactive) {
         names
             .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
             .await;
@@ -105,11 +107,14 @@ where
     group_skills(plugins, skills)
 }
 
-pub(crate) fn project_plugins(
-    active: &[Plugin],
+pub(crate) fn project_plugins<P>(
+    active: &[P],
     applicable: &[SkillWithGroupContext],
     global: &[PluginSkills],
-) -> Vec<PluginSkills> {
+) -> Vec<PluginSkills>
+where
+    P: AsRef<Plugin>,
+{
     let global_origins: BTreeSet<&str> = global
         .iter()
         .flat_map(|plugin| &plugin.skills)
@@ -120,7 +125,13 @@ pub(crate) fn project_plugins(
         .filter(|skill| !global_origins.contains(skill.origin_hash()))
         .cloned()
         .collect();
-    group_skills(active.to_vec(), skills)
+    group_skills(
+        active
+            .iter()
+            .map(|plugin| plugin.as_ref().clone())
+            .collect(),
+        skills,
+    )
 }
 
 fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec<PluginSkills> {

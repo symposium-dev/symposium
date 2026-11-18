@@ -25,7 +25,7 @@ pub use symposium_sdk::predicate::syntax::{
     validate_custom_predicate_name,
 };
 
-use crate::pm::{PackageId, PackageNamingView, ResolvedDependency};
+use crate::pm::{PackageHandle, PackageId, PackageNamingView, ResolvedDependency};
 use crate::predicate_cache::{
     CacheEntry, CacheTtl, Fingerprints, PredicateCache, WatchSet, cache_key, now_ms,
 };
@@ -103,8 +103,28 @@ impl PredicateDependencies for BorrowedPackageIds<'_> {
 /// packages. The ids are derived rather than accepted as a second collection,
 /// so coordinate matching and source-sensitive evidence cannot drift apart.
 pub(crate) struct ResolvedDependencies<'a> {
-    packages: Vec<PackageNamingView<'a>>,
+    packages: Vec<ResolvedDependencyView<'a>>,
     package_ids: Vec<PackageId>,
+}
+
+/// One deduplicated dependency as seen by the witnessed predicate traversal.
+///
+/// The handle selects the exact admitted package; the naming view exposes only
+/// the source facts the telemetry policy is allowed to inspect.
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedDependencyView<'a> {
+    handle: PackageHandle,
+    naming: PackageNamingView<'a>,
+}
+
+impl<'a> ResolvedDependencyView<'a> {
+    pub(crate) fn handle(self) -> PackageHandle {
+        self.handle
+    }
+
+    pub(crate) fn naming(self) -> PackageNamingView<'a> {
+        self.naming
+    }
 }
 
 impl<'a> ResolvedDependencies<'a> {
@@ -115,7 +135,10 @@ impl<'a> ResolvedDependencies<'a> {
 
         for dependency in dependencies {
             if handles.insert(dependency.handle()) {
-                packages.push(dependency.naming_view());
+                packages.push(ResolvedDependencyView {
+                    handle: dependency.handle(),
+                    naming: dependency.naming_view(),
+                });
                 package_ids.push(dependency.id().clone());
             }
         }
@@ -128,14 +151,14 @@ impl<'a> ResolvedDependencies<'a> {
 }
 
 impl<'a> PredicateDependencies for ResolvedDependencies<'a> {
-    type Dependency = PackageNamingView<'a>;
+    type Dependency = ResolvedDependencyView<'a>;
 
     fn dependencies(&self) -> &[Self::Dependency] {
         &self.packages
     }
 
     fn package_id(dependency: &Self::Dependency) -> &PackageId {
-        dependency.id()
+        dependency.naming.id()
     }
 
     fn package_ids(&self) -> &[PackageId] {
@@ -146,16 +169,7 @@ impl<'a> PredicateDependencies for ResolvedDependencies<'a> {
 /// Cardinality of the admitted packages satisfying one coordinate predicate.
 pub(crate) enum DependencyMatch<'a, T> {
     /// Exactly one distinct admitted package matched.
-    Unique(
-        #[cfg_attr(
-            not(test),
-            expect(
-                dead_code,
-                reason = "the structured sync report reaches admitted witness evidence in the next stack slice"
-            )
-        )]
-        &'a T,
-    ),
+    Unique(&'a T),
     /// Several distinct admitted packages matched the coordinate predicate.
     Ambiguous,
 }
@@ -174,6 +188,12 @@ where
     /// several. Boolean evaluation can stop at the first match.
     const DISTINGUISH_DEPENDENCY_MATCHES: bool;
 
+    /// Whether successful child evidence must be retained for parent nodes.
+    ///
+    /// Disabled optional-witness traversal still evaluates every predicate but
+    /// keeps this false, avoiding evidence-vector allocation.
+    fn retains_evidence(&self) -> bool;
+
     fn dependency(&mut self, matched: DependencyMatch<'_, D::Dependency>) -> Self::Evidence;
     fn non_package(&mut self) -> Self::Evidence;
     fn not(&mut self) -> Self::Evidence;
@@ -190,6 +210,10 @@ where
 {
     type Evidence = ();
     const DISTINGUISH_DEPENDENCY_MATCHES: bool = false;
+
+    fn retains_evidence(&self) -> bool {
+        false
+    }
 
     fn dependency(&mut self, _matched: DependencyMatch<'_, D::Dependency>) -> Self::Evidence {}
 
@@ -208,13 +232,6 @@ where
 ///
 /// The method accepts only [`ResolvedPredicateContext`]. An ID-only context
 /// cannot request a source-sensitive witness.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the structured sync report reaches the witness producer in the next stack slice"
-    )
-)]
 pub(crate) trait PredicateWitnessEval {
     fn evaluate_witness<'a, M>(
         &self,
@@ -331,11 +348,13 @@ where
     D: PredicateDependencies,
     M: PredicateEvaluationMode<D>,
 {
-    // For BooleanMode this is Vec<()>, whose zero-sized elements require no
-    // allocation; ordinary boolean evaluation keeps its current cost model.
-    let mut evidence = Vec::with_capacity(predicates.len());
+    let retain = mode.retains_evidence();
+    let mut evidence = Vec::with_capacity(if retain { predicates.len() } else { 0 });
     for predicate in predicates {
-        evidence.push(evaluate_predicate(predicate, ctx, mode)?);
+        let child = evaluate_predicate(predicate, ctx, mode)?;
+        if retain {
+            evidence.push(child);
+        }
     }
     Some(evidence)
 }
@@ -383,13 +402,6 @@ impl<'a> PredicateContextImpl<BorrowedPackageIds<'a>> {
 }
 
 impl<'a> PredicateContextImpl<ResolvedDependencies<'a>> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the structured sync report constructs admitted predicate contexts in a later slice"
-        )
-    )]
     pub(crate) fn new(dependencies: &'a [ResolvedDependency]) -> Self {
         Self::from_dependencies(ResolvedDependencies::new(dependencies))
     }
@@ -780,13 +792,19 @@ mod tests {
         type Evidence = TestEvidence;
         const DISTINGUISH_DEPENDENCY_MATCHES: bool = true;
 
+        fn retains_evidence(&self) -> bool {
+            true
+        }
+
         fn dependency(
             &mut self,
-            matched: DependencyMatch<'_, PackageNamingView<'a>>,
+            matched: DependencyMatch<'_, ResolvedDependencyView<'a>>,
         ) -> Self::Evidence {
             self.dependency_visits += 1;
             match matched {
-                DependencyMatch::Unique(package) => TestEvidence::Package(package.id().clone()),
+                DependencyMatch::Unique(package) => {
+                    TestEvidence::Package(package.naming().id().clone())
+                }
                 DependencyMatch::Ambiguous => TestEvidence::Ambiguous,
             }
         }
