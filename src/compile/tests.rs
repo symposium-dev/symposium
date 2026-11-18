@@ -282,6 +282,16 @@ fn compile_writes_one_self_contained_directory_per_plugin() {
 
     let compiled = compile(&root, &plugins, Duration::ZERO, &mut BTreeSet::new(), false);
 
+    assert_eq!(
+        compiled.outcome,
+        CompilationOutcome {
+            installed: 1,
+            updated: 0,
+            reaped: 0,
+            complete: true,
+        }
+    );
+
     expect![[r#"
         guide-tools/
         guide-tools/.claude-plugin/
@@ -374,6 +384,15 @@ fn recompiling_writes_only_what_changed_and_leaves_unowned_directories_alone() {
         ["keep", "gone"],
         "a slot symposium does not own is refused"
     );
+    assert_eq!(
+        compiled.outcome,
+        CompilationOutcome {
+            installed: 2,
+            updated: 0,
+            reaped: 0,
+            complete: false,
+        }
+    );
     let copied = root.join("keep/skills/keep/SKILL.md");
     let an_hour_ago = SystemTime::now() - Duration::from_secs(3600);
     fs::File::options()
@@ -397,6 +416,15 @@ fn recompiling_writes_only_what_changed_and_leaves_unowned_directories_alone() {
     );
     assert!(!unchanged.plugins[0].updated);
     assert!(!root.join("gone").exists());
+    assert_eq!(
+        unchanged.outcome,
+        CompilationOutcome {
+            installed: 0,
+            updated: 0,
+            reaped: 1,
+            complete: true,
+        }
+    );
 
     fs::write(&keep_md, "---\nname: keep\ndescription: edited\n---\n").unwrap();
     let edited = compile(
@@ -408,8 +436,26 @@ fn recompiling_writes_only_what_changed_and_leaves_unowned_directories_alone() {
     );
     assert!(fs::read_to_string(&copied).unwrap().contains("edited"));
     assert!(edited.plugins[0].updated);
+    assert_eq!(
+        edited.outcome,
+        CompilationOutcome {
+            installed: 0,
+            updated: 1,
+            reaped: 0,
+            complete: true,
+        }
+    );
 
-    compile(&root, &[], Duration::ZERO, &mut BTreeSet::new(), false);
+    let emptied = compile(&root, &[], Duration::ZERO, &mut BTreeSet::new(), false);
+    assert_eq!(
+        emptied.outcome,
+        CompilationOutcome {
+            installed: 0,
+            updated: 0,
+            reaped: 1,
+            complete: true,
+        }
+    );
     assert_eq!(tree(&root), "mine/\nusers-own/");
 }
 

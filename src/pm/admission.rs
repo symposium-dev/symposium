@@ -41,13 +41,6 @@ pub(super) enum PackageAuthority {
 /// Constructing this value does not grant authority: the policy accepts it
 /// only as part of a [`PackageNamingView`] minted from an admitted package.
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "resolution producers activate every public-naming authority in a later slice"
-    )
-)]
 pub(crate) enum PackageNamingAuthority {
     BuiltinCargo,
     Recommendations,
@@ -133,13 +126,6 @@ impl ResolvedPackage {
         &self.id
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "resolution producers activate the public-naming policy in a later slice"
-        )
-    )]
     pub(crate) fn naming_view(&self) -> PackageNamingView<'_> {
         PackageNamingView {
             id: &self.id,
@@ -165,8 +151,45 @@ impl ResolvedDependency {
         self.0.id()
     }
 
-    pub(crate) fn into_package(self) -> ResolvedPackage {
-        self.0
+    /// The supplier-local identity used to collapse repeated evidence for the
+    /// same admitted package.
+    pub(crate) fn handle(&self) -> PackageHandle {
+        self.0.handle()
+    }
+
+    /// The source-sensitive facts public naming may inspect.
+    pub(crate) fn naming_view(&self) -> PackageNamingView<'_> {
+        self.0.naming_view()
+    }
+
+    /// Copy this exact dependency into a package-loading request.
+    ///
+    /// Kept parent-private so only the package-manager layer can project a
+    /// dependency snapshot back into supplier-routed work.
+    pub(super) fn package(&self) -> ResolvedPackage {
+        self.0.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        slot: usize,
+        id: PackageId,
+        source: PackageSourceClaim,
+        authority: PackageNamingAuthority,
+    ) -> Self {
+        Self(ResolvedPackage {
+            handle: PackageHandle {
+                supplier: SupplierId(0),
+                slot,
+            },
+            id,
+            source,
+            authority: match authority {
+                PackageNamingAuthority::BuiltinCargo => PackageAuthority::BuiltinCargo,
+                PackageNamingAuthority::Recommendations => PackageAuthority::Recommendations,
+                PackageNamingAuthority::Remote => PackageAuthority::Remote,
+            },
+        })
     }
 }
 
@@ -534,7 +557,7 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap()
-            .into_package()
+            .package()
             .handle();
 
         let error = admission

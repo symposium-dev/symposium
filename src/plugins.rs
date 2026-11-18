@@ -1,4 +1,4 @@
-use crate::predicate::PredicateEval;
+use crate::predicate::{PredicateContextImpl, PredicateDependencies, PredicateEval};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -363,7 +363,10 @@ impl Plugin {
     /// subcommands) on the same context. A dormant plugin
     /// ([`requires_use`](PluginManifest::requires_use)) applies only when an
     /// applicable `[plugins] use` entry names it.
-    pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
+    pub fn applies<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies,
+    {
         ctx.set_workspace_member(self.workspace_member);
         if self.manifest.requires_use && !ctx.is_used(&self.canonical) {
             return false;
@@ -375,6 +378,12 @@ impl Plugin {
         self.agent_plugin_root
             .is_some()
             .then_some(AGENT_PLUGIN_FORMAT)
+    }
+}
+
+impl AsRef<Plugin> for Plugin {
+    fn as_ref(&self) -> &Plugin {
+        self
     }
 }
 
@@ -464,10 +473,13 @@ impl PluginManifest {
     ///
     /// ANDed with the plugin-level predicates, which the caller checks
     /// separately.
-    pub fn applicable_mcp_servers(
+    pub fn applicable_mcp_servers<D>(
         &self,
-        ctx: &mut crate::predicate::PredicateContext,
-    ) -> Vec<McpServerEntry> {
+        ctx: &mut PredicateContextImpl<D>,
+    ) -> Vec<McpServerEntry>
+    where
+        D: PredicateDependencies,
+    {
         self.mcp_servers
             .iter()
             .filter(|s| s.predicates.evaluate(ctx))
@@ -1337,21 +1349,33 @@ async fn load_registry_impl(
 /// This is the single seam every facet resolves over — skills, MCP servers,
 /// hooks, and subcommands — so a crate-sourced plugin's extensions dispatch
 /// exactly like a registry plugin's. Each returned plugin has passed its own
-/// plugin-level gate; a facet still calls [`Plugin::applies`] before its
-/// own predicates, to re-stamp `workspace-member()` for the plugin being read.
+/// plugin-level gate. A facet re-stamps `workspace-member()` before evaluating
+/// only its nested predicates; it does not run the plugin gate again.
 ///
-/// `ctx.deps` supplies the dependency list expansion evaluates against.
-pub async fn active_plugins(
+/// `ctx.package_ids()` supplies the dependency list expansion evaluates
+/// against.
+pub async fn active_plugins<D>(
     sym: &Symposium,
     registry: &PluginRegistry,
     pms: &crate::pm::PmRegistry,
     workspace_root: Option<&Path>,
-    ctx: &mut crate::predicate::PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> Vec<Plugin> {
-    resolve_active_plugins(sym, registry, pms, workspace_root, ctx, update)
-        .await
-        .active
+) -> Vec<Plugin>
+where
+    D: PredicateDependencies,
+{
+    active_plugins_with(
+        sym,
+        registry,
+        pms,
+        workspace_root,
+        ctx,
+        update,
+        BooleanPluginMode,
+    )
+    .await
+    .active
 }
 
 /// What [`resolve_active_plugins`] found: the active set, and the packages
@@ -1363,50 +1387,565 @@ pub struct ActivePlugins {
     pub revoked: Vec<Plugin>,
 }
 
+/// One active plugin with evidence from the route that selected it.
+///
+/// No `Debug` or serialization implementation is intentional. The evidence is
+/// private working state until the structured sync report projects it.
+pub(crate) struct ResolvedPlugin {
+    pub(crate) plugin: Plugin,
+    pub(crate) evidence: Option<crate::telemetry::ResolutionEvidence>,
+}
+
+impl AsRef<Plugin> for ResolvedPlugin {
+    fn as_ref(&self) -> &Plugin {
+        &self.plugin
+    }
+}
+
+/// Active plugins resolved through an admitted dependency snapshot.
+pub(crate) struct ResolvedPlugins {
+    pub(crate) active: Vec<ResolvedPlugin>,
+    pub(crate) revoked: Vec<Plugin>,
+    pub(crate) complete: bool,
+}
+
+/// Runtime choices for the source-sensitive active-plugin traversal.
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedPluginOptions {
+    update: UpdateLevel,
+    retain_evidence: bool,
+}
+
+impl ResolvedPluginOptions {
+    pub(crate) const fn new(update: UpdateLevel, retain_evidence: bool) -> Self {
+        Self {
+            update,
+            retain_evidence,
+        }
+    }
+}
+
 /// [`active_plugins`], also returning the revoked packages it withheld.
-pub async fn resolve_active_plugins(
+pub async fn resolve_active_plugins<D>(
     sym: &Symposium,
     registry: &PluginRegistry,
     pms: &crate::pm::PmRegistry,
     workspace_root: Option<&Path>,
-    ctx: &mut crate::predicate::PredicateContext<'_>,
+    ctx: &mut PredicateContextImpl<D>,
     update: UpdateLevel,
-) -> ActivePlugins {
-    let mut active = Vec::new();
-    let mut revoked = Vec::new();
+) -> ActivePlugins
+where
+    D: PredicateDependencies,
+{
+    let resolved = active_plugins_with(
+        sym,
+        registry,
+        pms,
+        workspace_root,
+        ctx,
+        update,
+        BooleanPluginMode,
+    )
+    .await;
+    ActivePlugins {
+        active: resolved.active,
+        revoked: resolved.revoked,
+    }
+}
+
+/// Resolve the active set once while optionally retaining safe route evidence.
+pub(crate) async fn resolve_active_plugins_with_evidence<'a>(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    pms: &crate::pm::PmRegistry,
+    workspace_root: Option<&Path>,
+    dependencies: &'a crate::pm::AdmittedDependencies,
+    ctx: &mut crate::predicate::ResolvedPredicateContext<'a>,
+    options: ResolvedPluginOptions,
+) -> ResolvedPlugins {
+    let mode = WitnessPluginMode {
+        dependencies,
+        witnesses: crate::telemetry::OptionalWitnessMode::new(options.retain_evidence),
+    };
+    let resolved = active_plugins_with(
+        sym,
+        registry,
+        pms,
+        workspace_root,
+        ctx,
+        options.update,
+        mode,
+    )
+    .await;
+    ResolvedPlugins {
+        active: resolved.active,
+        revoked: resolved.revoked,
+        complete: resolved.complete,
+    }
+}
+
+struct ActivePluginSet<T> {
+    active: Vec<T>,
+    revoked: Vec<Plugin>,
+    complete: bool,
+}
+
+type PluginIdentity = (crate::pm::PackageHandle, String);
+
+struct PendingPlugin<R> {
+    request: crate::pm::PackageRequest,
+    route: R,
+    parent: Option<PluginIdentity>,
+}
+
+struct PluginCandidate<R> {
+    plugin: Plugin,
+    package_backed: bool,
+    route: R,
+    parent: Option<PluginIdentity>,
+}
+
+struct ActivePluginWalk<D, M>
+where
+    D: PredicateDependencies,
+    M: ActivePluginMode<D>,
+{
+    mode: M,
+    settled: std::collections::HashMap<PluginIdentity, SettledPlugin>,
+    edges: std::collections::HashMap<PluginIdentity, std::collections::HashSet<PluginIdentity>>,
+    active: Vec<M::Item>,
+    worklist: Vec<PendingPlugin<M::Route>>,
+    dependencies: std::marker::PhantomData<fn() -> D>,
+}
+
+/// The settled activation state for one package plugin.
+///
+/// Active plugins retain their output slot so the in-memory edge graph can
+/// propagate newly learned contributor identities without package-manager or
+/// predicate work.
+enum SettledPlugin {
+    Active { index: usize },
+    Revoked,
+}
+
+impl<D, M> ActivePluginWalk<D, M>
+where
+    D: PredicateDependencies,
+    M: ActivePluginMode<D>,
+{
+    fn new(mode: M) -> Self {
+        Self {
+            mode,
+            settled: std::collections::HashMap::new(),
+            edges: std::collections::HashMap::new(),
+            active: Vec::new(),
+            worklist: Vec::new(),
+            dependencies: std::marker::PhantomData,
+        }
+    }
+
+    fn start(&self) -> M::Route {
+        self.mode.start()
+    }
+
+    fn identity(plugin: &Plugin) -> Option<PluginIdentity> {
+        plugin
+            .resolved_package()
+            .map(|package| (package.handle(), plugin.manifest.name.clone()))
+    }
+
+    fn connect(&mut self, parent: Option<&PluginIdentity>, child: &PluginIdentity) {
+        if !self.mode.tracks_contributors() {
+            return;
+        }
+        if let Some(parent) = parent {
+            self.edges
+                .entry(parent.clone())
+                .or_default()
+                .insert(child.clone());
+        }
+    }
+
+    fn merge_active_contributors(&mut self, parent: usize, child: usize) -> bool {
+        if parent == child {
+            return false;
+        }
+        if parent < child {
+            let (before_child, from_child) = self.active.split_at_mut(child);
+            M::propagate_contributors(&before_child[parent], &mut from_child[0])
+        } else {
+            let (before_parent, from_parent) = self.active.split_at_mut(parent);
+            M::propagate_contributors(&from_parent[0], &mut before_parent[child])
+        }
+    }
+
+    /// Propagate contributor growth through already-resolved successful edges.
+    fn propagate_contributors_from(&mut self, identity: PluginIdentity) {
+        let mut changed = vec![identity];
+        while let Some(parent) = changed.pop() {
+            let Some(SettledPlugin::Active {
+                index: parent_index,
+            }) = self.settled.get(&parent)
+            else {
+                continue;
+            };
+            let parent_index = *parent_index;
+            let children: Vec<_> = self
+                .edges
+                .get(&parent)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
+            for child in children {
+                let Some(SettledPlugin::Active { index: child_index }) = self.settled.get(&child)
+                else {
+                    continue;
+                };
+                if self.merge_active_contributors(parent_index, *child_index) {
+                    changed.push(child);
+                }
+            }
+        }
+    }
+
+    fn refresh_pending_route(&self, pending: &mut PendingPlugin<M::Route>) {
+        let Some(parent) = &pending.parent else {
+            return;
+        };
+        let Some(SettledPlugin::Active { index }) = self.settled.get(parent) else {
+            return;
+        };
+        M::refresh_route_contributors(&self.active[*index], &mut pending.route);
+    }
+
+    /// Merge a later successful route into an already settled plugin.
+    ///
+    /// The first route keeps ownership of the concrete witness. Witness mode
+    /// only unions contributor handles, then propagates growth through the
+    /// already-resolved edge graph. Boolean mode has nothing to merge, and
+    /// revoked plugins stay terminal.
+    fn revisit_settled(
+        &mut self,
+        plugin: &Plugin,
+        route: &M::Route,
+        parent: Option<&PluginIdentity>,
+    ) -> bool {
+        let Some(identity) = Self::identity(plugin) else {
+            return false;
+        };
+        let Some(settled) = self.settled.get(&identity) else {
+            return false;
+        };
+        let SettledPlugin::Active { index } = settled else {
+            return true;
+        };
+        let index = *index;
+        self.connect(parent, &identity);
+        if M::merge_contributors(&mut self.active[index], route) {
+            self.propagate_contributors_from(identity);
+        }
+        true
+    }
+
+    fn settle(&mut self, plugin: &Plugin) {
+        if let Some(identity) = Self::identity(plugin) {
+            self.settled.insert(identity, SettledPlugin::Revoked);
+        }
+    }
+
+    /// Gate one plugin, record it, and enqueue only its successful edges.
+    fn record(
+        &mut self,
+        candidate: PluginCandidate<M::Route>,
+        disabled: &crate::config::PluginsConfig,
+        spellings: &crate::config::Spellings,
+        ctx: &mut PredicateContextImpl<D>,
+    ) {
+        let PluginCandidate {
+            plugin,
+            package_backed,
+            route,
+            parent,
+        } = candidate;
+        let plugin_name = plugin.manifest.name.clone();
+        if disabled.is_disabled(&plugin.canonical, spellings) {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::PluginConsidered {
+                    plugin: plugin_name,
+                    matched: false,
+                    reason: Some("disabled in `[plugins] disable`".into()),
+                },
+            );
+            return;
+        }
+        let Some(item) = self.mode.consider(plugin, package_backed, route, ctx) else {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::PluginConsidered {
+                    plugin: plugin_name,
+                    matched: false,
+                    reason: Some("plugin-level predicates not satisfied".into()),
+                },
+            );
+            return;
+        };
+        tracing::debug!(
+            report = %crate::report::ReportEvent::PluginConsidered {
+                plugin: plugin_name,
+                matched: true,
+                reason: None,
+            },
+        );
+        warn_undispatched_crate_features(M::plugin(&item));
+        let identity = if package_backed {
+            Self::identity(M::plugin(&item))
+        } else {
+            None
+        };
+        let mut outgoing = Vec::new();
+        for edge in &M::plugin(&item).manifest.chained {
+            if let Some(route) = self.mode.chained(&item, edge, ctx) {
+                outgoing.push(PendingPlugin {
+                    request: crate::pm::PackageRequest::coordinate(crate::pm::CargoPm::id_for(
+                        &edge.name, None,
+                    )),
+                    route,
+                    parent: identity.clone(),
+                });
+            }
+        }
+        let index = self.active.len();
+        self.active.push(item);
+        if let Some(identity) = &identity {
+            self.settled
+                .insert(identity.clone(), SettledPlugin::Active { index });
+            self.connect(parent.as_ref(), identity);
+        }
+        self.worklist.extend(outgoing);
+    }
+}
+
+trait ActivePluginMode<D>
+where
+    D: PredicateDependencies,
+{
+    type Route: Clone;
+    type Item;
+
+    fn start(&self) -> Self::Route;
+    fn admitted_dependencies(&self) -> Option<&crate::pm::AdmittedDependencies> {
+        None
+    }
+    fn tracks_contributors(&self) -> bool {
+        false
+    }
+    fn consider(
+        &mut self,
+        plugin: Plugin,
+        package_backed: bool,
+        route: Self::Route,
+        ctx: &mut PredicateContextImpl<D>,
+    ) -> Option<Self::Item>;
+    fn chained(
+        &mut self,
+        plugin: &Self::Item,
+        edge: &ChainedPlugin,
+        ctx: &mut PredicateContextImpl<D>,
+    ) -> Option<Self::Route>;
+    fn plugin(item: &Self::Item) -> &Plugin;
+
+    /// Union contributor identities from a later route into an active item.
+    ///
+    /// Boolean traversal retains no route state, so its default is terminal.
+    fn merge_contributors(_item: &mut Self::Item, _route: &Self::Route) -> bool {
+        false
+    }
+
+    /// Refresh one not-yet-resolved edge with its parent's contributor set.
+    fn refresh_route_contributors(_item: &Self::Item, _route: &mut Self::Route) {}
+
+    /// Carry contributor growth across one already-resolved edge.
+    fn propagate_contributors(_parent: &Self::Item, _child: &mut Self::Item) -> bool {
+        false
+    }
+}
+
+struct BooleanPluginMode;
+
+impl<D> ActivePluginMode<D> for BooleanPluginMode
+where
+    D: PredicateDependencies,
+{
+    type Route = ();
+    type Item = Plugin;
+
+    fn start(&self) -> Self::Route {}
+
+    fn consider(
+        &mut self,
+        plugin: Plugin,
+        _package_backed: bool,
+        _route: Self::Route,
+        ctx: &mut PredicateContextImpl<D>,
+    ) -> Option<Self::Item> {
+        plugin.applies(ctx).then_some(plugin)
+    }
+
+    fn chained(
+        &mut self,
+        plugin: &Self::Item,
+        edge: &ChainedPlugin,
+        ctx: &mut PredicateContextImpl<D>,
+    ) -> Option<Self::Route> {
+        ctx.set_workspace_member(plugin.workspace_member);
+        edge.predicates.evaluate(ctx).then_some(())
+    }
+
+    fn plugin(item: &Self::Item) -> &Plugin {
+        item
+    }
+}
+
+struct WitnessPluginMode<'a> {
+    dependencies: &'a crate::pm::AdmittedDependencies,
+    witnesses: crate::telemetry::OptionalWitnessMode,
+}
+
+impl<'a> ActivePluginMode<crate::predicate::ResolvedDependencies<'a>> for WitnessPluginMode<'a> {
+    type Route = Option<crate::telemetry::ResolutionEvidence>;
+    type Item = ResolvedPlugin;
+
+    fn start(&self) -> Self::Route {
+        self.witnesses.start()
+    }
+
+    fn admitted_dependencies(&self) -> Option<&crate::pm::AdmittedDependencies> {
+        Some(self.dependencies)
+    }
+
+    fn tracks_contributors(&self) -> bool {
+        self.witnesses.retains_evidence()
+    }
+
+    fn consider(
+        &mut self,
+        plugin: Plugin,
+        package_backed: bool,
+        route: Self::Route,
+        ctx: &mut crate::predicate::ResolvedPredicateContext<'a>,
+    ) -> Option<Self::Item> {
+        ctx.set_workspace_member(plugin.workspace_member);
+        if plugin.manifest.requires_use && !ctx.is_used(&plugin.canonical) {
+            return None;
+        }
+        let predicates = crate::telemetry::evaluate_resolution_predicates(
+            &plugin.manifest.predicates,
+            ctx,
+            &mut self.witnesses,
+        )?;
+        let package = plugin.resolved_package();
+        let route_package = if package_backed { package } else { None };
+        let evidence = crate::telemetry::plugin_resolution_evidence(
+            route,
+            route_package,
+            predicates,
+            package,
+            &plugin.manifest.name,
+        );
+        Some(ResolvedPlugin { plugin, evidence })
+    }
+
+    fn chained(
+        &mut self,
+        plugin: &Self::Item,
+        edge: &ChainedPlugin,
+        ctx: &mut crate::predicate::ResolvedPredicateContext<'a>,
+    ) -> Option<Self::Route> {
+        ctx.set_workspace_member(plugin.plugin.workspace_member);
+        let predicates = crate::telemetry::evaluate_resolution_predicates(
+            &edge.predicates,
+            ctx,
+            &mut self.witnesses,
+        )?;
+        Some(crate::telemetry::chained_resolution_evidence(
+            plugin.evidence.clone(),
+            predicates,
+        ))
+    }
+
+    fn plugin(item: &Self::Item) -> &Plugin {
+        &item.plugin
+    }
+
+    fn merge_contributors(item: &mut Self::Item, route: &Self::Route) -> bool {
+        match (&mut item.evidence, route) {
+            (Some(existing), Some(incoming)) => existing.union_contributors(incoming),
+            _ => false,
+        }
+    }
+
+    fn refresh_route_contributors(item: &Self::Item, route: &mut Self::Route) {
+        if let (Some(item), Some(route)) = (&item.evidence, route) {
+            let _ = route.union_contributors(item);
+        }
+    }
+
+    fn propagate_contributors(parent: &Self::Item, child: &mut Self::Item) -> bool {
+        match (&parent.evidence, &mut child.evidence) {
+            (Some(parent), Some(child)) => child.union_contributors(parent),
+            _ => false,
+        }
+    }
+}
+
+async fn active_plugins_with<D, M>(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    pms: &crate::pm::PmRegistry,
+    workspace_root: Option<&Path>,
+    ctx: &mut PredicateContextImpl<D>,
+    update: UpdateLevel,
+    mode: M,
+) -> ActivePluginSet<M::Item>
+where
+    D: PredicateDependencies,
+    M: ActivePluginMode<D>,
+{
     if let Err(error) = sym.config.plugins.validate_disable_managers(pms) {
         tracing::warn!(
             report = %crate::report::ReportEvent::Warning {
                 message: format!("not activating plugins: {error}"),
             },
         );
-        return ActivePlugins { active, revoked };
+        return ActivePluginSet {
+            active: Vec::new(),
+            revoked: Vec::new(),
+            complete: false,
+        };
     }
-    // Crate identities already loaded through the set, keyed on `(pm, name)` so
-    // a crate reached through two chains — or a chain and dependency enablement —
-    // loads once (its hooks don't double-fire, its subcommands aren't a false
-    // conflict), while a registry plugin and a crate of the same name stay
-    // distinct.
+    let mut revoked = Vec::new();
     // Package plugins already admitted to the active set. The supplier-scoped
     // handle keeps equal coordinates from distinct resolutions separate, and
     // the validated name lets one package offer several plugins. We insert
     // only after the gate passes: a rejected route cannot suppress a later
     // valid route to the same plugin.
-    let mut settled = std::collections::HashSet::new();
-    // Package ids still to resolve through the set.
-    let mut worklist: Vec<crate::pm::PackageRequest> = Vec::new();
-    let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
+    let mut walk = ActivePluginWalk::<D, M>::new(mode);
+    let names = crate::discovery::Names::new(&registry.plugins, ctx.package_ids(), pms);
     let mut spellings = names.spellings(&sym.config.plugins).await;
 
     // Seed with the trust-root plugins (registry + workspace), gated.
     for parsed in &registry.plugins {
-        record_active(
-            parsed.clone(),
+        let route = walk.start();
+        walk.record(
+            PluginCandidate {
+                plugin: parsed.clone(),
+                package_backed: false,
+                route,
+                parent: None,
+            },
             &sym.config.plugins,
             &spellings,
             ctx,
-            &mut active,
-            &mut worklist,
         );
     }
 
@@ -1414,10 +1953,38 @@ pub async fn resolve_active_plugins(
     // each resolved by the package managers.
     if let Some(root) = workspace_root {
         let used = crate::discovery::used(sym, root, &names).await;
-        worklist.extend(
-            crate::discovery::enabled_dependencies(sym, pms, ctx.deps, &used, &spellings, update)
-                .await,
-        );
+        let enabled = match walk.mode.admitted_dependencies() {
+            Some(dependencies) => {
+                crate::discovery::enabled_admitted_dependencies(
+                    sym,
+                    pms,
+                    dependencies,
+                    &used,
+                    &spellings,
+                    update,
+                )
+                .await
+            }
+            None => {
+                crate::discovery::enabled_dependencies(
+                    sym,
+                    pms,
+                    ctx.package_ids(),
+                    &used,
+                    &spellings,
+                    update,
+                )
+                .await
+            }
+        };
+        for request in enabled {
+            let route = walk.start();
+            walk.worklist.push(PendingPlugin {
+                request,
+                route,
+                parent: None,
+            });
+        }
     }
 
     // Fixed-point: resolve each id through the set, record any new plugin, and
@@ -1425,42 +1992,39 @@ pub async fn resolve_active_plugins(
     // through here, whether a chained reference, `auto-enable` or `use` named
     // it, so this is the one place a revocation is enforced.
     let audits = crate::audits::AuditIndex::configured(sym);
-    while let Some(request) = worklist.pop() {
-        for plugin in pms.load_plugin_request(&request, update).await {
-            let identity = plugin
-                .resolved_package()
-                .map(|package| (package.handle(), plugin.manifest.name.clone()));
-            if identity
-                .as_ref()
-                .is_some_and(|identity| settled.contains(identity))
-            {
+    while let Some(mut pending) = walk.worklist.pop() {
+        walk.refresh_pending_route(&mut pending);
+        for plugin in pms.load_plugin_request(&pending.request, update).await {
+            if walk.revisit_settled(&plugin, &pending.route, pending.parent.as_ref()) {
                 continue;
             }
             if withheld(pms, &audits, &plugin).await {
+                walk.settle(&plugin);
                 revoked.push(plugin);
-                if let Some(identity) = identity {
-                    settled.insert(identity);
-                }
                 continue;
             }
             names
                 .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
                 .await;
-            if record_active(
-                plugin,
+            walk.record(
+                PluginCandidate {
+                    plugin,
+                    package_backed: true,
+                    route: pending.route.clone(),
+                    parent: pending.parent.clone(),
+                },
                 &sym.config.plugins,
                 &spellings,
                 ctx,
-                &mut active,
-                &mut worklist,
-            ) && let Some(identity) = identity
-            {
-                settled.insert(identity);
-            }
+            );
         }
     }
 
-    ActivePlugins { active, revoked }
+    ActivePluginSet {
+        active: walk.active,
+        revoked,
+        complete: pms.failed().is_empty(),
+    }
 }
 
 /// Whether the audits list revokes `plugin`, a package the package managers
@@ -1488,60 +2052,6 @@ async fn withheld(
             reason: Some(revocation.to_string()),
         },
     );
-    true
-}
-
-/// Gate `plugin` and, if it passes, record it into `active` and enqueue its
-/// `[[plugins]]` chained references (evaluated against this plugin's provenance)
-/// onto `worklist`.
-fn record_active(
-    plugin: Plugin,
-    disabled: &crate::config::PluginsConfig,
-    spellings: &crate::config::Spellings,
-    ctx: &mut crate::predicate::PredicateContext<'_>,
-    active: &mut Vec<Plugin>,
-    worklist: &mut Vec<crate::pm::PackageRequest>,
-) -> bool {
-    // `disable` names a plugin whatever offers it. A trusted source is what
-    // lets a plugin activate without being asked about, not a claim the user
-    // cannot change their mind.
-    if disabled.is_disabled(&plugin.canonical, spellings) {
-        tracing::debug!(
-            report = %crate::report::ReportEvent::PluginConsidered {
-                plugin: plugin.manifest.name.clone(),
-                matched: false,
-                reason: Some("disabled in `[plugins] disable`".into()),
-            },
-        );
-        return false;
-    }
-    if !plugin.applies(ctx) {
-        tracing::debug!(
-            report = %crate::report::ReportEvent::PluginConsidered {
-                plugin: plugin.manifest.name.clone(),
-                matched: false,
-                reason: Some("plugin-level predicates not satisfied".into()),
-            },
-        );
-        return false;
-    }
-    tracing::debug!(
-        report = %crate::report::ReportEvent::PluginConsidered {
-            plugin: plugin.manifest.name.clone(),
-            matched: true,
-            reason: None,
-        },
-    );
-    warn_undispatched_crate_features(&plugin);
-    for edge in &plugin.manifest.chained {
-        ctx.set_workspace_member(plugin.workspace_member);
-        if edge.predicates.evaluate(ctx) {
-            worklist.push(crate::pm::PackageRequest::coordinate(
-                crate::pm::CargoPm::id_for(&edge.name, None),
-            ));
-        }
-    }
-    active.push(plugin);
     true
 }
 
@@ -2407,6 +2917,246 @@ mod tests {
     fn from_str_as(s: &str, origin: ManifestOrigin<'_>) -> Result<PluginManifest> {
         let manifest: RawPluginManifest = toml::from_str(s)?;
         validate_manifest(manifest, origin)
+    }
+
+    struct DiamondPm {
+        root: PathBuf,
+        calls: std::sync::Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
+    }
+
+    impl DiamondPm {
+        fn resolution(name: &str) -> crate::pm::PackageResolution {
+            crate::pm::PackageResolution::new(
+                PackageId::new(crate::pm::CARGO_PM, name, "1.0.0"),
+                crate::pm::PackageSourceClaim::CratesIo,
+                crate::pm::PackageKey::new(format!("diamond:{name}")).unwrap(),
+            )
+        }
+
+        fn plugin(&self, name: &str, extra: &str) -> UnvalidatedPlugin {
+            let manifest = RawPluginManifest::parse(&format!(
+                "name = \"{name}\"\n{extra}\n[defaults]\nskills = false\n"
+            ))
+            .unwrap();
+            UnvalidatedPlugin::new(Self::resolution(name), self.root.clone(), manifest)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::pm::PackageManager for DiamondPm {
+        fn name(&self) -> &str {
+            crate::pm::CARGO_PM
+        }
+
+        async fn load_plugin(
+            &self,
+            target: &crate::pm::PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> anyhow::Result<crate::pm::PluginListing> {
+            let crate::pm::PackageLoadTarget::Coordinate { id } = target else {
+                return Ok(crate::pm::PluginListing::complete(Vec::new()));
+            };
+            *self
+                .calls
+                .lock()
+                .unwrap()
+                .entry(id.name.clone())
+                .or_default() += 1;
+            let plugin = match id.name.as_str() {
+                "diamond-center" => Some(self.plugin(
+                    "diamond-center",
+                    indoc! {r#"
+                        [[plugins]]
+                        source.cargo = "diamond-leaf"
+
+                        [[plugins]]
+                        source.cargo = "rejected-child"
+                    "#},
+                )),
+                "diamond-leaf" => Some(self.plugin(
+                    "diamond-leaf",
+                    indoc! {r#"
+                        [[plugins]]
+                        source.cargo = "diamond-center"
+                    "#},
+                )),
+                "rejected-child" => {
+                    Some(self.plugin("rejected-child", "depends-on = [\"missing-runtime\"]\n"))
+                }
+                _ => None,
+            };
+            Ok(crate::pm::PluginListing::complete(
+                plugin.into_iter().collect(),
+            ))
+        }
+
+        async fn list_deps(&self) -> anyhow::Result<Vec<crate::pm::PackageResolution>> {
+            Ok(vec![
+                Self::resolution("left-runtime"),
+                Self::resolution("right-runtime"),
+            ])
+        }
+    }
+
+    fn diamond_root(root: &Path, name: &str, dependency: &str) -> Plugin {
+        let manifest = from_str(&format!(
+            "name = \"{name}\"\ndepends-on = [\"{dependency}\"]\n\
+             [[plugins]]\nsource.cargo = \"diamond-center\"\n"
+        ))
+        .unwrap();
+        Plugin {
+            manifest,
+            workspace_member: false,
+            agent_plugin_root: None,
+            root: root.to_path_buf(),
+            canonical: PackageId::any_version("test-registry", name),
+            resolved_content: None,
+        }
+    }
+
+    struct DiamondRun {
+        active: Vec<String>,
+        calls: BTreeMap<String, usize>,
+        predicate_executions: BTreeMap<String, usize>,
+        no_evidence: bool,
+        descendants_have_both_contributors: bool,
+    }
+
+    async fn run_diamond(retain_evidence: bool) -> DiamondRun {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        symposium_testlib::install_tracing_baseline();
+        let (layer, reports) =
+            crate::report::ReportLayer::new(crate::report::ReportMode::Json, tracing::Level::DEBUG);
+        let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[defaults]\nsymposium-recommendations = false\nuser-plugins = false\n",
+        )
+        .unwrap();
+        let sym = Symposium::from_dir(&config_dir);
+        let registry = PluginRegistry {
+            plugins: vec![
+                diamond_root(tmp.path(), "left-route", "left-runtime"),
+                diamond_root(tmp.path(), "right-route", "right-runtime"),
+            ],
+            warnings: Vec::new(),
+            unreadable_registries: Vec::new(),
+            custom_predicates: Default::default(),
+        };
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+        let pms = crate::pm::PmRegistry::new(vec![crate::pm::PmInstance::new(
+            crate::pm::CARGO_PM,
+            false,
+            crate::pm::PluginKind::Package,
+            Box::new(DiamondPm {
+                root: tmp.path().to_path_buf(),
+                calls: std::sync::Arc::clone(&calls),
+            }),
+        )]);
+        let dependency_ids = pms.list_deps().await;
+        let dependencies = pms.admitted_dependencies(&dependency_ids).await;
+        let handles: Vec<_> = dependencies
+            .packages()
+            .iter()
+            .map(crate::pm::ResolvedDependency::handle)
+            .collect();
+        assert_eq!(handles.len(), 2, "both route dependencies must be admitted");
+        let mut context = crate::predicate::ResolvedPredicateContext::new(dependencies.packages());
+
+        let resolved = resolve_active_plugins_with_evidence(
+            &sym,
+            &registry,
+            &pms,
+            Some(tmp.path()),
+            &dependencies,
+            &mut context,
+            ResolvedPluginOptions::new(UpdateLevel::None, retain_evidence),
+        )
+        .await;
+
+        let descendants_have_both_contributors =
+            ["diamond-center", "diamond-leaf"].into_iter().all(|name| {
+                let matching: Vec<_> = resolved
+                    .active
+                    .iter()
+                    .filter(|plugin| plugin.plugin.manifest.name == name)
+                    .collect();
+                assert_eq!(matching.len(), 1, "{name} must activate exactly once");
+                matching[0].evidence.as_ref().is_some_and(|evidence| {
+                    handles
+                        .iter()
+                        .all(|handle| evidence.contributors().contains(handle))
+                })
+            });
+        let no_evidence = resolved
+            .active
+            .iter()
+            .all(|plugin| plugin.evidence.is_none());
+        let mut active: Vec<_> = resolved
+            .active
+            .iter()
+            .map(|plugin| plugin.plugin.manifest.name.clone())
+            .collect();
+        active.sort();
+        let mut predicate_executions = BTreeMap::new();
+        for report in reports.drain() {
+            if report["kind"] == "plugin_considered" {
+                *predicate_executions
+                    .entry(report["plugin"].as_str().unwrap().to_string())
+                    .or_default() += 1;
+            }
+        }
+        let calls = calls.lock().unwrap().clone();
+        DiamondRun {
+            active,
+            calls,
+            predicate_executions,
+            no_evidence,
+            descendants_have_both_contributors,
+        }
+    }
+
+    #[tokio::test]
+    async fn diamond_routes_propagate_contributors_without_repeating_resolution() {
+        let disabled = run_diamond(false).await;
+        let enabled = run_diamond(true).await;
+
+        assert_eq!(enabled.active, disabled.active);
+        assert_eq!(
+            enabled.active,
+            [
+                "diamond-center",
+                "diamond-leaf",
+                "left-route",
+                "right-route",
+            ]
+        );
+        assert_eq!(enabled.calls, disabled.calls);
+        assert_eq!(
+            enabled.calls,
+            BTreeMap::from([
+                ("diamond-center".to_string(), 3),
+                ("diamond-leaf".to_string(), 1),
+                ("rejected-child".to_string(), 1),
+            ])
+        );
+        assert_eq!(enabled.predicate_executions, disabled.predicate_executions);
+        assert_eq!(
+            enabled.predicate_executions,
+            BTreeMap::from([
+                ("diamond-center".to_string(), 1),
+                ("diamond-leaf".to_string(), 1),
+                ("left-route".to_string(), 1),
+                ("rejected-child".to_string(), 1),
+                ("right-route".to_string(), 1),
+            ])
+        );
+        assert!(disabled.no_evidence);
+        assert!(enabled.descendants_have_both_contributors);
     }
 
     /// A flat registry plugin gates itself on its own `depends-on`, evaluated

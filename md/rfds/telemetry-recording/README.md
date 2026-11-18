@@ -227,11 +227,13 @@ Plugin, skill, and command names follow the same public-by-allowlist rule. Packa
 
 Safe nodes are public `package` and `extension` coordinates, `all` contributors, the successful `any` branch, an opaque `not` marker, or `opaque` with a fixed reason: `private_source`, `non_package_predicate`, or `limit`.
 
+`private_source` also covers ambiguous coordinate predicates. When several distinct admitted packages match, the predicate proves existence but selects no exact origin; telemetry therefore makes the witness opaque before testing whether any candidate is publicly nameable. Repeated evidence for the same admitted package is deduplicated first.
+
 Shell commands, paths, environment values, custom predicate details, workspace members, wildcards, private names, and a negated child never enter the path.
 
-The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. These limits do not count filesystem path components; filesystem paths are never recorded.
+The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. Exceeding the complete path's 16-leaf or 4 KiB compact UTF-8 JSON limit replaces the whole path with one `opaque: limit` node. These limits do not count filesystem path components; filesystem paths are never recorded.
 
-Full sync builds safe evidence for successful installations because the generated attribution index needs it even when telemetry is disabled. Only an enabled recorder serializes that evidence as telemetry.
+Full sync uses one traversal in both consent states. When telemetry is enabled it retains safe evidence for the resolution report and generated attribution index; when disabled it keeps the same selection and predicate execution but retains no evidence and removes any generated index best-effort. If several successful routes converge on one plugin, the first route supplies its concrete witness while contributor identities are unioned and propagated through an in-memory graph of already-resolved descendants. This propagation makes no additional package-manager request, reruns no gate, and duplicates no activation.
 
 Cached booleans for non-package predicates may synthesize `opaque: non_package_predicate`. Caching an entire `PredicateSet` would discard the successful branches and witnesses. Supporting such a cache would require a different witness design.
 
@@ -271,15 +273,15 @@ Configured reach covers all seven agents; observed-session measures cover only r
 
 Agent-specific parsing ends at a normalized extension-use observation. The Claude adapter accepts only a fixture-tested `Skill` tool shape and produces a skill identifier plus one phase: `attempted`, `completed`, or `failed`. Raw Claude input and ephemeral invocation ids do not enter the recorder.
 
-Full sync writes a versioned installation index under the agent skills parent at `.symposium/index-v1.json`. This generated, gitignored file is installation state, not configuration or telemetry.
+When telemetry is enabled, full sync writes a versioned installation index under the agent skills parent at `.symposium-index/index.json`. This generated, gitignored file is installation state, not configuration or telemetry. Disabling telemetry removes the generated index best-effort.
 
-The index maps the actual agent-facing identifier to the installed directory, marker fingerprint, eligibility, and safe public coordinate or path when one exists. Private identifiers may remain in the local index because they already exist in installed skill content. They are never serialized as telemetry.
+The index maps the actual agent-facing identifier to the installed directory slot, random installation binding, eligibility, and safe public coordinate or path when one exists. Private identifiers may remain in the local index because they already exist in installed skill content. They are never serialized as telemetry.
 
-The index is atomically replaced after sync determines which installations succeeded. Before naming a public invocation, lookup verifies the Symposium marker and fingerprint. A hook sees an old or new complete index; a missing, corrupt, or stale mapping never falls back to a path or content guess.
+The index is atomically replaced after sync determines which installations succeeded. Before naming a public invocation, lookup verifies the Symposium marker and binding. A hook sees an old or new complete index; a missing, corrupt, or stale mapping never falls back to a path or content guess.
 
 Public matches reuse the `extension_subject` derived for the selected safe resolution path. Other observations merge into `unnamed` rows with one fixed reason: `ineligible`, `not_indexed`, `attribution_unavailable`, `ambiguous`, or `invalid_signal`.
 
-`not_indexed` means a valid attribution index has no matching agent-facing identifier. `attribution_unavailable` means the index is missing, corrupt, or stale. After 128 named public-skill rows in one UTC day, further public matches merge into `overflow`.
+`not_indexed` means a valid attribution index has no entry matching the agent-facing identifier and its current binding. A missing index contributes no candidate; `attribution_unavailable` means present metadata cannot be read or validated. After 128 named public-skill rows in one UTC day, further public matches merge into `overflow`.
 
 Claude's existing `PreToolUse` and `PostToolUse` hooks increment attempts and completions. A `PostToolUseFailure` registration matched only to `Skill` increments failures; it does not create generic failure-surface metrics.
 
@@ -301,11 +303,11 @@ The same all-or-nothing 256-id rule applies to attempted and completed distinct-
 | `JsonlSink`               | Lock, cap, retain, append/replace, inspect, and clear files.                      |
 | `ArchiveReader`           | Preserve raw inspection and return validated records from immutable closed days. |
 
-Only an enabled `Recorder` owns the telemetry sink and identity components. Call sites cannot write directly. The generated installation index is functional sync state and exists independently of telemetry consent.
+Only enabled telemetry owns the sink, identity components, retained resolution evidence, and generated installation index. Call sites cannot write directly.
 
 Keep the schema, recorder, identity, storage writer/reader, retention, limits, and controls in focused submodules beneath `telemetry`. Only narrow recording and control entry points are crate-visible. A future upload module depends on `ArchiveReader`; recording and storage never depend on upload.
 
-A sync returns a structured report with provenance and witnesses. That report drives skill installation, atomic index replacement, and, when recording is enabled, one sanitized relationship batch.
+Every sync returns a safe structured report. With telemetry enabled its private resolution state projects safe provenance and witnesses into that report and one sanitized relationship batch. Installation layout stays separate and drives atomic index replacement without putting paths or supplier keys into the report.
 
 A hook prepares its agent response before converting timings and outcomes into aggregate updates. When telemetry is disabled and no other sink is active, the observation router does not load the index or construct an extension-use observation.
 
@@ -535,14 +537,14 @@ Verify every package manager and source class, malformed and wildcard coordinate
 
 Return safe evidence from the original predicate evaluation while preserving short-circuit and accepted cache behavior. Whole-`PredicateSet` caching remains disallowed.
 
-Carry evidence through plugin and skill selection, return one structured full-sync report, and construct coherent `resolution_summary`, `package_resolution`, and `extension_resolution` batches. After installation, atomically replace the generated agent-facing attribution index with successful managed skills and their marker fingerprints. Ordinary read-only plugin lookup remains silent.
+Carry evidence through plugin and skill selection, return one structured full-sync report, and construct coherent `resolution_summary`, `package_resolution`, and `extension_resolution` batches. After installation, atomically replace the generated agent-facing attribution index with successful managed skills and their marker bindings. Ordinary read-only plugin lookup remains silent.
 
 Verify:
 
 - `all`, `any`, `not`, and opaque/limit paths, plus cache hits without reevaluation.
 - Every `extension_match` case and complete package-to-plugin-to-skill paths.
 - Whole-batch failure, successful and failed installation indexing, and atomic old-or-new index reads.
-- Stale, corrupt, fingerprint-mismatch, and collision handling.
+- Stale, corrupt, binding-mismatch, and collision handling.
 - Raw paths, private names, and dependency snapshots stay out of telemetry.
 
 - [ ] PR: resolution witnesses, installed attribution, and recording

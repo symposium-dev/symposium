@@ -36,8 +36,9 @@ mod path;
 pub mod remote;
 
 pub use admission::ResolvedContent;
-use admission::ResolvedDependency;
-pub(crate) use admission::{PackageNamingAuthority, PackageNamingView, ResolvedPackage};
+pub(crate) use admission::{
+    PackageHandle, PackageNamingAuthority, PackageNamingView, ResolvedDependency, ResolvedPackage,
+};
 pub use git::GitPm;
 pub use path::PathPm;
 pub use remote::{RemotePm, RemotePmCommand};
@@ -615,6 +616,50 @@ pub struct PmRegistry {
     pub(crate) payload_digests: crate::audits::DigestMemo,
 }
 
+/// Exact dependencies admitted for one package-manager session.
+///
+/// This is the owning dependency collection for source-sensitive work. Its ID
+/// view is derived at construction, so predicate matching and package loading
+/// cannot be supplied independently aligned collections. The type deliberately
+/// has neither `Debug` nor serialization: admitted coordinates can be private.
+pub(crate) struct AdmittedDependencies {
+    packages: Vec<ResolvedDependency>,
+    package_ids: Vec<PackageId>,
+}
+
+impl AdmittedDependencies {
+    fn new(packages: Vec<ResolvedDependency>) -> Self {
+        let package_ids = packages
+            .iter()
+            .map(|dependency| dependency.id().clone())
+            .collect();
+        Self {
+            packages,
+            package_ids,
+        }
+    }
+
+    pub(crate) fn packages(&self) -> &[ResolvedDependency] {
+        &self.packages
+    }
+
+    pub(crate) fn package_ids(&self) -> &[PackageId] {
+        &self.package_ids
+    }
+
+    pub(crate) fn requests_matching(
+        &self,
+        mut selected: impl FnMut(&PackageId) -> bool,
+    ) -> Vec<PackageRequest> {
+        self.packages
+            .iter()
+            .filter(|dependency| selected(dependency.id()))
+            .map(ResolvedDependency::package)
+            .map(PackageRequest::Resolved)
+            .collect()
+    }
+}
+
 impl PmRegistry {
     pub fn new(instances: Vec<PmInstance>) -> Self {
         Self {
@@ -711,18 +756,24 @@ impl PmRegistry {
     /// Exact admitted dependencies matching `ids`, retaining distinct source
     /// identities even when their coordinates compare equal.
     pub(crate) async fn dependency_requests(&self, ids: &[PackageId]) -> Vec<PackageRequest> {
-        let mut requests = Vec::new();
+        self.admitted_dependencies(ids)
+            .await
+            .requests_matching(|_| true)
+    }
+
+    /// Recover exact supplier-session dependencies for a coordinate snapshot.
+    ///
+    /// Durable workspace reuse stores coordinates only. Each supplier
+    /// re-admits its current snapshot before this collection is returned;
+    /// stale or unknown keys never fall back to coordinate inference.
+    pub(crate) async fn admitted_dependencies(&self, ids: &[PackageId]) -> AdmittedDependencies {
+        let mut dependencies = Vec::new();
         for instance in &self.instances {
-            if let Ok(dependencies) = instance.resolved_dependencies(ids).await {
-                requests.extend(
-                    dependencies
-                        .into_iter()
-                        .map(ResolvedDependency::into_package)
-                        .map(PackageRequest::Resolved),
-                );
+            if let Ok(admitted) = instance.resolved_dependencies(ids).await {
+                dependencies.extend(admitted);
             }
         }
-        requests
+        AdmittedDependencies::new(dependencies)
     }
 
     /// Each instance's [`ProjectInfo`], by instance name, and why each one
@@ -978,6 +1029,15 @@ impl Workspace {
     /// nothing ([`PmRegistry::list_deps`]).
     pub async fn dep_ids(&self) -> &[PackageId] {
         self.dep_ids.get_or_init(|| self.pms.list_deps()).await
+    }
+
+    /// Exact admitted dependencies for source-sensitive resolution.
+    ///
+    /// The coordinate cache is only a recovery hint when a workspace was
+    /// reused. The returned collection is rebuilt from each supplier's current
+    /// session and derives its own coordinate view.
+    pub(crate) async fn admitted_dependencies(&self) -> AdmittedDependencies {
+        self.pms.admitted_dependencies(self.dep_ids().await).await
     }
 }
 

@@ -11,14 +11,6 @@
 //! this policy cannot observe, so this layer reports only public or unnamed.
 //! Recommendations are consequently public for extensions but remain `git`
 //! for package-resolution accounting.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "resolution and extension producers consume this policy in later slices"
-    )
-)]
-
 use crate::{
     pm::{CARGO_PM, PackageNamingAuthority, PackageNamingView},
     skills::SkillNamingView,

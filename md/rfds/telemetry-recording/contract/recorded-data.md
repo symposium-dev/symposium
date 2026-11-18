@@ -243,6 +243,12 @@ Path nodes are limited to:
 | `not`       | Marker only; the child is not recorded.                              |
 | `opaque`    | Fixed reason: `private_source`, `non_package_predicate`, or `limit`. |
 
+`private_source` is deliberately broader than proof of a private source. It
+also covers a coordinate predicate that matched several distinct admitted
+packages, because the predicate proves existence but does not select one exact
+origin. Ambiguity is decided before public-name eligibility, so a public match
+cannot hide a second private or public match.
+
 The exact version 1 node shapes are shown below. These examples use public
 placeholder coordinates; the same package and extension validation rules
 described above apply inside path nodes.
@@ -262,7 +268,7 @@ additional fields, unknown node types, and unknown opaque reasons are invalid.
 
 Shell commands, paths, environment variables, custom predicate names or arguments, and private package or extension names never enter a path. An opaque marker can represent their position.
 
-The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. Evidence depth does not count filesystem components; filesystem paths are never recorded.
+The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. Exceeding the complete path's 16-leaf or 4 KiB compact UTF-8 JSON limit replaces the whole path with one `opaque: limit` node. Evidence depth does not count filesystem components; filesystem paths are never recorded.
 
 This event says an extension resolved. It does not say that an agent read or used the extension; a matching `extension_invocation_metrics` aggregate separately reports observed agent activation. Version 1 can produce that aggregate only for Claude.
 
