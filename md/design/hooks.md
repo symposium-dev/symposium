@@ -54,6 +54,8 @@ A hook that exits on its own is done: background jobs it leaves running are not 
 
 On Antigravity, a native `PreToolUse` object with no `decision` (or an empty one) is read as the denial Antigravity takes it to be, and injected steps other than context (`userMessage`, `toolCall`) accumulate across hooks.
 
+A hook that exits 2 blocks, and the block reaches each agent in the form it acts on. Antigravity reads nothing from an exit code, so it receives a denial on `PreToolUse` and, on `Stop`, `decision: "continue"` with the hook's stderr as the reason; Claude Code and Codex continue a turn on exit 2 itself.
+
 ## Alternatives considered
 
 ### Registering agent-specific hooks directly

@@ -188,6 +188,12 @@ Any value other than `continue` lets the agent stop.
 outcome. This differs from every other agent symposium supports, where exit 2
 blocks.
 
+A plugin hook's exit 2 is therefore delivered on stdout where Antigravity has a
+form for it: `decision: "deny"` on `PreToolUse`, and on `Stop`
+`decision: "continue"` with the hook's stderr as the `reason`
+(`AntigravityStopEvent::blocked`). `PreInvocation` and `PostToolUse` have no
+such form, so a block there has no effect.
+
 ## Skills
 
 | Scope | Path |
