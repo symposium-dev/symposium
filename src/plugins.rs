@@ -1406,6 +1406,7 @@ impl AsRef<Plugin> for ResolvedPlugin {
 pub(crate) struct ResolvedPlugins {
     pub(crate) active: Vec<ResolvedPlugin>,
     pub(crate) revoked: Vec<Plugin>,
+    pub(crate) complete: bool,
 }
 
 /// Runtime choices for the source-sensitive active-plugin traversal.
@@ -1479,12 +1480,14 @@ pub(crate) async fn resolve_active_plugins_with_evidence<'a>(
     ResolvedPlugins {
         active: resolved.active,
         revoked: resolved.revoked,
+        complete: resolved.complete,
     }
 }
 
 struct ActivePluginSet<T> {
     active: Vec<T>,
     revoked: Vec<Plugin>,
+    complete: bool,
 }
 
 type PluginIdentity = (crate::pm::PackageHandle, String);
@@ -1917,6 +1920,7 @@ where
         return ActivePluginSet {
             active: Vec::new(),
             revoked: Vec::new(),
+            complete: false,
         };
     }
     let mut revoked = Vec::new();
@@ -2019,6 +2023,7 @@ where
     ActivePluginSet {
         active: walk.active,
         revoked,
+        complete: pms.failed().is_empty(),
     }
 }
 

@@ -159,6 +159,27 @@ fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec
 pub(crate) struct Compiled {
     pub plugins: Vec<CompiledPlugin>,
     pub skill_origins: BTreeMap<String, Vec<String>>,
+    pub(crate) outcome: CompilationOutcome,
+}
+
+/// Path-free artifact changes produced while compiling native plugins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompilationOutcome {
+    pub(crate) installed: usize,
+    pub(crate) updated: usize,
+    pub(crate) reaped: usize,
+    pub(crate) complete: bool,
+}
+
+impl Default for CompilationOutcome {
+    fn default() -> Self {
+        Self {
+            installed: 0,
+            updated: 0,
+            reaped: 0,
+            complete: true,
+        }
+    }
 }
 
 impl Compiled {
@@ -181,6 +202,7 @@ pub(crate) fn compile(
     let mut compiled = Compiled::default();
     for (plugin, name) in plugins.iter().zip(plugin_dir_names(plugins)) {
         let Some(name) = name else {
+            compiled.outcome.complete = false;
             warn(format!(
                 "skipping plugin {:?}: its name has no ASCII letters or digits to name a plugin directory",
                 plugin.name
@@ -188,23 +210,37 @@ pub(crate) fn compile(
             continue;
         };
         let dir = root.join(&name);
+        let existed = sync::has_symposium_marker(&dir);
         match write_plugin(&dir, &name, &skill_dirs(plugin), debounce, warned) {
             Ok(updated) => {
+                if updated {
+                    if existed {
+                        compiled.outcome.updated += 1;
+                    } else {
+                        compiled.outcome.installed += 1;
+                    }
+                }
                 let origins = plugin.skills.iter().map(|s| s.origin_hash().to_string());
                 compiled
                     .skill_origins
                     .insert(name.clone(), origins.collect());
                 compiled.plugins.push(CompiledPlugin { name, dir, updated });
             }
-            Err(e) => warn(format!("failed to compile plugin {name}: {e:#}")),
+            Err(e) => {
+                compiled.outcome.complete = false;
+                warn(format!("failed to compile plugin {name}: {e:#}"));
+            }
         }
     }
     if skip_cleanup {
         let staged = staged_plugins(root, &compiled.plugins);
-        compiled.plugins.extend(staged);
+        compiled.outcome.complete &= staged.complete;
+        compiled.plugins.extend(staged.plugins);
     } else {
         let keep: BTreeSet<&Path> = compiled.plugins.iter().map(|p| p.dir.as_path()).collect();
-        sync::reap_unlisted(root, |dir| keep.contains(dir));
+        let reaped = sync::reap_unlisted(root, |dir| keep.contains(dir));
+        compiled.outcome.reaped = reaped.removed;
+        compiled.outcome.complete &= reaped.complete;
     }
     compiled
 }
@@ -220,7 +256,13 @@ pub(crate) fn compile_project(
         && let Err(e) = sync::ignore_in_git(&project_root.join(PROJECT_DIR))
     {
         warn(format!("skipping project plugins: {e:#}"));
-        return Compiled::default();
+        return Compiled {
+            outcome: CompilationOutcome {
+                complete: false,
+                ..CompilationOutcome::default()
+            },
+            ..Compiled::default()
+        };
     }
     compile(
         &project_plugins_root(project_root),
@@ -231,24 +273,59 @@ pub(crate) fn compile_project(
     )
 }
 
-fn staged_plugins(root: &Path, compiled: &[CompiledPlugin]) -> Vec<CompiledPlugin> {
-    let Ok(entries) = fs::read_dir(root) else {
-        return Vec::new();
+struct StagedPlugins {
+    plugins: Vec<CompiledPlugin>,
+    complete: bool,
+}
+
+fn staged_plugins(root: &Path, compiled: &[CompiledPlugin]) -> StagedPlugins {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return StagedPlugins {
+                plugins: Vec::new(),
+                complete: true,
+            };
+        }
+        Err(error) => {
+            warn(format!(
+                "failed to inspect staged plugins in {}: {error}",
+                root.display()
+            ));
+            return StagedPlugins {
+                plugins: Vec::new(),
+                complete: false,
+            };
+        }
     };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|dir| is_plugin_dir(dir) && sync::has_symposium_marker(dir))
-        .filter(|dir| compiled.iter().all(|plugin| &plugin.dir != dir))
-        .filter_map(|dir| {
-            let name = dir.file_name()?.to_str()?.to_string();
-            Some(CompiledPlugin {
-                name,
+    let mut plugins = Vec::new();
+    let mut complete = true;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                complete = false;
+                warn(format!(
+                    "failed to inspect an entry in {}: {error}",
+                    root.display()
+                ));
+                continue;
+            }
+        };
+        let dir = entry.path();
+        if is_plugin_dir(&dir)
+            && sync::has_symposium_marker(&dir)
+            && compiled.iter().all(|plugin| plugin.dir != dir)
+            && let Some(name) = dir.file_name().and_then(|name| name.to_str())
+        {
+            plugins.push(CompiledPlugin {
+                name: name.to_string(),
                 dir,
                 updated: false,
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    StagedPlugins { plugins, complete }
 }
 
 /// Stricter than Agent Plugins names: Antigravity rejects `.`.

@@ -5,8 +5,8 @@
 
 use crate::predicate::PredicateEval;
 use std::collections::BTreeMap;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
@@ -291,6 +291,7 @@ where
 /// Applicable skills resolved from an already-witnessed active set.
 pub(crate) struct ResolvedSkills {
     pub(crate) skills: Vec<SkillWithGroupContext>,
+    pub(crate) complete: bool,
 }
 
 /// Resolve skills without re-running their plugins' selection gates.
@@ -305,6 +306,7 @@ pub(crate) async fn resolve_skills<'a>(
     retain_evidence: bool,
 ) -> ResolvedSkills {
     let mut results = Vec::new();
+    let mut complete = true;
     let mut witnesses = crate::telemetry::OptionalWitnessMode::new(retain_evidence);
 
     for (plugin_index, resolved) in active.iter().enumerate() {
@@ -328,17 +330,18 @@ pub(crate) async fn resolve_skills<'a>(
                 continue;
             };
 
-            let skills = load_skill_group_contents(sym, plugin, group, update).await;
+            let loaded = load_skill_group_contents(sym, plugin, group, update).await;
+            complete &= loaded.complete;
             report_skill_group(
                 plugin,
                 group,
                 predicates_display,
                 true,
-                Some(skills.len()),
+                Some(loaded.skills.len()),
                 None,
             );
 
-            for (skill, origin_hash, package_content) in skills {
+            for (skill, origin_hash, package_content) in loaded.skills {
                 let Some(skill_evidence) = crate::telemetry::evaluate_resolution_predicates(
                     &skill.predicates,
                     ctx,
@@ -367,7 +370,10 @@ pub(crate) async fn resolve_skills<'a>(
         }
     }
 
-    ResolvedSkills { skills: results }
+    ResolvedSkills {
+        skills: results,
+        complete,
+    }
 }
 
 /// Every skill `plugins` could have installed, as `(name, origin hash)`,
@@ -446,9 +452,11 @@ async fn load_skill_group_contents(
     plugin: &Plugin,
     group: &SkillGroup,
     update: UpdateLevel,
-) -> Vec<(Skill, String, Option<PackageContent>)> {
+) -> LoadedSkills {
     let resolved = resolve_group_dirs(sym, plugin, group, update).await;
-    collect_skills_from_dirs(resolved, group)
+    let mut loaded = collect_skills_from_dirs(resolved.dirs, group);
+    loaded.complete &= resolved.complete;
+    loaded
 }
 
 /// Discover and load skills for a group, applying pre-fetch filtering.
@@ -488,18 +496,18 @@ where
         return Vec::new();
     }
 
-    let skills = load_skill_group_contents(sym, parsed, group, update).await;
+    let loaded = load_skill_group_contents(sym, parsed, group, update).await;
 
     report_skill_group(
         parsed,
         group,
         predicates_display,
         true,
-        Some(skills.len()),
+        Some(loaded.skills.len()),
         None,
     );
 
-    skills
+    loaded.skills
 }
 
 /// A base directory resolved for a skill group, with the report labels for the
@@ -514,6 +522,16 @@ struct ResolvedSkillDir<'a> {
     /// `SkillSourceSearched` report `source` label.
     source_label: String,
     origin: SkillDirectoryOrigin<'a>,
+}
+
+struct ResolvedSkillDirs<'a> {
+    dirs: Vec<ResolvedSkillDir<'a>>,
+    complete: bool,
+}
+
+struct LoadedSkills {
+    skills: Vec<(Skill, String, Option<PackageContent>)>,
+    complete: bool,
 }
 
 /// Whether a skill directory may inherit an admitted package's authority.
@@ -549,32 +567,39 @@ async fn resolve_group_dirs<'a>(
     parsed: &'a Plugin,
     group: &SkillGroup,
     update: UpdateLevel,
-) -> Vec<ResolvedSkillDir<'a>> {
+) -> ResolvedSkillDirs<'a> {
     let plugin = &parsed.manifest;
 
     match &group.source {
         // Resolved to an absolute directory by the package manager, so there is
         // nothing to join here.
-        PluginSource::Path(dir) => {
-            vec![ResolvedSkillDir {
+        PluginSource::Path(dir) => ResolvedSkillDirs {
+            dirs: vec![ResolvedSkillDir {
                 dir: dir.clone(),
                 plugin_label: plugin.name.clone(),
                 source_label: group_source_label(group),
                 origin: skill_directory_origin(parsed.resolved_content(), &group.source),
-            }]
-        }
+            }],
+            complete: true,
+        },
         PluginSource::Git(url) => {
             let Some((cache_dir, source, _commit_sha)) =
                 fetch_git_skill_source(sym, url, update).await
             else {
-                return Vec::new();
+                return ResolvedSkillDirs {
+                    dirs: Vec::new(),
+                    complete: false,
+                };
             };
-            vec![ResolvedSkillDir {
-                dir: cache_dir,
-                plugin_label: source.repo_id(),
-                source_label: format!("git:{url}"),
-                origin: skill_directory_origin(parsed.resolved_content(), &group.source),
-            }]
+            ResolvedSkillDirs {
+                dirs: vec![ResolvedSkillDir {
+                    dir: cache_dir,
+                    plugin_label: source.repo_id(),
+                    source_label: format!("git:{url}"),
+                    origin: skill_directory_origin(parsed.resolved_content(), &group.source),
+                }],
+                complete: true,
+            }
         }
     }
 }
@@ -585,8 +610,9 @@ async fn resolve_group_dirs<'a>(
 fn collect_skills_from_dirs(
     resolved: Vec<ResolvedSkillDir<'_>>,
     group: &SkillGroup,
-) -> Vec<(Skill, String, Option<PackageContent>)> {
+) -> LoadedSkills {
     let mut skills = Vec::new();
+    let mut complete = true;
     for entry in resolved {
         let discovered = discover_skills_with_origin(
             &entry.dir,
@@ -594,15 +620,16 @@ fn collect_skills_from_dirs(
             &group.predicates,
             entry.origin,
         );
+        complete &= discovered.complete;
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillSourceSearched {
                 plugin: entry.plugin_label.clone(),
                 source: entry.source_label.clone(),
                 path: entry.dir.display().to_string(),
-                skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
+                skills_found: discovered.skills.iter().filter(|r| r.is_ok()).count(),
             },
         );
-        for result in discovered {
+        for result in discovered.skills {
             match result {
                 Ok(discovered) => {
                     skills.push((
@@ -611,15 +638,18 @@ fn collect_skills_from_dirs(
                         discovered.package_content,
                     ));
                 }
-                Err(e) => tracing::info!(
-                    report = %crate::report::ReportEvent::Warning {
-                        message: format!("skipping {e:#}"),
-                    },
-                ),
+                Err(e) => {
+                    complete = false;
+                    tracing::info!(
+                        report = %crate::report::ReportEvent::Warning {
+                            message: format!("skipping {e:#}"),
+                        },
+                    );
+                }
             }
         }
     }
-    skills
+    LoadedSkills { skills, complete }
 }
 
 /// Fetch a `source.git` group's tarball and look up the resolved commit
@@ -664,6 +694,7 @@ pub(crate) fn discover_skills(
         group_predicates,
         SkillDirectoryOrigin::Detached,
     )
+    .skills
     .into_iter()
     .map(|result| result.map(|discovered| discovered.skill))
     .collect()
@@ -673,6 +704,11 @@ struct DiscoveredSkill {
     skill: Skill,
     origin_hash: String,
     package_content: Option<PackageContent>,
+}
+
+struct DiscoveredSkills {
+    skills: Vec<Result<DiscoveredSkill>>,
+    complete: bool,
 }
 
 struct ResolvedSkillFile {
@@ -723,17 +759,13 @@ fn discover_skills_with_origin(
     workspace_member: bool,
     group_predicates: &PredicateSet,
     origin: SkillDirectoryOrigin<'_>,
-) -> Vec<Result<DiscoveredSkill>> {
-    if !skills_dir.is_dir() {
-        return Vec::new();
-    }
-
+) -> DiscoveredSkills {
     let mut skill_files = Vec::new();
-    find_skill_files_recursive(skills_dir, &mut skill_files);
+    let complete = find_skill_files_recursive(skills_dir, &mut skill_files);
     prune_nested_skills(&mut skill_files);
     skill_files.sort();
 
-    skill_files
+    let skills = skill_files
         .into_iter()
         .map(|skill_md| {
             (|| -> Result<DiscoveredSkill> {
@@ -753,7 +785,8 @@ fn discover_skills_with_origin(
             })()
             .with_context(|| display_path(&skill_md))
         })
-        .collect()
+        .collect();
+    DiscoveredSkills { skills, complete }
 }
 
 /// Recursively walk a directory collecting paths to `SKILL.md` files.
@@ -762,30 +795,66 @@ fn discover_skills_with_origin(
 /// symposium itself installed the directory, and installed copies are never
 /// sources. This matters for `.agents/skills/`, which is both a workspace
 /// skill-group source and the install destination for vendor-neutral agents.
-pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+/// The return value is false when any directory or entry could not be
+/// inspected; callers retaining resolution evidence propagate that as a
+/// partial sync while keeping the skills that were readable.
+#[must_use = "a failed directory inspection makes resolution incomplete"]
+pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> bool {
+    match fs::metadata(dir) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+    }
+
     let mut ancestors = crate::dir_walk::Ancestors::rooted_at(dir);
-    find_skill_files_in(dir, &mut ancestors, out);
+    let mut complete = true;
+    find_skill_files_in(dir, &mut ancestors, out, &mut complete);
+    complete
 }
 
 fn find_skill_files_in(
     dir: &Path,
     ancestors: &mut crate::dir_walk::Ancestors,
     out: &mut Vec<PathBuf>,
+    complete: &mut bool,
 ) {
     if crate::sync::has_symposium_marker(dir) {
         return;
     }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => {
+            *complete = false;
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                *complete = false;
+                continue;
+            }
+        };
         let path = entry.path();
         // `is_dir` follows symlinks, so a symlinked directory of skills is
         // discovered — and can name a directory this walk is already inside.
-        if path.is_dir() {
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                *complete = false;
+                if path.file_name().is_some_and(|name| name == "SKILL.md") {
+                    // Preserve the existing per-skill error result as well as
+                    // marking the enclosing traversal incomplete.
+                    out.push(path);
+                }
+                continue;
+            }
+        };
+        if metadata.is_dir() {
             if ancestors.enter(&path) {
-                find_skill_files_in(&path, ancestors, out);
+                find_skill_files_in(&path, ancestors, out, complete);
                 ancestors.leave();
             }
         } else if path.file_name().is_some_and(|f| f == "SKILL.md") {
@@ -1103,7 +1172,7 @@ mod tests {
         std::os::unix::fs::symlink("..", skills.join("my-skill/back")).unwrap();
 
         let mut found = Vec::new();
-        find_skill_files_recursive(&skills, &mut found);
+        assert!(find_skill_files_recursive(&skills, &mut found));
 
         assert_eq!(found, vec![skills.join("my-skill/SKILL.md")]);
     }
@@ -1145,6 +1214,88 @@ mod tests {
     }
 
     #[test]
+    fn malformed_skill_marks_the_loaded_group_incomplete() {
+        use crate::plugins::{PluginSource, SkillGroup};
+
+        let root = tempfile::tempdir().unwrap();
+        let skill_dir = root.path().join("skills/broken");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: [\n---\n").unwrap();
+        let group = SkillGroup {
+            predicates: PredicateSet::default(),
+            source: PluginSource::Path(root.path().join("skills")),
+            source_label: None,
+            workspace_member: false,
+        };
+
+        let loaded = collect_skills_from_dirs(
+            vec![ResolvedSkillDir {
+                dir: root.path().join("skills"),
+                plugin_label: "test-plugin".into(),
+                source_label: "path".into(),
+                origin: SkillDirectoryOrigin::Detached,
+            }],
+            &group,
+        );
+
+        assert!(loaded.skills.is_empty());
+        assert!(!loaded.complete);
+    }
+
+    #[test]
+    fn missing_and_invalid_skill_sources_have_distinct_completeness() {
+        use crate::plugins::{PluginSource, SkillGroup};
+
+        let root = tempfile::tempdir().unwrap();
+        let invalid = root.path().join("not-a-directory");
+        fs::write(&invalid, "content").unwrap();
+        let group = SkillGroup {
+            predicates: PredicateSet::default(),
+            source: PluginSource::Path(invalid.clone()),
+            source_label: None,
+            workspace_member: false,
+        };
+        let resolved = |dir| {
+            vec![ResolvedSkillDir {
+                dir,
+                plugin_label: "test-plugin".into(),
+                source_label: "path".into(),
+                origin: SkillDirectoryOrigin::Detached,
+            }]
+        };
+
+        let invalid = collect_skills_from_dirs(resolved(invalid), &group);
+        let absent = collect_skills_from_dirs(resolved(root.path().join("absent")), &group);
+
+        assert!(!invalid.complete);
+        assert!(absent.complete);
+        assert!(invalid.skills.is_empty());
+        assert!(absent.skills.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_skill_subtree_marks_discovery_incomplete() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let unreadable = root.path().join("unreadable");
+        fs::create_dir(&unreadable).unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&unreadable).is_ok() {
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let mut found = Vec::new();
+        let complete = find_skill_files_recursive(root.path(), &mut found);
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!complete);
+        assert!(found.is_empty());
+    }
+
+    #[test]
     fn contained_package_proof_stays_bound_to_its_discovered_skill() {
         let root = tempfile::tempdir().unwrap();
         let skill_md = root.path().join("skills/contained/SKILL.md");
@@ -1156,7 +1307,8 @@ mod tests {
             false,
             &PredicateSet::default(),
             SkillDirectoryOrigin::Package(&content),
-        );
+        )
+        .skills;
         let discovered = discovered.pop().unwrap().unwrap();
         let resolved = SkillWithGroupContext {
             origin_hash: discovered.origin_hash,
@@ -1215,7 +1367,7 @@ mod tests {
         let origin = skill_directory_origin(Some(&content), &source);
 
         let mut discovered =
-            discover_skills_with_origin(&git_cache, false, &PredicateSet::default(), origin);
+            discover_skills_with_origin(&git_cache, false, &PredicateSet::default(), origin).skills;
         let discovered = discovered.pop().unwrap().unwrap();
         let resolved = SkillWithGroupContext {
             origin_hash: discovered.origin_hash,
@@ -1275,7 +1427,8 @@ mod tests {
             false,
             &PredicateSet::default(),
             SkillDirectoryOrigin::Package(&content),
-        );
+        )
+        .skills;
         let discovered = discovered.pop().unwrap().unwrap();
         let resolved = SkillWithGroupContext {
             origin_hash: discovered.origin_hash,

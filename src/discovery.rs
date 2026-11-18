@@ -39,7 +39,7 @@
 
 use std::path::Path;
 
-use crate::pm::{AdmittedDependencies, Workspace};
+use crate::pm::Workspace;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use symposium_install::UpdateLevel;

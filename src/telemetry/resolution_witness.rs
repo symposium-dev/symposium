@@ -19,7 +19,7 @@ use symposium_sdk::predicate::syntax::PredicateSet;
 
 use super::{
     policy::{ExtensionNaming, PackageNaming},
-    schema::ResolutionWitness,
+    schema::{PublicExtensionCoordinate, ResolutionPath, ResolutionWitness},
 };
 
 /// Private one-pass resolution evidence.
@@ -31,6 +31,14 @@ use super::{
 pub(crate) struct ResolutionEvidence {
     contributors: HashSet<PackageHandle>,
     witness: ResolutionWitness,
+    target: RouteTarget,
+}
+
+#[derive(Clone)]
+enum RouteTarget {
+    Unbound,
+    Unnamed,
+    Public(PublicExtensionCoordinate),
 }
 
 impl ResolutionEvidence {
@@ -38,6 +46,7 @@ impl ResolutionEvidence {
         Self {
             contributors: HashSet::new(),
             witness: ResolutionWitness::empty(),
+            target: RouteTarget::Unbound,
         }
     }
 
@@ -45,6 +54,7 @@ impl ResolutionEvidence {
         Self {
             contributors: HashSet::new(),
             witness,
+            target: RouteTarget::Unbound,
         }
     }
 
@@ -52,6 +62,7 @@ impl ResolutionEvidence {
         Self {
             contributors: HashSet::from([dependency.handle()]),
             witness: package(&super::policy::package(dependency.naming())),
+            target: RouteTarget::Unbound,
         }
     }
 
@@ -59,12 +70,39 @@ impl ResolutionEvidence {
         Self {
             contributors: HashSet::from([resolved.handle()]),
             witness: package(&super::policy::package(resolved.naming_view())),
+            target: RouteTarget::Unbound,
         }
     }
 
     fn append(&mut self, other: Self) {
+        debug_assert!(
+            matches!(other.target, RouteTarget::Unbound),
+            "BUG: a completed extension cannot be nested in another route"
+        );
         self.contributors.extend(other.contributors);
         self.witness.append(other.witness);
+    }
+
+    fn complete_extension(&mut self, naming: &ExtensionNaming) {
+        debug_assert!(
+            matches!(&self.target, RouteTarget::Unbound),
+            "BUG: one route cannot be bound to two extensions"
+        );
+        self.target = match naming {
+            ExtensionNaming::Public(target) => RouteTarget::Public(target.clone()),
+            ExtensionNaming::Unnamed => RouteTarget::Unnamed,
+        };
+        self.witness.append(extension(naming));
+    }
+
+    /// Continue from a completed extension while retaining its path.
+    ///
+    /// A plugin can select another plugin or own a skill. The child route
+    /// keeps the parent's witness and contributors, but its terminal target
+    /// must be bound independently.
+    fn into_continuation(mut self) -> Self {
+        self.target = RouteTarget::Unbound;
+        self
     }
 
     /// Add contributor identities from another successful route.
@@ -77,6 +115,28 @@ impl ResolutionEvidence {
         self.contributors.len() != previous_len
     }
 
+    pub(super) fn contributes(&self, package: PackageHandle) -> bool {
+        self.contributors.contains(&package)
+    }
+
+    pub(super) fn names_public_extension(&self) -> bool {
+        matches!(&self.target, RouteTarget::Public(_))
+    }
+
+    pub(super) fn is_complete_extension(&self) -> bool {
+        !matches!(&self.target, RouteTarget::Unbound)
+    }
+
+    pub(super) fn safe_resolution(&self) -> Option<SafeExtensionResolution> {
+        let RouteTarget::Public(target) = &self.target else {
+            return None;
+        };
+        Some(SafeExtensionResolution {
+            target: target.clone(),
+            path: self.witness.clone().into_path()?,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn contributors(&self) -> &HashSet<PackageHandle> {
         &self.contributors
@@ -86,6 +146,13 @@ impl ResolutionEvidence {
     fn into_witness(self) -> ResolutionWitness {
         self.witness
     }
+}
+
+/// Public extension target and bounded path safe to retain in a sync report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SafeExtensionResolution {
+    pub(super) target: PublicExtensionCoordinate,
+    pub(super) path: ResolutionPath,
 }
 
 /// Runtime-selectable evidence retention for the sync traversal.
@@ -248,6 +315,7 @@ fn combine_children(
     Some(ResolutionEvidence {
         contributors,
         witness: combine(witnesses),
+        target: RouteTarget::Unbound,
     })
 }
 
@@ -259,7 +327,7 @@ pub(crate) fn plugin_route(
     extension_package: Option<&ResolvedPackage>,
     plugin_name: &str,
 ) -> Option<ResolutionEvidence> {
-    let mut route = route?;
+    let mut route = route?.into_continuation();
     if let Some(package) = package {
         route.append(ResolutionEvidence::from_package(package));
     }
@@ -269,7 +337,7 @@ pub(crate) fn plugin_route(
     let naming = extension_package.map_or(ExtensionNaming::Unnamed, |package| {
         super::policy::plugin(package.naming_view(), plugin_name)
     });
-    route.witness.append(extension(&naming));
+    route.complete_extension(&naming);
     Some(route)
 }
 
@@ -278,7 +346,7 @@ pub(crate) fn chained_route(
     route: Option<ResolutionEvidence>,
     predicates: Option<ResolutionEvidence>,
 ) -> Option<ResolutionEvidence> {
-    let mut route = route?;
+    let mut route = route?.into_continuation();
     if let Some(predicates) = predicates {
         route.append(predicates);
     }
@@ -292,16 +360,14 @@ pub(crate) fn skill_route(
     skill_predicates: Option<ResolutionEvidence>,
     skill: SkillNamingView<'_>,
 ) -> Option<ResolutionEvidence> {
-    let mut route = route?;
+    let mut route = route?.into_continuation();
     if let Some(predicates) = group_predicates {
         route.append(predicates);
     }
     if let Some(predicates) = skill_predicates {
         route.append(predicates);
     }
-    route
-        .witness
-        .append(extension(&super::policy::skill(skill)));
+    route.complete_extension(&super::policy::skill(skill));
     Some(route)
 }
 
@@ -626,6 +692,35 @@ mod tests {
         assert_eq!(
             path_json(evidence.into_witness()),
             json!([{ "type": "opaque", "reason": "private_source" }])
+        );
+    }
+
+    #[test]
+    fn completed_plugin_route_can_continue_to_a_skill() {
+        let plugin = plugin_route(
+            OptionalWitnessMode::new(true).start(),
+            None,
+            None,
+            None,
+            "private-plugin",
+        )
+        .unwrap();
+
+        let skill = skill_route(
+            Some(plugin),
+            None,
+            None,
+            SkillNamingView::for_test("private-skill", None),
+        )
+        .unwrap();
+
+        assert!(skill.is_complete_extension());
+        assert_eq!(
+            path_json(skill.into_witness()),
+            json!([
+                { "type": "opaque", "reason": "private_source" },
+                { "type": "opaque", "reason": "private_source" }
+            ])
         );
     }
 

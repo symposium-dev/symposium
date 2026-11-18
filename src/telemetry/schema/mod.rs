@@ -35,10 +35,12 @@ pub(in crate::telemetry) use plugin_hook::{
     PluginHookMetricsUpdateError, PluginHookMetricsV1, PluginHookOutcome, PluginScope,
     PublicPluginCoordinate,
 };
-pub(in crate::telemetry) use resolution::extension::{ResolutionWitness, SafeSkillAttribution};
+pub(in crate::telemetry) use resolution::extension::{
+    ResolutionPath, ResolutionWitness, SafeSkillAttribution,
+};
 pub(in crate::telemetry) use resolution::{
-    UnnamedPackageReason,
-    package::{PackageEcosystem, PublicPackageCoordinate},
+    UnnamedPackageReason, UnnamedPackageReasons,
+    package::{ExtensionMatch, PackageEcosystem, PublicPackageCoordinate},
 };
 
 use std::{fmt, num::NonZeroU64, str::FromStr, sync::LazyLock};
@@ -57,6 +59,7 @@ use crate::telemetry::state::{IDENTIFIER_WINDOW_TEST_STATE, recording_observatio
 use agent::{AgentConfigurationV1, SessionStartV1};
 use command::CommandV1;
 use macros::strict_versioned_row;
+pub(crate) use resolution::ResolutionOutcome;
 pub(in crate::telemetry) use resolution::extension::PublicSkillCoordinate;
 use resolution::{
     ResolutionSummaryV1, extension::ExtensionResolutionV1, package::PackageResolutionV1,

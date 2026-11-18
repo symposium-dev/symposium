@@ -17,12 +17,15 @@ mod resolution_witness;
 mod schema;
 mod state;
 mod storage;
+mod sync_report;
 
 pub(crate) use resolution_witness::{
     OptionalWitnessMode, ResolutionEvidence, chained_route as chained_resolution_evidence,
     evaluate_optional_predicates as evaluate_resolution_predicates,
     plugin_route as plugin_resolution_evidence, skill_route as skill_resolution_evidence,
 };
+pub(crate) use schema::ResolutionOutcome as SyncOutcome;
+pub(crate) use sync_report::{SyncReport, SyncReportInput};
 
 /// Whether this invocation may retain telemetry-only resolution evidence.
 ///
