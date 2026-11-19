@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.6.0...symposium-v0.7.0) - 2026-11-18
+
+### Added
+
+- *(cli)* register and print symposium instead of cargo agents
+- *(hook)* name each new dependency plugin only once
+- *(cli)* install a symposium binary alongside cargo agents
+
+### Fixed
+
+- *(try)* unregister a trial's MCP servers on plugin try --remove
+- *(use)* unregister the MCP servers of a plugin use --remove disables
+- *(use)* install a global plugin for the user outside a workspace
+- *(use)* install a crate's plugin under the crate's version
+- *(use)* check and record a crate under its published name
+- *(use)* keep the git cache's bookkeeping file out of installed skills
+- *(plugin-tooling)* take from sync which skills plugin try checks instead of evaluating the gate again
+- *(plugin-tooling)* skip the plugin try listing check where the plugin's gate does not hold
+- *(plugin-tooling)* recognize a delivered plugin's skills in the Codex listing check of plugin try
+- *(hooks)* continue the turn on Antigravity when a Stop hook blocks
+- *(eval)* keep cargo-agents and the MCP server in the baseline check
+- *(agents)* rewrite and remove hooks registered as cargo-agents hook
+- *(hook)* a blocked event does not deliver its notice
+- *(hook)* remember a notice only if the agent receives it
+- *(hook)* remember a notice only once it is delivered
+- *(agents)* skip the Codex and Goose config write when no MCP server changed
+
+### Other
+
+- *(use)* repeating a global install changes nothing
+- Merge pull request #501 from fnzko/plugin-try-codex-listing
+- Merge pull request #503 from fnzko/mcp-registration-noop-writes
+- *(eval)* run one trial end to end
+- deliver a global package in a workspace it does not match
+- *(eval)* record attempted client launches
+- *(eval)* separate trial allocation from preparation
+- redirect the old reference pages
+- use symposium as the primary command
+- *(design)* describe the symposium hook command and eval staging
+- Merge pull request #492 from fnzko/plugin-notice-once
+- Merge pull request #488 from symposium-dev/symposium-binary
+- *(discovery)* make the decline override auto-enable and check the hint on its own
+- *(discovery)* a declined dependency plugin stays inactive
+- *(hook)* drop em dashes from the consent notice
+- *(eval)* distinguish runner-owned project changes
+- *(eval)* grade a submission under srt
+- *(eval)* write a versioned trial result
+- *(eval)* decide a trial outcome
+- *(release)* name the release archives after symposium
+- *(eval)* record reproducible trial inputs
+- *(eval)* resolve expected skill sources
+- *(eval)* read Claude session metadata
+- *(tests)* note that CI runs the suite with nextest
+- cache only dependencies, skip debuginfo and run tests with nextest
+
 ## [0.6.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.1...symposium-v0.6.0) - 2026-11-12
 
 ### Added
