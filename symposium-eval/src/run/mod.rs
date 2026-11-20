@@ -261,9 +261,12 @@ pub(crate) fn succeeded(
     tool: &'static str,
     finished: Result<Finished, ProcessError>,
 ) -> Result<Finished, RunError> {
-    let finished = finished.map_err(|source| RunError::Process { tool, source })?;
+    let mut finished = finished.map_err(|source| RunError::Process { tool, source })?;
     let Some(status) = finished.status else {
-        return Err(RunError::ToolTimeout { tool });
+        return Err(RunError::ToolTimeout {
+            tool,
+            after_deadline: finished.after_deadline.take(),
+        });
     };
     if !status.success() {
         return Err(RunError::ToolFailed {
@@ -304,6 +307,7 @@ fn create_dirs(paths: impl IntoIterator<Item = PathBuf>) -> Result<(), RunError>
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::io;
 
     use tempfile::TempDir;
@@ -320,6 +324,26 @@ mod tests {
             result,
             Err(RunError::Create { source, .. }) if source.kind() == io::ErrorKind::AlreadyExists
         )
+    }
+
+    #[test]
+    fn a_tool_timeout_keeps_what_failed_after_its_deadline() {
+        let mut finished = Finished::never_started();
+        finished.after_deadline = Some(ProcessError::OutputNotClosed);
+
+        let error = succeeded("probe", Ok(finished)).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RunError::ToolTimeout {
+                after_deadline: Some(ProcessError::OutputNotClosed),
+                ..
+            }
+        ));
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            "the command's output stayed open after it ended"
+        );
     }
 
     #[test]

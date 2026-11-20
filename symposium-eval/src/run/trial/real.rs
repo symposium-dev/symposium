@@ -7,6 +7,7 @@
 //! formatting.
 
 use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -27,7 +28,18 @@ const STAND_IN: &str = include_str!("claude-stand-in.js");
 fn symposium_stop_hook_formats_the_submission_and_the_trial_passes() {
     let scenario = FormattingScenario::new();
 
-    let result = scenario.run(Configuration::Symposium);
+    let trial = scenario.run(Configuration::Symposium);
+    let result = &trial.result;
+
+    for artifact in [
+        "result.json",
+        "transcript.jsonl",
+        "submission/src/lib.rs",
+        "symposium.log",
+    ] {
+        assert!(trial.directory.join(artifact).is_file(), "{artifact}");
+    }
+    assert!(!trial.directory.join(super::retain::SKIPPED_FILE).exists());
 
     assert_eq!(result["code"]["cargo_fmt_check"], "pass", "{result:#}");
     assert_eq!(result["outcome"]["result"], "succeeded", "{result:#}");
@@ -43,7 +55,8 @@ fn symposium_stop_hook_formats_the_submission_and_the_trial_passes() {
 fn baseline_trial_completes_but_fails_the_formatting_check() {
     let scenario = FormattingScenario::new();
 
-    let result = scenario.run(Configuration::Baseline);
+    let trial = scenario.run(Configuration::Baseline);
+    let result = &trial.result;
 
     assert_eq!(
         result["session"]["ended"]["status"], "completed",
@@ -60,6 +73,13 @@ struct FormattingScenario {
     real: RealSrt,
     client_version: version::Version,
     symposium_build: SymposiumBuild,
+}
+
+/// Keeps the retained artifacts alive while a test inspects its result.
+struct RetainedTrial {
+    _results: TempDir,
+    directory: PathBuf,
+    result: Value,
 }
 
 impl FormattingScenario {
@@ -95,7 +115,7 @@ impl FormattingScenario {
         }
     }
 
-    fn run(self, configuration: Configuration) -> Value {
+    fn run(self, configuration: Configuration) -> RetainedTrial {
         let inputs = inputs(self.real.batch(), "formatting");
         let provenance = provenance(self.client_version);
         let driver = Driver {
@@ -112,9 +132,17 @@ impl FormattingScenario {
             Configuration::Baseline => Arm::Baseline,
         };
         let runner = Claude::enforced("a-model".to_owned(), self.client_version);
-        let path = driver.run(1, arm, &runner).expect("run formatting trial");
-        let bytes = fs::read(path).expect("read the trial's result.json");
-        serde_json::from_slice(&bytes).expect("parse the trial's result.json")
+        let done = driver.run(1, arm, &runner).expect("run formatting trial");
+        let results = TempDir::new().expect("create retained-results directory");
+        let directory = results.path().join("trial");
+        done.retain(&directory).expect("retain formatting trial");
+        let bytes = fs::read(directory.join("result.json")).expect("read retained result.json");
+        let result = serde_json::from_slice(&bytes).expect("parse retained result.json");
+        RetainedTrial {
+            _results: results,
+            directory,
+            result,
+        }
     }
 }
 

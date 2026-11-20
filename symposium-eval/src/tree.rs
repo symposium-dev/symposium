@@ -32,6 +32,23 @@ impl EntryKind {
             Self::Other
         }
     }
+
+    /// The kind of an entry inspected without following it.
+    ///
+    /// Windows directory junctions and other reparse points are links for traversal
+    /// purposes even when [`FileType::is_symlink`] does not identify them as symlinks.
+    pub(crate) fn of_metadata(metadata: &fs::Metadata) -> Self {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Self::Symlink;
+            }
+        }
+        Self::of(metadata.file_type())
+    }
 }
 
 impl fmt::Display for EntryKind {
@@ -92,21 +109,21 @@ fn walk_into(dir: &Path, prefix: &str, entries: &mut Vec<TreeEntry>) -> Result<(
     let mut children = Vec::new();
     for child in fs::read_dir(dir).map_err(read_error)? {
         let child = child.map_err(read_error)?;
-        // `DirEntry::file_type` does not follow links, so a link stays a link.
-        let file_type = child.file_type().map_err(|source| WalkError::Inspect {
+        // Inspect by name without following it. On Windows, the metadata also exposes
+        // directory junctions and other reparse points.
+        let metadata = fs::symlink_metadata(child.path()).map_err(|source| WalkError::Inspect {
             path: join(prefix, &child.file_name().to_string_lossy()),
             source,
         })?;
-        children.push((child.file_name(), file_type));
+        children.push((child.file_name(), EntryKind::of_metadata(&metadata)));
     }
     children.sort_by(|(left, _), (right, _)| left.cmp(right));
 
-    for (name, file_type) in children {
+    for (name, kind) in children {
         let name = name.into_string().map_err(|name| WalkError::NonUtf8 {
             path: join(prefix, &name.to_string_lossy()),
         })?;
         let path = join(prefix, &name);
-        let kind = EntryKind::of(file_type);
         entries.push(TreeEntry {
             path: path.clone(),
             kind,

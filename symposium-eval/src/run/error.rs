@@ -104,7 +104,12 @@ pub(crate) enum RunError {
         stderr: String,
     },
     #[error("`{tool}` did not finish in time")]
-    ToolTimeout { tool: &'static str },
+    ToolTimeout {
+        tool: &'static str,
+        /// What went wrong after the deadline while stopping or collecting the tool.
+        #[source]
+        after_deadline: Option<ProcessError>,
+    },
     #[error("cannot run `{tool}`")]
     Process {
         tool: &'static str,

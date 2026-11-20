@@ -43,6 +43,7 @@ pub(super) fn provenance() -> Provenance {
 pub(super) fn execution(ended: Ended, usage: Usage) -> Execution {
     Execution {
         transcript: "transcript.jsonl".into(),
+        stderr: "stderr.log".into(),
         ended,
         elapsed: Duration::from_millis(1500),
         loads: vec![Load::Loaded],
