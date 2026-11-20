@@ -16,6 +16,7 @@ use crate::state;
 use crate::subcommand_dispatch::dispatch_external;
 
 pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
+    self_update::clean_up_previous_executable();
     let mut sym = config::Symposium::from_environment();
 
     let cwd = env::current_dir().expect("failed to get current directory");
