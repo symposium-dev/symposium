@@ -12,7 +12,10 @@ use anyhow::{Result, bail};
 
 use crate::config::Symposium;
 use crate::plugins::Installation;
-use symposium_install::{Runnable, acquire_source, make_executable};
+use symposium_install::{
+    Runnable, SourceBuild, acquire_source, clear_failure, failure_recorded, make_executable,
+    record_failure,
+};
 
 /// Run a list of post-install shell commands sequentially. Stops at the first
 /// failure.
@@ -78,6 +81,7 @@ pub struct AcquiredInstallation {
     /// What this installation resolves to at spawn time, or `None` when the
     /// installation has nothing runnable (pure setup).
     pub runnable: Option<AcquiredRunnable>,
+    pub built_from_source: Option<SourceBuild>,
 }
 
 /// How `Command::new` should be invoked for an installation that resolved
@@ -122,18 +126,28 @@ pub async fn acquire_installation(
                 Some(_) => sym.install_context(),
                 None => sym.install_context().in_foreground(),
             };
+            if deadline.is_some() && failure_recorded(&context, source, exec_choice) {
+                bail!(
+                    "`{}` is not installed: an earlier attempt failed or ran past the hook time budget; `symposium sync` installs it",
+                    installation.name
+                );
+            }
             let acquiring = acquire_source(&context, source, exec_choice, update);
             let acquired = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline.into(), acquiring)
                     .await
-                    .map_err(|_| {
-                        anyhow::anyhow!(
+                    .unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!(
                             "acquiring `{}` ran past the hook time budget",
                             installation.name
-                        )
-                    })?,
+                        ))
+                    }),
                 None => acquiring.await,
             };
+            match &acquired {
+                Ok(_) => clear_failure(&context, source, exec_choice),
+                Err(_) => record_failure(&context, source, exec_choice),
+            }
             Some(acquired?)
         }
         None => None,
@@ -182,6 +196,29 @@ pub async fn acquire_installation(
         name: installation.name.clone(),
         base: acquired.as_ref().and_then(|a| a.base.clone()),
         runnable,
+        built_from_source: acquired.as_ref().and_then(|a| a.built_from_source),
+    })
+}
+
+pub fn source_is_missing(
+    sym: &Symposium,
+    installation: &Installation,
+    override_executable: Option<&str>,
+) -> bool {
+    installation.source.as_ref().is_some_and(|source| {
+        let executable = installation.executable.as_deref().or(override_executable);
+        symposium_install::source_is_missing(&sym.install_context(), source, executable)
+    })
+}
+
+pub fn install_failed(
+    sym: &Symposium,
+    installation: &Installation,
+    override_executable: Option<&str>,
+) -> bool {
+    installation.source.as_ref().is_some_and(|source| {
+        let executable = installation.executable.as_deref().or(override_executable);
+        failure_recorded(&sym.install_context(), source, executable)
     })
 }
 

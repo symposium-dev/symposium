@@ -82,7 +82,7 @@ Each `[[skills]]` entry declares a group of skills.
 | `depends-on` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Dependency predicates](./depends-on.md) for syntax. |
 | `predicates` | array of strings | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the group to install. See [Predicates](./predicates.md). |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
-| `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
+| `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. The URL follows the rules of a [`github` installation's `url`](#github), and a manifest whose URL breaks them is rejected. |
 
 A skill group must have exactly one of `source.path` or `source.git`. A crate is not a skill-group source; to load a crate's own skills, name it in a [chained plugin](#chained-plugins).
 
@@ -173,12 +173,14 @@ args = ["--version"]   # optional default args
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `crate` | yes | Name of the crate to install. |
-| `version` | no | Exact version to install (`"13.0.0"`). Defaults to the latest stable release on crates.io. |
+| `crate` | yes | Name of the crate to install: ASCII letters, digits, `-` and `_`, starting with a letter, at most 64 characters. Symposium builds its cache paths from it, so a manifest with any other value is rejected. |
+| `version` | no | Exact version to install (`"13.0.0"`), a semantic version rather than a requirement. Defaults to the latest stable release on crates.io. Symposium builds its cache paths from it, so a manifest with any other value is rejected. |
 | `git` | no | Install from this git repository (`cargo install --git`) instead of crates.io. Requires `executable` on the installation. |
 | `global` | no | `true` installs into the user's global cargo location instead of Symposium's cache (see below). Requires `executable` on the installation. |
 
-Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/` (passing `--root` so the install doesn't pollute `~/.cargo/bin`). The chosen `executable` resolves to `<cache>/bin/<executable>`. Hooks that depend on this installation get `<cache>/bin/` prepended to `$PATH`, so scripts can invoke the binary by name.
+Symposium attempts `cargo binstall` first, with its own fallback to building from source turned off, falls back to `cargo install` when `cargo-binstall` is not installed or finds no prebuilt binary for the platform, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/` (passing `--root` so the install doesn't pollute `~/.cargo/bin`). The chosen `executable` resolves to `<cache>/bin/<executable>`. Hooks that depend on this installation get `<cache>/bin/` prepended to `$PATH`, so scripts can invoke the binary by name.
+
+When cargo has to build the crate, it builds in `~/.symposium/cache/binaries/<crate>/<version>/build/` (Symposium sets `CARGO_TARGET_DIR`, and the temporary directory to `build/tmp/`) rather than in the system's temporary directory. The directory is removed once cargo finishes, whether the install succeeded or failed; a build that was stopped at a hook's time limit leaves it there, and the next attempt continues from it.
 
 To install from a git repo instead of crates.io, set `git`:
 
@@ -215,7 +217,7 @@ args = ["--format"]
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `url` | yes | `https://github.com/<owner>/<repo>`, or `https://github.com/<owner>/<repo>/tree/<ref>/<path>` for one directory of the repository. `git` is accepted as another name for this field. |
+| `url` | yes | `https://github.com/<owner>/<repo>`, or `https://github.com/<owner>/<repo>/tree/<ref>/<path>` for one directory of the repository. `git` is accepted as another name for this field. The owner may use only ASCII letters, digits, `-` and `_`, and the repository those and `.`; the ref and each directory of the path must be a plain name rather than a path. Symposium builds its cache paths from them, so a manifest with any other URL is rejected. |
 
 Acquires the repo (or a subtree, if `url` points at `…/tree/<ref>/<path>`) into a local cache. The chosen `executable` / `script` resolves to a file inside the cached tree.
 
@@ -443,6 +445,8 @@ Not every agent delivers every event, and agents name them differently. See [Age
 	- any other non-zero code — treated as success for dispatching purposes; stdout is still parsed and merged when possible.
 
 - **Time limits**: a hook may run for 5 seconds, and all plugin hooks of one event for 8 seconds together. Preparing a hook's command, `install_commands` included, counts toward the 8 seconds. A hook that reaches its limit is killed together with the commands it started, and treated as if it had written nothing: the action is not blocked, and the next hook still runs. A hook is done when its process exits; background jobs it leaves running are not waited for.
+
+- **Installations that do not finish in time**: when acquiring an installation's `source` fails, or does not finish within the 8 seconds, Symposium remembers it, and later events skip the hooks that need that installation at once instead of attempting the install on every event. It is attempted again by [`symposium sync`](./symposium-sync.md) and [`symposium use`](./symposium-use.md), which install what hooks run with no time limit, by a [subcommand](#subcommandname) that uses the same installation, by the first hook event a day after the attempt that failed, or when its `source` fields or `executable` change. Until then, each session starts by telling the agent which plugins have hooks that are not running, and to point the user at `symposium sync`. A `global = true` cargo source is not remembered this way.
 
 - **Stdout handling**: A `format = "symposium"` hook writes one of the [output objects](./hook-events.md#output-schemas) to stdout to contribute structured data back to the caller. Stdout that is not one of them, invalid JSON included, is ignored with a warning in the log. A hook with an agent `format` writes that agent's own output, read the way the agent reads it: on `SessionStart` and `UserPromptSubmit`, plain text from a `claude` or `codex` hook is context. Valid outputs are merged together across successful hooks; keys from later hooks overwrite earlier keys. The exception is `additionalContext` on `SessionStart`, `UserPromptSubmit` and `PostToolUse`: symposium's own context and every hook's are joined, in order, so none replaces another.
 

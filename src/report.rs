@@ -91,6 +91,24 @@ pub enum ReportEvent {
         dest: String,
     },
 
+    InstallationStarted {
+        plugin: String,
+        installation: String,
+    },
+
+    InstallationInstalled {
+        plugin: String,
+        installation: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        built_from_source: Option<symposium_install::SourceBuild>,
+    },
+
+    InstallationFailed {
+        plugin: String,
+        installation: String,
+        error: String,
+    },
+
     /// A stale skill directory was removed.
     SkillRemoved { path: String },
 
@@ -234,7 +252,7 @@ impl ReportEvent {
         )
     }
 
-    fn format_human(&self) -> String {
+    pub fn format_human(&self) -> String {
         match self {
             Self::PluginConsidered {
                 plugin,
@@ -297,6 +315,40 @@ impl ReportEvent {
                 agent,
                 dest,
             } => format!("installed plugin {plugin} for {agent} -> {dest}"),
+            Self::InstallationStarted {
+                plugin,
+                installation,
+            } => format!(
+                "installing {installation} for the hooks of plugin {plugin}; without a prebuilt binary it is built from source, which can take minutes"
+            ),
+            Self::InstallationInstalled {
+                plugin,
+                installation,
+                built_from_source,
+            } => {
+                let installed =
+                    format!("installed {installation} for the hooks of plugin {plugin}");
+                match built_from_source {
+                    None => installed,
+                    Some(symposium_install::SourceBuild::BinstallMissing) => format!(
+                        "{installed}, built from source because cargo-binstall is not installed; \
+                         after `cargo install cargo-binstall` plugins that publish prebuilt \
+                         binaries install in seconds"
+                    ),
+                    Some(symposium_install::SourceBuild::NoPrebuiltBinary) => format!(
+                        "{installed}, built from source because the plugin publishes no \
+                         prebuilt binary for this platform"
+                    ),
+                    Some(_) => format!("{installed}, built from source"),
+                }
+            }
+            Self::InstallationFailed {
+                plugin,
+                installation,
+                error,
+            } => format!(
+                "could not install {installation} for the hooks of plugin {plugin}: {error}"
+            ),
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
             }

@@ -11,8 +11,8 @@ use symposium_install::Runnable;
 
 use crate::discovery::DiscoveredPlugin;
 use crate::installation::{
-    AcquiredInstallation, AcquiredRunnable, acquire_installation, refresh_installation_if_present,
-    resolve_runnable,
+    AcquiredInstallation, AcquiredRunnable, acquire_installation, install_failed,
+    refresh_installation_if_present, resolve_runnable, source_is_missing,
 };
 use crate::plugins::{HookFormat, Installation};
 use crate::pm::{PackageId, Workspace};
@@ -74,6 +74,18 @@ impl ResolvedHook {
             args: hook.args.clone(),
             plugin_root: parsed_plugin.root.clone(),
         })
+    }
+
+    fn installations(&self) -> impl Iterator<Item = (&Installation, Option<&str>, Option<&str>)> {
+        let command = (
+            &self.command,
+            self.hook_executable.as_deref(),
+            self.hook_script.as_deref(),
+        );
+        self.requirements
+            .iter()
+            .map(|requirement| (requirement, None, None))
+            .chain([command])
     }
 }
 
@@ -358,9 +370,13 @@ async fn execute_hook_inner(
         // SessionStart (once per session) also refreshes every hook's already-
         // cached source, so later events dispatch fresh binaries without per-
         // event network cost. Best-effort; gated by `auto-sync`.
-        if session_start && sym.config.auto_sync {
-            prewarm_hook_sources(sym, &deps).await;
-        }
+        let failed_installs = if session_start && sym.config.auto_sync {
+            let hooks = applicable_hooks(sym, &deps).await;
+            prewarm_hook_sources(sym, &hooks).await;
+            failed_installs_notice(sym, &hooks)
+        } else {
+            None
+        };
 
         // Builtin dispatch → symposium output → host agent output as Value
         let (builtin_sym_output, named) = dispatch_builtin(
@@ -369,6 +385,7 @@ async fn execute_hook_inner(
             &deps,
             notify_about_possible_new_plugins,
             plugin_reload_notice(agent, plugin_changes),
+            failed_installs,
         )
         .await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
@@ -640,7 +657,106 @@ fn hook_dispatch_needs_deps(sym: &Symposium, registry_plugins: &[Plugin]) -> boo
 /// Refresh-only: a source that was never acquired is left alone (it installs
 /// lazily when the hook first fires) — `SessionStart` updates installed tools
 /// but never installs eagerly. Best-effort: failures are logged and skipped.
-async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
+async fn prewarm_hook_sources(sym: &Symposium, hooks: &[ResolvedHook]) {
+    for resolved in hooks {
+        for req in &resolved.requirements {
+            if let Err(e) = refresh_installation_if_present(sym, req, None).await {
+                tracing::debug!(name = %req.name, error = %e, "prewarm: requirement refresh failed");
+            }
+        }
+        if let Err(e) = refresh_installation_if_present(
+            sym,
+            &resolved.command,
+            resolved.hook_executable.as_deref(),
+        )
+        .await
+        {
+            tracing::debug!(plugin = %resolved.plugin_name, hook = %resolved.hook_name, error = %e, "prewarm: command refresh failed");
+        }
+    }
+}
+
+pub async fn install_hook_sources(
+    sym: &Symposium,
+    deps: &Arc<Workspace>,
+    update: symposium_install::UpdateLevel,
+) {
+    install_sources(sym, applicable_hooks(sym, deps).await, update).await;
+}
+
+pub async fn install_global_hook_sources(
+    sym: &Symposium,
+    deps: &Arc<Workspace>,
+    update: symposium_install::UpdateLevel,
+) {
+    let mut hooks = applicable_hooks(sym, deps).await;
+    hooks.extend(global_hooks(sym, deps).await);
+    install_sources(sym, hooks, update).await;
+}
+
+async fn install_sources(
+    sym: &Symposium,
+    hooks: Vec<ResolvedHook>,
+    update: symposium_install::UpdateLevel,
+) {
+    let mut attempted = std::collections::BTreeSet::new();
+    for hook in hooks {
+        for (installation, executable, script) in hook.installations() {
+            if !source_is_missing(sym, installation, executable)
+                || !attempted.insert((hook.plugin_name.clone(), installation.name.clone()))
+            {
+                continue;
+            }
+            let plugin = hook.plugin_name.clone();
+            let installation_name = installation.name.clone();
+            tracing::info!(
+                report = %crate::report::ReportEvent::InstallationStarted {
+                    plugin: plugin.clone(),
+                    installation: installation_name.clone(),
+                },
+            );
+            match acquire_installation(sym, installation, executable, script, update, None).await {
+                Ok(acquired) => tracing::info!(
+                    report = %crate::report::ReportEvent::InstallationInstalled {
+                        plugin,
+                        installation: installation_name,
+                        built_from_source: acquired.built_from_source,
+                    },
+                ),
+                Err(e) => tracing::info!(
+                    report = %crate::report::ReportEvent::InstallationFailed {
+                        plugin,
+                        installation: installation_name,
+                        error: format!("{e:#}"),
+                    },
+                ),
+            }
+        }
+    }
+}
+
+fn failed_installs_notice(sym: &Symposium, hooks: &[ResolvedHook]) -> Option<String> {
+    let plugins: std::collections::BTreeSet<&str> = hooks
+        .iter()
+        .filter(|hook| {
+            hook.installations()
+                .any(|(installation, executable, _)| install_failed(sym, installation, executable))
+        })
+        .map(|hook| hook.plugin_name.as_str())
+        .collect();
+    if plugins.is_empty() {
+        return None;
+    }
+    let plugins: Vec<&str> = plugins.into_iter().collect();
+    Some(format!(
+        "Hooks of these plugins are not running, because a tool they need failed to install \
+         or took longer to install than a hook may wait: {}. Tell the user to run \
+         `symposium sync`, which installs it without that time limit.",
+        plugins.join(", ")
+    ))
+}
+
+async fn applicable_hooks(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<ResolvedHook> {
     let workspace = deps.info().await.cloned();
     let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_ref()).await;
 
@@ -669,38 +785,56 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         symposium_install::UpdateLevel::None,
     )
     .await;
+    hooks_that_apply(&plugins, &mut ctx)
+}
 
-    for parsed in &plugins {
-        if !parsed.applies(&mut ctx) {
+async fn global_hooks(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<ResolvedHook> {
+    let Some(here) = deps.start() else {
+        return Vec::new();
+    };
+    let registry = crate::plugins::load_registry(sym).await;
+    let dep_ids = deps.dep_ids().await.to_vec();
+    let pms = deps.pms();
+    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, here).await;
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(Some(here));
+    let active = crate::plugins::active_plugins(
+        sym,
+        &registry,
+        pms,
+        Some(here),
+        &mut ctx,
+        symposium_install::UpdateLevel::None,
+    )
+    .await;
+    let plugins = crate::compile::global_plugin_set(sym, pms, &registry, &active, &mut ctx).await;
+    ctx.set_conditions_met(true);
+    hooks_that_apply(&plugins, &mut ctx)
+}
+
+fn hooks_that_apply(
+    plugins: &[Plugin],
+    ctx: &mut crate::predicate::PredicateContext<'_>,
+) -> Vec<ResolvedHook> {
+    let mut hooks = Vec::new();
+    for parsed in plugins {
+        if !parsed.applies(ctx) {
             continue;
         }
         for hook in &parsed.manifest.hooks {
-            if !hook.predicates.evaluate(&mut ctx) {
+            if !hook.predicates.evaluate(ctx) {
                 continue;
             }
-            let resolved = match ResolvedHook::build(parsed, hook) {
-                Ok(r) => r,
+            match ResolvedHook::build(parsed, hook) {
+                Ok(resolved) => hooks.push(resolved),
                 Err(e) => {
-                    tracing::debug!(plugin = %parsed.manifest.name, hook = %hook.name, error = %e, "prewarm: skipping unbuildable hook");
-                    continue;
+                    tracing::debug!(plugin = %parsed.manifest.name, hook = %hook.name, error = %e, "skipping unbuildable hook");
                 }
-            };
-            for req in &resolved.requirements {
-                if let Err(e) = refresh_installation_if_present(sym, req, None).await {
-                    tracing::debug!(name = %req.name, error = %e, "prewarm: requirement refresh failed");
-                }
-            }
-            if let Err(e) = refresh_installation_if_present(
-                sym,
-                &resolved.command,
-                resolved.hook_executable.as_deref(),
-            )
-            .await
-            {
-                tracing::debug!(plugin = %resolved.plugin_name, hook = %resolved.hook_name, error = %e, "prewarm: command refresh failed");
             }
         }
     }
+    hooks
 }
 
 /// Built-in hook logic on canonical symposium types.
@@ -710,6 +844,7 @@ pub async fn dispatch_builtin(
     deps: &Arc<Workspace>,
     notify_about_possible_new_plugins: bool,
     plugin_reload_notice: Option<String>,
+    failed_installs_notice: Option<String>,
 ) -> (symposium::OutputEvent, Vec<PackageId>) {
     match input {
         symposium::InputEvent::PreToolUse(_) => (
@@ -737,7 +872,14 @@ pub async fn dispatch_builtin(
             .await
         }
         symposium::InputEvent::SessionStart(session) => {
-            handle_session_start(sym, session, deps, plugin_reload_notice).await
+            handle_session_start(
+                sym,
+                session,
+                deps,
+                plugin_reload_notice,
+                failed_installs_notice,
+            )
+            .await
         }
         _ => (
             symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
@@ -754,13 +896,20 @@ async fn handle_session_start(
     _payload: &SessionStartInput,
     deps: &Arc<Workspace>,
     plugin_reload_notice: Option<String>,
+    failed_installs_notice: Option<String>,
 ) -> (OutputEvent, Vec<PackageId>) {
     let discovery = discovery_hint(sym, deps).await;
     let (consent, pending) = consent_hint(sym, deps).await;
-    let fragments = [discovery, consent, update_nudge(sym), plugin_reload_notice]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<String>>();
+    let fragments = [
+        discovery,
+        consent,
+        update_nudge(sym),
+        plugin_reload_notice,
+        failed_installs_notice,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<String>>();
 
     let output = if fragments.is_empty() {
         OutputEvent::empty_for(HookEvent::SessionStart)
@@ -1380,6 +1529,7 @@ mod tests {
                 runnable: Some(AcquiredRunnable::ResolvedExec {
                     path: PathBuf::from("/cache/rtk/1.0/bin/rtk"),
                 }),
+                built_from_source: None,
             },
             AcquiredInstallation {
                 name: "no-source".to_string(),
@@ -1387,6 +1537,7 @@ mod tests {
                 runnable: Some(AcquiredRunnable::ResolvedExec {
                     path: PathBuf::from("/usr/local/bin/tool"),
                 }),
+                built_from_source: None,
             },
         ];
         let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
@@ -1433,6 +1584,7 @@ mod tests {
             name: "setup".to_string(),
             base: Some(PathBuf::from("/cache/setup")),
             runnable: None,
+            built_from_source: None,
         }];
         let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
         assert_eq!(
@@ -1452,6 +1604,7 @@ mod tests {
             runnable: Some(AcquiredRunnable::GlobalExec {
                 path: PathBuf::from("rg".to_string()),
             }),
+            built_from_source: None,
         }];
         let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
         assert!(!env.contains_key("SYMPOSIUM_DIR_rg"));
@@ -1470,7 +1623,7 @@ mod tests {
             None,
             None,
         ));
-        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1486,7 +1639,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1500,7 +1653,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None, None).await;
         assert!(output.additional_context().is_none());
     }
 

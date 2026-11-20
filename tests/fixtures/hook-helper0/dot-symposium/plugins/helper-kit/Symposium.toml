@@ -1,0 +1,19 @@
+name = "helper-kit"
+depends-on = ["*"]
+
+[[installations]]
+name = "helper"
+source = "cargo"
+crate = "helper-kit-hooks"
+git = "file:///helper-kit-hooks-is-never-cloned"
+executable = "helper-kit-hooks"
+
+[[hooks]]
+name = "context"
+event = "PreToolUse"
+format = "symposium"
+command = "helper"
+
+[subcommand.helper-kit-probe]
+description = "Run the helper outside a hook"
+command = "helper"

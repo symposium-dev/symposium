@@ -31,7 +31,13 @@ use = [
 ```
 
 Then it runs a sync, so the plugin's skills install right away rather than
-waiting for the next one. A `--global` entry installs the plugin once for you
+waiting for the next one, and so do the tools its hooks run: a `cargo` or
+`github` installation that is not in the cache yet is installed now, with no
+time limit, as [`symposium sync`](./symposium-sync.md#behavior) does in
+its last step. With `--global` this covers every hook of the plugins enabled
+for every workspace, inside a workspace or not, and whether or not their
+conditions hold where you run it, the same way their skills install. A
+`--global` entry installs the plugin once for you
 on the agents that support it, and per project on the others; see
 [`symposium sync`](./symposium-sync.md#plugins-enabled-for-every-workspace).
 
