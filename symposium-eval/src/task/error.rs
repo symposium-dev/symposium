@@ -109,6 +109,14 @@ pub(crate) enum TaskError {
         second: PathBuf,
     },
     #[error(
+        "task plugins `{first}` and `{second}` share normalized bundle name `{name}`; choose distinct normalized names because applicability-dependent collision suffixes are unsupported"
+    )]
+    AmbiguousBundleName {
+        name: String,
+        first: PluginName,
+        second: PluginName,
+    },
+    #[error(
         "a `[[skills]]` group in plugin `{0}` needs a `source.path`, the only source an offline trial can use"
     )]
     UnsupportedSkillSource(PluginName),

@@ -174,17 +174,28 @@ fn skills_dir(trial: &Trial, client: Client) -> PathBuf {
 }
 
 /// Where `client` would install each skill `task` names, for the adapter to look for its
-/// loads. A trial starts with no skills, and each name has one provider, so sync installs
-/// it under its own name.
+/// loads. Claude's bundle identity comes from trusted task providers, before launch;
+/// loose clients use the skill's own name. No agent-writable directory is consulted.
 pub(crate) fn installed_skills(trial: &Trial, client: Client, task: &Task) -> Vec<InstalledSkill> {
-    let skills = skills_dir(trial, client);
     task.expected_skills()
         .names()
         .map(|name| InstalledSkill {
             name: name.clone(),
-            skill_md: skills.join(name.as_str()).join("SKILL.md"),
+            skill_md: delivery_directory(trial, client, task, name)
+                .join(name.as_str())
+                .join("SKILL.md"),
         })
         .collect()
+}
+
+fn delivery_directory(trial: &Trial, client: Client, task: &Task, skill: &SkillName) -> PathBuf {
+    let skills = skills_dir(trial, client);
+    if client == Client::ClaudeCode
+        && let Some(bundle) = task.skill_bundle_name(skill)
+    {
+        return skills.join(bundle).join("skills");
+    }
+    skills
 }
 
 /// Decides each expectation in `facts`, with the concerns `outside` raises about its
@@ -626,15 +637,41 @@ mod tests {
 
         let skills = installed_skills(&trial, Client::ClaudeCode, task);
 
-        let skill_md = [".claude", "skills", "rust-formatting", "SKILL.md"]
-            .iter()
-            .fold(trial.project(), |path, part| path.join(part));
+        let skill_md = [
+            ".claude",
+            "skills",
+            "format-on-stop",
+            "skills",
+            "rust-formatting",
+            "SKILL.md",
+        ]
+        .iter()
+        .fold(trial.project(), |path, part| path.join(part));
         assert_eq!(
             skills,
             [InstalledSkill {
                 name: SkillName::new("rust-formatting").unwrap(),
                 skill_md,
             }]
+        );
+    }
+
+    #[test]
+    fn a_loose_client_keeps_the_skills_own_delivery_path() {
+        let host = Host::new();
+        let batch = host.batch();
+        let inputs = test_support::inputs(&batch, "formatting");
+        let trial = batch
+            .create_trial(1, Configuration::Symposium, &inputs)
+            .unwrap();
+
+        let skills = installed_skills(&trial, Client::Codex, inputs.task());
+
+        assert_eq!(
+            skills[0].skill_md,
+            trial
+                .project()
+                .join(".agents/skills/rust-formatting/SKILL.md")
         );
     }
 

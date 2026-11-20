@@ -241,7 +241,8 @@ pub(crate) enum ToolResult {
     Missing,
 }
 
-/// A skill the runner looks for in a transcript, with the `SKILL.md` sync installs for it.
+/// A skill the runner looks for in a transcript, with its exact delivery path derived
+/// from trusted task inputs before launch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstalledSkill {
     pub(crate) name: SkillName,
