@@ -11,6 +11,15 @@ use crate::state::CURRENT_VERSION;
 
 const CRATE_NAME: &str = "symposium";
 
+#[cfg(windows)]
+mod windows;
+
+/// Remove the previous executable once Windows no longer has it mapped.
+pub(crate) fn clean_up_previous_executable() {
+    #[cfg(windows)]
+    windows::clean_up_previous_executable();
+}
+
 /// Query the registry for the latest published version of symposium
 /// by running `cargo search symposium --limit 1`.
 pub fn latest_version(sym: &Symposium) -> Result<semver::Version> {
@@ -162,6 +171,21 @@ pub fn self_update(sym: &Symposium, out: &Output) -> Result<()> {
 }
 
 fn cargo_install(sym: &Symposium) -> Result<()> {
+    // Windows permits renaming a running image, but not replacing it. Keep
+    // this process alive so Cargo's status and inherited I/O reach our caller.
+    #[cfg(windows)]
+    let backup = windows::ExecutableBackup::prepare()?;
+
+    let result = run_cargo_install(sym);
+    #[cfg(windows)]
+    if let Some(backup) = backup {
+        return result.map_err(|err| backup.restore_after_failure(err));
+    }
+
+    result
+}
+
+fn run_cargo_install(sym: &Symposium) -> Result<()> {
     let status = sym
         .cargo_command()
         .args(["install", CRATE_NAME, "--force"])
