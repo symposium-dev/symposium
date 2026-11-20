@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.7.0...symposium-v0.7.1) - 2026-11-20
+
+### Other
+
+- *(eval)* preflight and run one evaluation batch
+- *(eval)* give srt a short runtime directory
+- *(eval)* retain trial results safely
+
 ## [0.7.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.6.0...symposium-v0.7.0) - 2026-11-18
 
 ### Added
