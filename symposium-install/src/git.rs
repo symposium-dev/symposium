@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::{InstallContext, UpdateLevel};
 
@@ -51,7 +52,7 @@ impl GitSource {
         }
     }
 
-    /// Filesystem-safe cache directory name.
+    /// Stable, bounded filename derived from the complete parsed source identity.
     fn cache_key(&self) -> String {
         match self {
             GitSource::GitHub {
@@ -60,15 +61,17 @@ impl GitSource {
                 git_ref,
                 subpath,
             } => {
-                let mut key = format!("{owner}--{repo}");
-                if !git_ref.is_empty() {
-                    key.push_str(&format!("@{git_ref}"));
+                let mut digest = Sha256::new();
+                for component in [owner, repo, git_ref, subpath] {
+                    // Decimal byte lengths make field boundaries unambiguous,
+                    // even when a component contains our former separators.
+                    digest.update(component.len().to_string().as_bytes());
+                    digest.update(b":");
+                    digest.update(component.as_bytes());
                 }
-                if !subpath.is_empty() {
-                    let path_slug = subpath.replace('/', "--");
-                    key.push_str(&format!("--{path_slug}"));
-                }
-                key
+                // Lowercase hex is safe on case-insensitive Windows filesystems.
+                // Do not reuse ambiguous legacy cache entries under this scheme.
+                format!("github-v1-{:x}", digest.finalize())
             }
         }
     }
