@@ -894,6 +894,8 @@ pub fn make_executable(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    mod cache_replacement;
+
     #[test]
     fn parse_ls_remote_typical() {
         let out = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\tHEAD\n";
