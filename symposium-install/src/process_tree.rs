@@ -2,8 +2,21 @@
 
 use std::fs::File;
 use std::io::{Read, Seek};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
+
+#[cfg(not(windows))]
+use std::process::Child;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::JobChild as Child;
+
+#[derive(Clone, Copy)]
+enum Console {
+    Hidden,
+    Inherited,
+}
 
 /// Puts `command` in a process group of its own on Unix, so [`kill`] reaches
 /// everything it starts. Does nothing elsewhere.
@@ -40,10 +53,39 @@ pub fn kill(pid: u32) {
         .status();
 }
 
-/// Runs `command` like [`Command::output`] without holding a thread.
+/// Runs `command` like [`Command::output`], polling for completion.
 /// Dropping the future kills the command, together with everything it started
-/// when [`own_group`] gave it a group of its own.
-pub async fn output(mut command: Command) -> std::io::Result<Output> {
+/// when [`own_group`] gave it a group of its own on Unix. On Windows, the child
+/// is assigned to a job before it runs, so cancellation also reaches descendants
+/// whose parents have exited. Background Windows acquisitions have no console.
+/// Windows creation flags must be passed through `output_with_creation_flags`,
+/// rather than set on `command`: stable Rust cannot read flags back from a command.
+/// Windows cancellation synchronously waits with a shared five-second cleanup
+/// deadline. Failures are logged; closing the job still requests termination.
+pub async fn output(command: Command) -> std::io::Result<Output> {
+    output_with_console(command, Console::Hidden, 0).await
+}
+
+/// Runs a Windows command with explicit creation flags in addition to the
+/// temporary suspension needed for job assignment. Flags set directly on
+/// `command` are replaced. Use this entry point to preserve custom flag choices.
+/// Explicit `CREATE_SUSPENDED` is rejected because this API owns resuming the child.
+#[cfg(windows)]
+pub async fn output_with_creation_flags(command: Command, flags: u32) -> std::io::Result<Output> {
+    output_with_console(command, Console::Inherited, flags).await
+}
+
+/// Keeps the caller's console for foreground installers. Windows still contains
+/// the acquisition in a job; console inheritance and job membership are separate.
+pub(crate) async fn output_in_foreground(command: Command) -> std::io::Result<Output> {
+    output_with_console(command, Console::Inherited, 0).await
+}
+
+async fn output_with_console(
+    mut command: Command,
+    console: Console,
+    flags: u32,
+) -> std::io::Result<Output> {
     let stdout = tempfile::tempfile()?;
     let stderr = tempfile::tempfile()?;
     command
@@ -51,7 +93,7 @@ pub async fn output(mut command: Command) -> std::io::Result<Output> {
         .stdout(stdout.try_clone()?)
         .stderr(stderr.try_clone()?);
     let mut running = Running {
-        child: command.spawn()?,
+        child: spawn(command, console, flags)?,
         exited: false,
     };
     let status = loop {
@@ -68,6 +110,16 @@ pub async fn output(mut command: Command) -> std::io::Result<Output> {
     })
 }
 
+#[cfg(windows)]
+fn spawn(command: Command, console: Console, flags: u32) -> std::io::Result<Child> {
+    windows::JobChild::spawn(command, console, flags)
+}
+
+#[cfg(not(windows))]
+fn spawn(mut command: Command, _console: Console, _flags: u32) -> std::io::Result<Child> {
+    command.spawn()
+}
+
 struct Running {
     child: Child,
     exited: bool,
@@ -76,8 +128,16 @@ struct Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if !self.exited {
-            kill(self.child.id());
-            let _ = self.child.kill();
+            #[cfg(windows)]
+            if let Err(error) = self.child.terminate_and_wait() {
+                tracing::error!(%error, "installer cancellation could not confirm process termination");
+            }
+            #[cfg(not(windows))]
+            {
+                kill(self.child.id());
+                let _ = self.child.kill();
+            }
+            #[cfg(not(windows))]
             let _ = self.child.wait();
         }
     }

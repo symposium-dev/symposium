@@ -45,6 +45,7 @@ fn wait_for_fixture_file(path: &Path) -> bool {
 fn run_fixture(role: &str, root: &Path) {
     match role {
         "descendant" => {
+            std::fs::write(root.join("descendant-pid"), std::process::id().to_string()).unwrap();
             std::fs::write(root.join("descendant-ready"), "").unwrap();
             if wait_for_fixture_file(&root.join("release")) {
                 std::fs::write(
@@ -68,8 +69,118 @@ fn run_fixture(role: &str, root: &Path) {
             std::fs::write(root.join("installer-ready"), "").unwrap();
             let _ = wait_for_fixture_file(&root.join("cleanup"));
         }
+        "report" => {
+            println!("installer stdout");
+            eprintln!("installer stderr");
+        }
+        "failure" => std::process::exit(23),
+        #[cfg(windows)]
+        "priority" => {
+            use windows::Win32::System::Threading::{GetCurrentProcess, GetPriorityClass};
+            // SAFETY: the pseudo-handle refers to this live process.
+            println!("priority={}", unsafe {
+                GetPriorityClass(GetCurrentProcess())
+            });
+        }
+        "completed-parent" => {
+            #[allow(clippy::zombie_processes)]
+            let _descendant = fixture_command("descendant", root).spawn().unwrap();
+            assert!(wait_for_fixture_file(&root.join("descendant-ready")));
+        }
         other => panic!("unknown fixture role: {other}"),
     }
+}
+
+#[tokio::test]
+async fn installer_output_and_failure_status_are_preserved() {
+    let fixture = Fixture(tempfile::tempdir().unwrap());
+    for role in ["report", "failure"] {
+        let mut command = fixture_command(role, fixture.0.path());
+        process_tree::own_group(&mut command);
+        let output = tokio::time::timeout(Duration::from_secs(10), process_tree::output(command))
+            .await
+            .expect("installer did not finish")
+            .unwrap();
+        if role == "report" {
+            assert!(output.status.success());
+            assert!(String::from_utf8_lossy(&output.stdout).contains("installer stdout"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("installer stderr"));
+        } else {
+            assert_eq!(output.status.code(), Some(23));
+        }
+    }
+}
+
+#[tokio::test]
+async fn completed_installer_does_not_wait_for_a_background_worker() {
+    let fixture = Fixture(tempfile::tempdir().unwrap());
+    let root = fixture.0.path();
+    let mut command = fixture_command("completed-parent", root);
+    process_tree::own_group(&mut command);
+    let output = tokio::time::timeout(Duration::from_secs(5), process_tree::output(command)).await;
+    // Bound cleanup of the worker the installer deliberately left behind.
+    std::fs::write(root.join("release"), "").unwrap();
+    let worker_ran = wait_for_file(&root.join("side-effect"), Duration::from_secs(3)).await;
+
+    assert!(
+        output
+            .expect(
+                "completion must report the installer without waiting for its background worker"
+            )
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        worker_ran,
+        "normal completion must leave the background worker alive"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn foreground_acquisition_cancellation_also_stops_orphaned_descendants() {
+    use symposium_install::{CargoSource, InstallContext, Source, UpdateLevel, acquire_source};
+
+    let fixture = Fixture(tempfile::tempdir().unwrap());
+    let root = fixture.0.path();
+    let cargo = root.join("cargo.cmd");
+    std::fs::copy(std::env::current_exe().unwrap(), root.join("fixture.exe")).unwrap();
+    // Keep the batch source ASCII: %~dp0 supplies paths without embedding the
+    // user's potentially non-ASCII home directory in a code-page-dependent file.
+    // Environment changes belong to the child, never the parallel test process.
+    std::fs::write(
+        &cargo,
+        format!(
+            "@echo off\r\nset \"{ROLE}=installer\"\r\nset \"{ROOT}=%~dp0\"\r\n\
+             \"%~dp0fixture.exe\" --exact {TEST_NAME} --nocapture\r\nexit /b %errorlevel%\r\n"
+        ),
+    )
+    .unwrap();
+    let context = InstallContext::new(root.join("cache"))
+        .with_cargo_bin(cargo)
+        .in_foreground();
+    let source = Source::Cargo(
+        CargoSource::new("cancellation-fixture").with_git("https://example.invalid/fixture"),
+    );
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move {
+        acquire_source(&context, &source, Some("fixture"), UpdateLevel::None).await
+    });
+    let ready = wait_for_file(&root.join("installer-ready"), Duration::from_secs(10)).await;
+    let witness = ProcessWitness::open(root);
+    tasks.abort_all();
+    let cancelled = tasks.join_next().await.unwrap();
+    witness.assert_exited();
+    std::fs::write(root.join("release"), "").unwrap();
+    let survived = wait_for_file(&root.join("side-effect"), Duration::from_secs(3)).await;
+
+    assert!(ready, "foreground acquisition never started the installer");
+    assert!(cancelled.is_err_and(|error| error.is_cancelled()));
+    assert!(
+        !survived,
+        "a foreground installer descendant survived acquisition cancellation"
+    );
 }
 
 async fn wait_for_file(path: &Path, limit: Duration) -> bool {
@@ -110,8 +221,12 @@ async fn cancellation_stops_descendants_after_their_parent_exits() {
     tasks.spawn(process_tree::output(command));
 
     let ready = wait_for_file(&root.join("installer-ready"), Duration::from_secs(10)).await;
+    #[cfg(windows)]
+    let witness = ProcessWitness::open(root);
     tasks.abort_all();
     let cancelled = tasks.join_next().await.unwrap();
+    #[cfg(windows)]
+    witness.assert_exited();
 
     // The descendant cannot perform the observed action before cancellation:
     // this release gate is written only after output() and its guard are gone.
@@ -131,4 +246,68 @@ async fn cancellation_stops_descendants_after_their_parent_exits() {
         !survived,
         "installer descendant survived cancellation and wrote a file after cleanup returned"
     );
+}
+
+#[cfg(windows)]
+struct ProcessWitness(std::os::windows::io::OwnedHandle);
+
+#[cfg(windows)]
+impl ProcessWitness {
+    fn open(root: &Path) -> Self {
+        use std::os::windows::io::FromRawHandle;
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+        let pid = std::fs::read_to_string(root.join("descendant-pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        // SAFETY: the worker is gated alive; OpenProcess validates its PID.
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.unwrap();
+        // SAFETY: OpenProcess returned an owned handle, transferred exactly once.
+        Self(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle.0) })
+    }
+
+    fn assert_exited(&self) {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::WaitForSingleObject;
+        // SAFETY: the retained process handle grants SYNCHRONIZE access.
+        let status = unsafe { WaitForSingleObject(HANDLE(self.0.as_raw_handle()), 0) };
+        assert_eq!(
+            status, WAIT_OBJECT_0,
+            "cancellation returned before the worker terminated"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn explicit_windows_creation_flags_reach_the_installer() {
+    use windows::Win32::System::Threading::{CREATE_NO_WINDOW, IDLE_PRIORITY_CLASS};
+    let fixture = Fixture(tempfile::tempdir().unwrap());
+    let output = process_tree::output_with_creation_flags(
+        fixture_command("priority", fixture.0.path()),
+        (CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS).0,
+    )
+    .await
+    .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("priority={}", IDLE_PRIORITY_CLASS.0))
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn explicit_suspension_is_rejected_before_starting_an_installer() {
+    use windows::Win32::System::Threading::CREATE_SUSPENDED;
+    let fixture = Fixture(tempfile::tempdir().unwrap());
+    let error = process_tree::output_with_creation_flags(
+        fixture_command("descendant", fixture.0.path()),
+        CREATE_SUSPENDED.0,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!fixture.0.path().join("descendant-ready").exists());
 }

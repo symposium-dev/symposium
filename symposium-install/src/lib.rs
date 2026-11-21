@@ -47,8 +47,9 @@ impl InstallContext {
     }
 
     /// Run installers and the git probe in the caller's process group, so
-    /// Ctrl-C and terminal prompts reach them. Dropping an acquisition then
-    /// stops only the command itself, not what it started.
+    /// Ctrl-C and terminal prompts reach them. On Unix, dropping an acquisition
+    /// stops only the direct command because the caller owns the shared group.
+    /// On Windows, cancellation still stops the acquisition's entire job.
     pub fn in_foreground(mut self) -> Self {
         self.foreground = true;
         self
@@ -410,10 +411,12 @@ async fn run(
     ctx: &InstallContext,
     mut command: std::process::Command,
 ) -> std::io::Result<std::process::Output> {
-    if !ctx.foreground {
+    if ctx.foreground {
+        process_tree::output_in_foreground(command).await
+    } else {
         process_tree::own_group(&mut command);
+        process_tree::output(command).await
     }
-    process_tree::output(command).await
 }
 
 fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
