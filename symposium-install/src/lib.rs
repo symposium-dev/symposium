@@ -299,17 +299,6 @@ async fn install_cargo_crate(
     let cache_dir = cache_dir.as_deref();
 
     if let Some(cache_dir) = cache_dir {
-        if let Some(parent) = cache_dir.parent()
-            && parent.exists()
-        {
-            for entry in fs::read_dir(parent)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path != cache_dir && path.is_dir() {
-                    fs::remove_dir_all(&path).ok();
-                }
-            }
-        }
         fs::create_dir_all(cache_dir)?;
     }
 
@@ -339,21 +328,16 @@ async fn install_cargo_crate(
     binstall_args.push(&crate_spec);
     let binstall_result = cargo_output(ctx, &binstall_args).await;
 
-    let binary_path = match (cache_dir, binary_name.as_ref()) {
-        (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
-        _ => None,
-    };
-
     match binstall_result {
         Ok(output) if output.status.success() => {
-            tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
-            if binary_path.is_none() {
-                return Ok(());
-            }
-            if let Some(bin) = binary_path.as_ref()
-                && bin.exists()
-            {
-                return Ok(());
+            match complete_cargo_install(cache_dir, binary_name.as_deref()) {
+                Ok(()) => {
+                    tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
+                    return Ok(());
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "cargo binstall did not produce the expected binary");
+                }
             }
         }
         Ok(output) => {
@@ -393,8 +377,93 @@ async fn install_cargo_crate(
         );
     }
 
+    complete_cargo_install(cache_dir, binary_name.as_deref())?;
     tracing::info!("Successfully installed {} via cargo install", crate_spec);
     Ok(())
+}
+
+/// Validate the replacement before discarding any older cached installation.
+/// Global installs have no Symposium-owned versions to validate or remove.
+fn complete_cargo_install(cache_dir: Option<&Path>, binary_name: Option<&str>) -> Result<()> {
+    let Some(cache_dir) = cache_dir else {
+        return Ok(());
+    };
+    let bin_dir = cache_dir.join("bin");
+    match binary_name {
+        Some(name) => {
+            let executable = bin_dir.join(platform_binary_exe(name));
+            if !executable.is_file() {
+                bail!(
+                    "installation did not produce expected executable {}",
+                    executable.display()
+                );
+            }
+        }
+        None => {
+            let mut found_binary = false;
+            for entry in std::fs::read_dir(&bin_dir).with_context(|| {
+                format!(
+                    "could not inspect installed binaries in {}",
+                    bin_dir.display()
+                )
+            })? {
+                if entry?.path().is_file() {
+                    found_binary = true;
+                    break;
+                }
+            }
+            if !found_binary {
+                bail!(
+                    "installation did not produce any binaries in {}",
+                    bin_dir.display()
+                );
+            }
+        }
+    }
+    // Cleanup is best-effort: an old version in use on Windows must not make
+    // a successfully installed replacement appear to have failed.
+    if let Err(error) = remove_older_cargo_versions(cache_dir) {
+        tracing::warn!(%error, path = %cache_dir.parent().unwrap_or(cache_dir).display(), "could not list older cached cargo versions");
+    }
+    Ok(())
+}
+
+fn remove_older_cargo_versions(cache_dir: &Path) -> std::io::Result<()> {
+    let Some(parent) = cache_dir.parent() else {
+        return Ok(());
+    };
+    remove_older_cargo_entries(cache_dir, std::fs::read_dir(parent)?);
+    Ok(())
+}
+
+fn remove_older_cargo_entries(
+    cache_dir: &Path,
+    entries: impl IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
+) {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(%error, path = %cache_dir.parent().unwrap_or(cache_dir).display(), "could not read older cached cargo entry");
+                continue;
+            }
+        };
+        let path = entry.path();
+        if path == cache_dir {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => {
+                if let Err(error) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!(%error, path = %path.display(), "could not remove older cached cargo version");
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "could not inspect older cached cargo version");
+            }
+        }
+    }
 }
 
 async fn cargo_output(
