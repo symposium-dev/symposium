@@ -71,11 +71,18 @@ impl fmt::Debug for MetricSnapshot {
 impl MetricSnapshot {
     /// Create an empty snapshot owned by `day`.
     #[must_use]
-    pub(in crate::telemetry) const fn empty(day: UtcDay) -> Self {
+    const fn empty(day: UtcDay) -> Self {
         Self {
             day,
             rows: Vec::new(),
         }
+    }
+
+    /// Create an empty snapshot for tests outside this storage module.
+    #[cfg(test)]
+    #[must_use]
+    pub(in crate::telemetry) const fn empty_for_test(day: UtcDay) -> Self {
+        Self::empty(day)
     }
 
     /// Index rows that constrain admission or can recover a private entry.
@@ -377,6 +384,114 @@ impl Error for LoadMetricSnapshotError {
 impl From<io::Error> for LoadMetricSnapshotError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+/// Bounded, content-free reason an aggregate snapshot was unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::telemetry) enum MetricSnapshotUnavailable {
+    Io(io::ErrorKind),
+    TooLarge {
+        maximum: usize,
+    },
+    UnterminatedFinalLine {
+        line: usize,
+    },
+    MalformedLine {
+        line: usize,
+    },
+    UnknownSchema {
+        line: usize,
+    },
+    InvalidRow {
+        line: usize,
+    },
+    UnexpectedRow {
+        line: usize,
+        reason: UnexpectedMetricRow,
+    },
+    DuplicateEventId {
+        first_line: usize,
+        duplicate_line: usize,
+    },
+}
+
+impl fmt::Display for MetricSnapshotUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(kind) => {
+                write!(
+                    formatter,
+                    "failed to read aggregate metric snapshot: {kind:?}"
+                )
+            }
+            Self::TooLarge { maximum } => write!(
+                formatter,
+                "aggregate metric snapshot exceeds the {maximum}-byte safety limit"
+            ),
+            Self::UnterminatedFinalLine { line } => {
+                write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} is unterminated"
+                )
+            }
+            Self::MalformedLine { line } => {
+                write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} is malformed"
+                )
+            }
+            Self::UnknownSchema { line } => write!(
+                formatter,
+                "aggregate metric snapshot line {line} has an unknown schema"
+            ),
+            Self::InvalidRow { line } => write!(
+                formatter,
+                "aggregate metric snapshot line {line} violates its known schema"
+            ),
+            Self::UnexpectedRow { line, reason } => match reason {
+                UnexpectedMetricRow::LowVolume => write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} is a low-volume row"
+                ),
+                UnexpectedMetricRow::DayMismatch => write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} belongs to another day"
+                ),
+            },
+            Self::DuplicateEventId {
+                first_line,
+                duplicate_line,
+            } => write!(
+                formatter,
+                "aggregate metric snapshot lines {first_line} and {duplicate_line} repeat one event id"
+            ),
+        }
+    }
+}
+
+impl From<LoadMetricSnapshotError> for MetricSnapshotUnavailable {
+    fn from(error: LoadMetricSnapshotError) -> Self {
+        match error {
+            LoadMetricSnapshotError::Io(error) => Self::Io(error.kind()),
+            LoadMetricSnapshotError::TooLarge { maximum } => Self::TooLarge { maximum },
+            LoadMetricSnapshotError::UnterminatedFinalLine { line } => {
+                Self::UnterminatedFinalLine { line }
+            }
+            LoadMetricSnapshotError::MalformedLine { line } => Self::MalformedLine { line },
+            LoadMetricSnapshotError::UnknownSchema { line } => Self::UnknownSchema { line },
+            LoadMetricSnapshotError::InvalidRow { line } => Self::InvalidRow { line },
+            LoadMetricSnapshotError::UnexpectedRow { line, reason } => {
+                Self::UnexpectedRow { line, reason }
+            }
+            LoadMetricSnapshotError::DuplicateEventId {
+                first_line,
+                duplicate_line,
+            } => Self::DuplicateEventId {
+                first_line,
+                duplicate_line,
+            },
+        }
     }
 }
 

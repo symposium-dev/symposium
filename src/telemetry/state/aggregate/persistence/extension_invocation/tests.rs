@@ -122,7 +122,7 @@ fn record_entry(
     phase: ExtensionInvocationPhase,
     session_id: Option<SessionId>,
 ) {
-    let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
+    let recovery = MetricSnapshot::empty_for_test(recording.day()).recovery_index();
     let mut stage = store.stage_for_test(&recovery, recording).unwrap();
     stage
         .select(ExtensionInvocationAgent::Claude, attribution)
