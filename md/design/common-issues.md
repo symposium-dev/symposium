@@ -1,5 +1,9 @@
 # Common issues
 
+## Cache names must preserve source identity
+
+Replacing path separators with ordinary filename characters loses information: `a/b` and `a--b` both became `a--b` in the Git cache. Joining source fields with delimiters can also confuse ref and subpath boundaries, and case-insensitive Windows filenames cannot represent case-sensitive Git paths directly. Git cache names therefore hash the complete length-prefixed identity into lowercase hexadecimal; do not restore the old ambiguous names as a fallback for cache misses.
+
 ## Known hook implementation gaps
 
 The following issues were identified by auditing our hook implementations against the agent reference docs (`md/design/agent-details/`). They don't cause crashes (the fallback path handles events without agent-specific handlers) but mean some features are incomplete.
