@@ -2672,6 +2672,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "windows",
 ]
 
 [[package]]
