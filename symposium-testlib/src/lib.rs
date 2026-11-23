@@ -15,6 +15,9 @@ use symposium::hook_schema::HookAgent;
 use symposium::hook_schema::HookEvent;
 use symposium::hook_schema::symposium as sym_types;
 
+#[cfg(test)]
+mod tests;
+
 // ── Agent-neutral test types ──────────────────────────────────────────
 
 /// Which agent backend to use for integration tests.
