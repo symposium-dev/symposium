@@ -531,10 +531,10 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &
 /// where the workspace is or what it depends on. If sync runs, `deps` gets populated, and later hook stages reuse
 /// the result.
 ///
-/// A sync is recorded even when a package manager failed. Its cleanup was
-/// skipped, so nothing it installed was removed, and it is asked again at the
-/// next `SessionStart` or once another input changes, rather than on every
-/// event: a hung one would otherwise cost its timeout each time.
+/// Only a sync with no package-manager failures is recorded. Before resolving
+/// again, invalidate the previous snapshot so a failed refresh cannot leave it
+/// reusable. Subsequent events retry until resolution succeeds; reusing partial
+/// results would lose the failure state that keeps cleanup from removing content.
 ///
 /// `SessionStart` runs once per session, so there we do the real work: refresh
 /// every source cache (`UpdateLevel::Check`) and sync unconditionally, ignoring
@@ -566,6 +566,11 @@ async fn run_auto_sync(
         .last_sync
         .as_ref()
         .is_some_and(|last| !last.inputs.is_empty());
+    // A forced refresh can fail without any input changing. Retaining the old
+    // snapshot would let the next event skip resolution and forget that failure.
+    if state.last_sync.take().is_some() {
+        state.save(sym, &start);
+    }
     if deps.info().await.is_none() {
         tracing::debug!("auto-sync skipped: not in a workspace");
         return (false, Vec::new());
@@ -586,7 +591,9 @@ async fn run_auto_sync(
         }
     };
 
-    if let Some(workspace) = deps.info().await {
+    if deps.failed().is_empty()
+        && let Some(workspace) = deps.info().await
+    {
         state.record_sync(workspace, deps.dep_ids().await);
         state.save(sym, &start);
     }
@@ -1360,6 +1367,121 @@ mod tests {
     use crate::pm::{ANY_VERSION, PackageId};
 
     use super::*;
+
+    #[tokio::test]
+    async fn auto_sync_retries_after_failed_resolution() {
+        use crate::pm::{
+            PackageManager, PluginKind, PmInstance, PmRegistry, ProjectInfo, UnvalidatedPlugin,
+        };
+        use crate::workspace_state::WorkspaceState;
+
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Failure {
+            Project,
+            Dependencies,
+        }
+
+        struct TestPm {
+            root: PathBuf,
+            failure: Option<Failure>,
+        }
+
+        #[async_trait::async_trait]
+        impl PackageManager for TestPm {
+            fn name(&self) -> &str {
+                "demo"
+            }
+
+            async fn project_info(&self) -> anyhow::Result<ProjectInfo> {
+                anyhow::ensure!(
+                    self.failure != Some(Failure::Project),
+                    "cannot read project"
+                );
+                Ok(ProjectInfo {
+                    root: Some(self.root.clone()),
+                    inputs: vec![self.root.join("project.lock")],
+                    ..Default::default()
+                })
+            }
+
+            async fn list_deps(&self) -> anyhow::Result<Vec<PackageId>> {
+                anyhow::ensure!(
+                    self.failure != Some(Failure::Dependencies),
+                    "cannot list dependencies"
+                );
+                Ok(vec![PackageId::new("demo", "example", "1.0.0")])
+            }
+
+            async fn load_plugin(
+                &self,
+                _: &PackageId,
+                _: symposium_install::UpdateLevel,
+            ) -> anyhow::Result<Vec<UnvalidatedPlugin>> {
+                Ok(vec![])
+            }
+        }
+
+        for previous_sync in [false, true] {
+            for failure in [Failure::Dependencies, Failure::Project] {
+                let tmp = tempfile::tempdir().unwrap();
+                let root = tmp.path().join("project");
+                std::fs::create_dir(&root).unwrap();
+                std::fs::write(root.join("project.lock"), "unchanged").unwrap();
+                let mut sym = Symposium::from_dir(&tmp.path().join("config"));
+                sym.config.defaults.symposium_recommendations = false;
+                sym.config.defaults.symposium_audits = false;
+                sym.config.defaults.user_plugins = false;
+                let workspace = |failure| {
+                    Arc::new(Workspace::new(
+                        Some(root.clone()),
+                        PmRegistry::new(vec![PmInstance::new(
+                            "demo",
+                            false,
+                            PluginKind::Package,
+                            Box::new(TestPm {
+                                root: root.clone(),
+                                failure,
+                            }),
+                        )]),
+                    ))
+                };
+
+                if previous_sync {
+                    run_auto_sync(&sym, &workspace(None), true).await;
+                    assert!(WorkspaceState::load(&sym, &root).fresh().is_some());
+                }
+                let offered = PackageId::new("demo", "example", "1.0.0");
+                let mut state = WorkspaceState::load(&sym, &root);
+                state.surface(std::slice::from_ref(&offered));
+                state.save(&sym, &root);
+
+                // SessionStart must invalidate even an unchanged, previously
+                // successful snapshot. A second failure must retry mid-session.
+                for session_start in [true, false] {
+                    let failed = workspace(Some(failure));
+                    run_auto_sync(&sym, &failed, session_start).await;
+                    assert_eq!(failed.failed(), ["demo"]);
+                    let state = WorkspaceState::load(&sym, &root);
+                    assert!(
+                        state.fresh().is_none(),
+                        "{failure:?}, previous_sync={previous_sync}"
+                    );
+                    assert!(state.surfaced.contains(&offered));
+                }
+
+                // Recovery needs neither another SessionStart nor an input edit.
+                run_auto_sync(&sym, &workspace(None), false).await;
+                let state = WorkspaceState::load(&sym, &root);
+                assert_eq!(state.fresh().unwrap().1, std::slice::from_ref(&offered));
+
+                // Once resolution succeeds, unchanged inputs skip PM work again.
+                let warm = workspace(Some(Failure::Project));
+                run_auto_sync(&sym, &warm, false).await;
+                assert!(warm.failed().is_empty());
+                assert_eq!(warm.dep_ids().await, [offered]);
+            }
+        }
+    }
 
     #[test]
     fn env_safe_sanitizes_punctuation() {
