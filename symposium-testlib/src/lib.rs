@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_client_protocol as acp;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,8 @@ use symposium::hook;
 use symposium::hook_schema::HookAgent;
 use symposium::hook_schema::HookEvent;
 use symposium::hook_schema::symposium as sym_types;
+
+mod acp_environment;
 
 #[cfg(test)]
 mod tests;
@@ -193,7 +196,7 @@ pub enum AgentSession {
     /// Claude Agent SDK — shells out to Python per-prompt.
     ClaudeSdk,
     /// ACP agent with a persistent session.
-    Acp(Box<sacp::ActiveSession<'static, sacp::Agent>>),
+    Acp(Box<acp::ActiveSession<'static, acp::Agent>>),
 }
 
 /// Test context wrapping an isolated `Symposium` instance.
@@ -759,12 +762,14 @@ pub async fn with_fixture(
                     f(ctx).await?;
                 }
                 TestAgent::Acp { registry_name, .. } => {
-                    run_with_acp_session(acpr::Acpr::new(registry_name), ctx, &f).await?;
+                    let environment = acp_environment::for_session(&ctx)?;
+                    let agent = acpr::Acpr::new(registry_name)
+                        .with_command_wrapper(acp_environment::registry_wrapper(environment));
+                    run_with_acp_session(agent, ctx, &f).await?;
                 }
                 TestAgent::CustomAcp { command, .. } => {
-                    let acp_agent: sacp_tokio::AcpAgent = command
-                        .parse()
-                        .map_err(|e| anyhow::anyhow!("bad command: {e}"))?;
+                    let environment = acp_environment::for_session(&ctx)?;
+                    let acp_agent = acp_environment::custom_agent(command, environment)?;
                     run_with_acp_session(acp_agent, ctx, &f).await?;
                 }
             }
@@ -776,11 +781,11 @@ pub async fn with_fixture(
 
 /// Establish an ACP connection, create a session, and run the callback inside it.
 async fn run_with_acp_session(
-    agent: impl sacp::ConnectTo<sacp::Client>,
+    agent: impl acp::ConnectTo<acp::Client>,
     mut ctx: TestContext,
     f: &impl AsyncFn(TestContext) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    use sacp::schema::{
+    use acp::schema::{
         InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
         RequestPermissionResponse, SelectedPermissionOutcome,
     };
@@ -790,25 +795,9 @@ async fn run_with_acp_session(
         .clone()
         .unwrap_or_else(|| ctx.sym.config_dir().to_path_buf());
 
-    // Set env vars so the agent subprocess finds symposium and writes traces.
-    let bin_exe = std::env::var("CARGO_BIN_EXE_symposium")
-        .expect("CARGO_BIN_EXE_symposium must be set (run via cargo test)");
-    let bin_dir = Path::new(&bin_exe).parent().expect("binary has parent dir");
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    // SAFETY: called before spawning any threads for this test.
-    unsafe {
-        std::env::set_var("PATH", &path);
-        std::env::set_var("SYMPOSIUM_HOOK_TRACE", cwd.join("hook-trace.jsonl"));
-        std::env::set_var("SYMPOSIUM_HOME", ctx.sym.config_dir());
-    }
-
     let cwd_for_session = cwd.clone();
 
-    sacp::Client
+    acp::Client
         .builder()
         .on_receive_request(
             async move |request: RequestPermissionRequest, responder, _cx| {
@@ -823,7 +812,7 @@ async fn run_with_acp_session(
                     )),
                 }
             },
-            sacp::on_receive_request!(),
+            acp::on_receive_request!(),
         )
         .connect_with(agent, async |cx| {
             cx.send_request(InitializeRequest::new(ProtocolVersion::LATEST))
@@ -837,7 +826,7 @@ async fn run_with_acp_session(
                 .await?;
 
             ctx.session = Some(AgentSession::Acp(Box::new(session)));
-            f(ctx).await.map_err(sacp::util::internal_error)?;
+            f(ctx).await.map_err(acp::util::internal_error)?;
             Ok(())
         })
         .await

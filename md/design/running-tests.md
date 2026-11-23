@@ -40,6 +40,14 @@ Available agent names:
 | `kiro-cli-acp` | Kiro CLI via ACP | Requires `kiro-cli` in PATH |
 | Any name from `acpr --list` | ACP registry via `acpr` | Auto-downloaded |
 
+## ACP process environment
+
+ACP session settings are passed to the agent process, leaving the test runner's
+environment unchanged. Registry agents receive them through acpr's command-wrapper
+API; custom commands receive them through their stdio configuration. Both use the
+same session settings, with `split_paths` and `join_paths` to prepend Symposium's
+binary directory using the correct platform separator.
+
 ## Filtering to a single agent
 
 Override with the `SYMPOSIUM_TEST_AGENT` env var:

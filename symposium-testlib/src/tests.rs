@@ -2,6 +2,67 @@ use super::*;
 
 const CHILD_ROOT: &str = "SYMPOSIUM_ACP_ENV_TEST_ROOT";
 
+#[tokio::test]
+async fn acp_session_collects_streamed_response_until_end_of_turn() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let called = AtomicBool::new(false);
+    let ctx = setup_fixture(&[]).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        run_with_acp_session(streaming_agent(), ctx, &async |mut ctx| {
+            let result = ctx.prompt("Say hello").await?;
+            assert_eq!(result.response.as_deref(), Some("Hello, world!"));
+            called.store(true, Ordering::Relaxed);
+            Ok(())
+        }),
+    )
+    .await
+    .expect("the ACP turn must finish")
+    .unwrap();
+    assert!(called.load(Ordering::Relaxed));
+}
+
+/// An in-process peer that streams two text chunks and completes the turn.
+fn streaming_agent() -> impl acp::ConnectTo<acp::Client> {
+    use acp::schema::{
+        ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, NewSessionRequest,
+        NewSessionResponse, PromptRequest, PromptResponse, SessionNotification, SessionUpdate,
+        StopReason, TextContent,
+    };
+    acp::Agent
+        .builder()
+        .on_receive_request(
+            async |request: InitializeRequest, responder, _| {
+                responder.respond(InitializeResponse::new(request.protocol_version))
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            async |_: NewSessionRequest, responder, _| {
+                responder.respond(NewSessionResponse::new("test-session"))
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            async |request: PromptRequest, responder, cx: acp::ConnectionTo<acp::Client>| {
+                assert_eq!(request.session_id, "test-session".into());
+                assert_eq!(
+                    request.prompt,
+                    vec![ContentBlock::Text(TextContent::new("Say hello"))]
+                );
+                for text in ["Hello, ", "world!"] {
+                    cx.send_notification(SessionNotification::new(
+                        request.session_id.clone(),
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into())),
+                    ))?;
+                }
+                responder.respond(PromptResponse::new(StopReason::EndTurn))
+            },
+            acp::on_receive_request!(),
+        )
+}
+
 /// A failed ACP launch must not leave its configuration in the test process.
 #[test]
 fn acp_launch_failure_preserves_environment() {
@@ -52,7 +113,7 @@ async fn acp_launch_failure_probe() {
     let ctx = setup_fixture(&[]).await;
     let missing_agent = root.join("missing-acp-agent");
     assert!(!missing_agent.exists());
-    let agent = sacp_tokio::AcpAgent::from_args([missing_agent.display()]).unwrap();
+    let agent = acp::AcpAgent::from_args([missing_agent.display()]).unwrap();
     let before = ["SYMPOSIUM_HOME", "SYMPOSIUM_HOOK_TRACE", "PATH"]
         .map(|name| (name, std::env::var_os(name)));
 
