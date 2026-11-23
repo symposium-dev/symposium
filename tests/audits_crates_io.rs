@@ -1,12 +1,11 @@
 //! Revocations of crates loaded from cargo's registry cache rather than from
 //! the workspace.
 //!
-//! That cache is found through `CARGO_HOME`, which is process-global, so these
-//! tests live in their own binary and share one fake cache, set up once
-//! before either reads the environment.
+//! Each test runs in a child process with its own fake registry cache supplied
+//! through `CARGO_HOME` before startup, without changing the parent's environment.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use symposium::audits::AuditIndex;
 use symposium::audits::digest::payload_digest;
@@ -36,31 +35,60 @@ fn cache_crate(cargo_home: &Path, name: &str, version: &str, body: &str) -> Path
     dir
 }
 
-/// The fake cache, created and named in `CARGO_HOME` by whichever test asks
-/// first: `crate-x` 2.0.0, which vends a subcommand, and two releases of
-/// `widget` with different payloads. `crate-y` is cached nowhere.
-fn cargo_home() -> &'static Path {
-    static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
-    HOME.get_or_init(|| {
-        let home = tempfile::tempdir().unwrap();
-        let x = cache_crate(home.path(), "crate-x", "2.0.0", "x");
-        // A subcommand running a binary that is always on PATH under
-        // `cargo test`.
-        std::fs::write(
-            x.join("Symposium.toml"),
-            "[[installations]]\nname = \"x\"\nexecutable = \"rustc\"\n\n\
+/// A private cache containing a subcommand and two distinct widget payloads.
+/// `crate-y` is cached nowhere.
+fn fake_cargo_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let x = cache_crate(home.path(), "crate-x", "2.0.0", "x");
+    // A subcommand running a binary that is always on PATH under
+    // `cargo test`.
+    std::fs::write(
+        x.join("Symposium.toml"),
+        "[[installations]]\nname = \"x\"\nexecutable = \"rustc\"\n\n\
              [subcommand.xtool]\ndescription = \"x\"\ncommand = \"x\"\n",
-        )
+    )
+    .unwrap();
+    cache_crate(home.path(), "widget", "1.5.3", "bad");
+    cache_crate(home.path(), "widget", "1.6.0", "ok");
+    home
+}
+
+/// Run the assertions only in a child whose Cargo environment is already set.
+async fn with_cargo_home(test_name: &str, test: impl Future<Output = ()>) {
+    const CHILD_ROOT: &str = "SYMPOSIUM_AUDIT_TEST_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        test.await;
+        std::fs::write(PathBuf::from(root).join("checked"), "").unwrap();
+        return;
+    }
+
+    let home = fake_cargo_home();
+    let before = std::env::var_os("CARGO_HOME");
+    let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture"])
+        .env(CHILD_ROOT, home.path())
+        .env("CARGO_HOME", home.path())
+        .output()
+        .await
         .unwrap();
-        cache_crate(home.path(), "widget", "1.5.3", "bad");
-        cache_crate(home.path(), "widget", "1.6.0", "ok");
-        // SAFETY: each test calls this before anything else, and the other
-        // waits on the lock until it is done, so nothing reads the
-        // environment concurrently.
-        unsafe { std::env::set_var("CARGO_HOME", home.path()) };
-        home
-    })
-    .path()
+    assert!(
+        output.status.success(),
+        "{test_name} child failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        home.path().join("checked").is_file(),
+        "child must execute {test_name}'s assertions\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::env::var_os("CARGO_HOME"),
+        before,
+        "the parent environment must remain unchanged"
+    );
 }
 
 /// Turn the builtin audits list on and write `audits/cargo/<name>.toml` into
@@ -107,7 +135,14 @@ async fn status(ctx: &TestContext, name: &str) -> StatusEntry {
 /// that is cached nowhere is no error.
 #[tokio::test]
 async fn a_used_crate_that_is_not_a_dependency_can_be_revoked() {
-    cargo_home();
+    with_cargo_home(
+        "a_used_crate_that_is_not_a_dependency_can_be_revoked",
+        check_used_crate_revocation(),
+    )
+    .await;
+}
+
+async fn check_used_crate_revocation() {
     with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
         ctx.symposium(&["init", "--add-agent", "claude"]).await?;
         ctx.sym.config.plugins.used = vec![
@@ -153,7 +188,16 @@ async fn a_used_crate_that_is_not_a_dependency_can_be_revoked() {
 /// loaded, not a newer cached one.
 #[tokio::test]
 async fn a_digest_revocation_checks_the_release_that_loaded() {
-    let bad = cargo_home().join("registry/src/index.crates.io-1949cf8c6b5b557f/widget-1.5.3");
+    with_cargo_home(
+        "a_digest_revocation_checks_the_release_that_loaded",
+        check_digest_revocation(),
+    )
+    .await;
+}
+
+async fn check_digest_revocation() {
+    let bad = PathBuf::from(std::env::var_os("CARGO_HOME").unwrap())
+        .join("registry/src/index.crates.io-1949cf8c6b5b557f/widget-1.5.3");
     let config = tempfile::tempdir().unwrap();
     let mut sym = Symposium::from_dir(config.path());
     write_audits(
