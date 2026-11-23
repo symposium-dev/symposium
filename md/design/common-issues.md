@@ -125,6 +125,10 @@ A directory Symposium installed carries a `.symposium` marker file, and the tree
 
 MCP registration runs on every sync, sync runs at every session start, and the agent rewrites the same file, so a registration with nothing to change must not write. Two things hid one that wrote every time. The check compared text: a Codex entry parsed from the file carries the blank line above its header, so it never rendered like a freshly built one, and Goose's section was compared with its indentation stripped against a snippet that kept it. Compare parsed values instead (`toml_entry_values`, `yaml_values`), which also leaves alone an entry the agent or the user laid out differently. And the tests compared the file's content before and after, which a rewrite with the same bytes passes: assert on the modification time, as `assert_second_registration_writes_nothing` does.
 
+## Environment isolation in tests
+
+Tests needing different environment variables should configure a subprocess with `Command::env` and `env_remove`, rather than mutating the parallel test process with `std::env::set_var` or `remove_var`. On Unix, native libraries can read the environment outside Rust's synchronization, so serializing only the tests that write it does not establish safety. The log-directory test re-executes only its own case with the environment set before startup and checks a completion marker so an empty test filter cannot silently pass.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:
