@@ -98,14 +98,14 @@ fn parse_github_https(url: &str) -> Result<GitSource> {
 
     let parts: Vec<&str> = stripped.splitn(4, '/').collect();
 
-    match parts.len() {
+    let source = match parts.len() {
         // owner/repo
-        2 => Ok(GitSource::GitHub {
+        2 => GitSource::GitHub {
             owner: parts[0].to_string(),
             repo: parts[1].to_string(),
             git_ref: String::new(),
             subpath: String::new(),
-        }),
+        },
         // owner/repo/tree/ref[/path...]
         n if n >= 4 && parts[2] == "tree" => {
             // rest is "branch/path/to/dir" — first segment is the ref, rest is path
@@ -115,15 +115,41 @@ fn parse_github_https(url: &str) -> Result<GitSource> {
                 Some((r, p)) => (r.to_string(), p.to_string()),
                 None => (rest.to_string(), String::new()),
             };
-            Ok(GitSource::GitHub {
+            GitSource::GitHub {
                 owner: parts[0].to_string(),
                 repo: parts[1].to_string(),
                 git_ref,
                 subpath,
-            })
+            }
         }
         _ => bail!("cannot parse GitHub URL: {url}"),
+    };
+    let GitSource::GitHub {
+        owner,
+        repo,
+        git_ref,
+        subpath,
+    } = &source;
+    let plain = owner
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && is_path_segment(owner)
+        && is_path_segment(repo)
+        && (parts.len() == 2 || is_path_segment(git_ref))
+        && (subpath.is_empty() || subpath.split('/').all(is_path_segment));
+    if !plain {
+        bail!(
+            "GitHub URL {url} has an owner, repository, ref or path segment that is not a plain name"
+        );
     }
+    Ok(source)
+}
+
+fn is_path_segment(segment: &str) -> bool {
+    !segment.chars().all(|c| c == '.' || c == ' ') && !segment.contains(['/', '\\', ':'])
 }
 
 // --- GitHub API client ---
@@ -532,6 +558,40 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_git_url_refuses_parts_that_are_not_plain_names() {
+        for url in [
+            "https://github.com/../r",
+            "https://github.com/C:/r",
+            "https://github.com/o\\x/r",
+            "https://github.com/o/..",
+            "https://github.com/o/r/tree/..",
+            "https://github.com/o/r/tree//x",
+            "https://github.com/o/r/tree/C:/x",
+            "https://github.com/o/r/tree/main/../../x",
+            "https://github.com/o/r/tree/main//x",
+            "https://github.com/o/r/tree/main/a\\..\\..\\x",
+        ] {
+            let err = parse_git_url(url).unwrap_err();
+            assert!(err.to_string().contains("not a plain name"), "{url}: {err}");
+        }
+    }
+
+    #[test]
+    fn parse_git_url_reads_a_ref_followed_by_a_path() {
+        let source = parse_git_url("https://github.com/o/r.rs/tree/feature/x/skills/").unwrap();
+        assert_eq!(
+            source,
+            GitSource::GitHub {
+                owner: "o".to_string(),
+                repo: "r.rs".to_string(),
+                git_ref: "feature".to_string(),
+                subpath: "x/skills".to_string(),
+            }
+        );
+        assert_eq!(source.cache_key(), "o--r.rs@feature--x--skills");
+    }
 
     #[test]
     fn copy_dir_recursive_creates_a_missing_destination() {

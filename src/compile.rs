@@ -108,14 +108,13 @@ pub(crate) fn compiled_version(plugin_dir: &Path) -> Result<String> {
         .with_context(|| format!("{} has no version", path.display()))
 }
 
-pub(crate) async fn global_plugins(
+pub(crate) async fn global_plugin_set(
     sym: &Symposium,
     pms: &PmRegistry,
     registry: &PluginRegistry,
     active: &[Plugin],
     ctx: &mut PredicateContext<'_>,
-    update: UpdateLevel,
-) -> Vec<PluginSkills> {
+) -> Vec<Plugin> {
     let inactive = registry
         .plugins
         .iter()
@@ -128,6 +127,20 @@ pub(crate) async fn global_plugins(
             .collect();
     ctx.set_conditions_met(true);
     plugins.retain(|plugin| plugin.applies(ctx));
+    ctx.set_conditions_met(false);
+    plugins
+}
+
+pub(crate) async fn global_plugins(
+    sym: &Symposium,
+    pms: &PmRegistry,
+    registry: &PluginRegistry,
+    active: &[Plugin],
+    ctx: &mut PredicateContext<'_>,
+    update: UpdateLevel,
+) -> Vec<PluginSkills> {
+    let plugins = global_plugin_set(sym, pms, registry, active, ctx).await;
+    ctx.set_conditions_met(true);
     let skills = crate::skills::collect_skills(sym, &plugins, ctx, update).await;
     ctx.set_conditions_met(false);
     group_skills(plugins, skills)

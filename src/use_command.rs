@@ -139,6 +139,11 @@ async fn use_in(
     } else {
         crate::sync::sync_user_plugins(sym, deps, update, &BTreeSet::new()).await?;
     }
+    if global {
+        crate::hook::install_global_hook_sources(sym, deps, update).await;
+    } else {
+        crate::hook::install_hook_sources(sym, deps, update).await;
+    }
     Ok(())
 }
 

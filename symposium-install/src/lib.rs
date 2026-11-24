@@ -23,6 +23,22 @@ const CURRENT_VERSION_FILENAME: &str = "current";
 /// inside the binary's version-keyed cache dir.
 const COMMIT_SHA_FILENAME: &str = ".commit-sha";
 
+const FAILURE_SUFFIX: &str = ".failed";
+
+const FAILURE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+// cargo builds an install in a fresh directory under `$TMPDIR`, which a killed
+// build leaves behind, along with the temporary files of the compilers it was
+// running. A fixed directory in the cache, holding both, is found again by the
+// next attempt and removed once cargo exits, whether the install succeeded or
+// failed. cargo releases its own lock on it before that, so installs of one
+// crate take turns on `install.lock`.
+const BUILD_DIRNAME: &str = "build";
+
+const INSTALL_LOCK_FILENAME: &str = "install.lock";
+
+const INSTALL_LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Minimal context needed for acquisition.
 ///
 /// Replaces the full `Symposium` config struct — hook handlers construct this
@@ -281,6 +297,18 @@ async fn query_crate_binaries(
     Ok((version, version_info.version.bin_names))
 }
 
+/// Why a cargo source was built from source rather than installed as a
+/// prebuilt binary.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceBuild {
+    /// `cargo-binstall` is not installed.
+    BinstallMissing,
+    /// `cargo binstall` found no prebuilt binary for this platform.
+    NoPrebuiltBinary,
+}
+
 /// Install a crate using cargo binstall (fast) or cargo install (fallback).
 ///
 /// `cache_dir` is `Some` for scoped installs (passed via `--root`) and `None`
@@ -293,10 +321,20 @@ async fn install_cargo_crate(
     cache_dir: Option<PathBuf>,
     git: Option<String>,
     force: bool,
-) -> Result<()> {
+) -> Result<Option<SourceBuild>> {
     use std::fs;
 
     let cache_dir = cache_dir.as_deref();
+    let crate_dir = crate_cache_dir(ctx, crate_name)?;
+    let _lock = lock_install(&crate_dir).await?;
+
+    let binary_path = match (cache_dir, binary_name.as_ref()) {
+        (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
+        _ => None,
+    };
+    if !force && binary_path.as_ref().is_some_and(|bin| bin.exists()) {
+        return Ok(None);
+    }
 
     if let Some(cache_dir) = cache_dir {
         if let Some(parent) = cache_dir.parent()
@@ -324,7 +362,12 @@ async fn install_cargo_crate(
 
     // Try cargo binstall first (faster, uses prebuilt binaries).
     tracing::info!("Attempting cargo binstall for {}", crate_spec);
-    let mut binstall_args: Vec<&str> = vec!["binstall", "--no-confirm"];
+    let mut binstall_args: Vec<&str> = vec![
+        "binstall",
+        "--no-confirm",
+        "--disable-strategies",
+        "compile",
+    ];
     if force {
         binstall_args.push("--force");
     }
@@ -337,72 +380,103 @@ async fn install_cargo_crate(
         binstall_args.push(git);
     }
     binstall_args.push(&crate_spec);
-    let binstall_result = cargo_output(ctx, &binstall_args).await;
+    let build_dir = cache_dir.unwrap_or(&crate_dir).join(BUILD_DIRNAME);
+    let binstall_result = cargo_output(ctx, &binstall_args, &build_dir).await;
 
-    let binary_path = match (cache_dir, binary_name.as_ref()) {
-        (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
-        _ => None,
-    };
-
-    match binstall_result {
+    let source_build = match binstall_result {
         Ok(output) if output.status.success() => {
             tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
-            if binary_path.is_none() {
-                return Ok(());
-            }
-            if let Some(bin) = binary_path.as_ref()
-                && bin.exists()
-            {
-                return Ok(());
+            if binary_path.as_ref().is_none_or(|bin| bin.exists()) {
+                None
+            } else {
+                Some(SourceBuild::NoPrebuiltBinary)
             }
         }
         Ok(output) => {
-            tracing::debug!(
-                "cargo binstall failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::debug!("cargo binstall failed: {}", stderr);
+            if stderr.contains("no such command: `binstall`") {
+                Some(SourceBuild::BinstallMissing)
+            } else {
+                Some(SourceBuild::NoPrebuiltBinary)
+            }
         }
         Err(e) => {
             tracing::debug!("cargo binstall not available: {}", e);
+            Some(SourceBuild::BinstallMissing)
+        }
+    };
+
+    if source_build.is_some() {
+        tracing::info!("Falling back to cargo install for {}", crate_spec);
+        let mut args: Vec<&str> = vec!["install"];
+        if force {
+            args.push("--force");
+        }
+        if let Some(dir) = cache_dir_str.as_deref() {
+            args.push("--root");
+            args.push(dir);
+        }
+        if let Some(git) = &git {
+            args.push("--git");
+            args.push(git);
+        }
+        args.push(&crate_spec);
+        let install_result = cargo_output(ctx, &args, &build_dir)
+            .await
+            .context("Failed to run cargo install")?;
+
+        if !install_result.status.success() {
+            let _ = fs::remove_dir_all(&build_dir);
+            bail!(
+                "cargo install failed for {}: {}",
+                crate_spec,
+                String::from_utf8_lossy(&install_result.stderr)
+            );
+        }
+
+        tracing::info!("Successfully installed {} via cargo install", crate_spec);
+    }
+
+    let _ = fs::remove_dir_all(&build_dir);
+    Ok(source_build)
+}
+
+async fn lock_install(crate_dir: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(crate_dir)
+        .with_context(|| format!("create {}", crate_dir.display()))?;
+    let path = crate_dir.join(INSTALL_LOCK_FILENAME);
+    let file = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    // Polled rather than `lock()`, so a dropped future (the hook deadline) stops the wait.
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => tokio::time::sleep(INSTALL_LOCK_POLL).await,
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("lock {}", path.display()));
+            }
         }
     }
-
-    tracing::info!("Falling back to cargo install for {}", crate_spec);
-    let mut args: Vec<&str> = vec!["install"];
-    if force {
-        args.push("--force");
-    }
-    if let Some(dir) = cache_dir_str.as_deref() {
-        args.push("--root");
-        args.push(dir);
-    }
-    if let Some(git) = &git {
-        args.push("--git");
-        args.push(git);
-    }
-    args.push(&crate_spec);
-    let install_result = cargo_output(ctx, &args)
-        .await
-        .context("Failed to run cargo install")?;
-
-    if !install_result.status.success() {
-        bail!(
-            "cargo install failed for {}: {}",
-            crate_spec,
-            String::from_utf8_lossy(&install_result.stderr)
-        );
-    }
-
-    tracing::info!("Successfully installed {} via cargo install", crate_spec);
-    Ok(())
 }
 
 async fn cargo_output(
     ctx: &InstallContext,
     args: &[&str],
+    build_dir: &Path,
 ) -> std::io::Result<std::process::Output> {
     let mut command = ctx.cargo_command();
-    command.args(args);
+    command.args(args).env("CARGO_TARGET_DIR", build_dir);
+    let temp_dir = build_dir.join("tmp");
+    if std::fs::create_dir_all(&temp_dir).is_ok() {
+        for variable in ["TMPDIR", "TMP", "TEMP"] {
+            command.env(variable, &temp_dir);
+        }
+    }
     run(ctx, command).await
 }
 
@@ -416,9 +490,41 @@ async fn run(
     process_tree::output(command).await
 }
 
+/// Whether `name` is a crate name: 1 to 64 ASCII letters, digits, `-` or `_`,
+/// starting with a letter. A [`CargoSource`] whose `crate_name` is not one is
+/// refused before any path is built from it.
+pub fn is_crate_name(name: &str) -> bool {
+    name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn crate_cache_dir(ctx: &InstallContext, crate_name: &str) -> Result<PathBuf> {
+    if !is_crate_name(crate_name) {
+        bail!("{crate_name:?} is not a crate name");
+    }
+    Ok(ctx.cache_dir().join("binaries").join(crate_name))
+}
+
+/// Whether `version` is an exact semver version, such as `"1.2.3"`. A
+/// [`CargoSource`] installed from crates.io is refused when its `version`, or
+/// the version crates.io answers with, is not one, before any path is built
+/// from it.
+pub fn is_exact_version(version: &str) -> bool {
+    semver::Version::parse(version).is_ok()
+}
+
+fn exact_version(version: &str) -> Result<&str> {
+    if !is_exact_version(version) {
+        bail!("{version:?} is not an exact version");
+    }
+    Ok(version)
+}
+
 fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
-    let path = ctx.cache_dir().join("binaries").join(krate).join(version);
-    Ok(path)
+    Ok(crate_cache_dir(ctx, krate)?.join(version))
 }
 
 /// Cache key for a git-sourced cargo install. The user-supplied `version` (or
@@ -439,6 +545,7 @@ struct AcquiredCargo {
     cache_dir: Option<PathBuf>,
     /// The resolved binary name, when known.
     resolved_executable: Option<String>,
+    built_from_source: Option<SourceBuild>,
 }
 
 /// Acquire a cargo installation: install if missing.
@@ -458,12 +565,13 @@ async fn acquire_cargo(
     executable_hint: Option<&str>,
     update: UpdateLevel,
 ) -> Result<AcquiredCargo> {
+    let crate_dir = crate_cache_dir(ctx, &cargo.crate_name)?;
     if cargo.global {
         // Validation requires `executable` for global cargo.
         let resolved = executable_hint
             .expect("validate_installation enforces `executable` for cargo + global")
             .to_string();
-        install_cargo_crate(
+        let built_from_source = install_cargo_crate(
             ctx,
             &cargo.crate_name,
             cargo.version.as_deref().unwrap_or(""),
@@ -476,6 +584,7 @@ async fn acquire_cargo(
         return Ok(AcquiredCargo {
             cache_dir: None,
             resolved_executable: Some(resolved),
+            built_from_source,
         });
     }
 
@@ -489,7 +598,7 @@ async fn acquire_cargo(
             ),
         };
         let cache_version = git_cache_version(git_url, cargo.version.as_deref());
-        let cache_dir = get_binary_cache_dir(ctx, &cargo.crate_name, &cache_version)?;
+        let cache_dir = crate_dir.join(&cache_version);
         let probe = cache_dir.join("bin").join(platform_binary_exe(&resolved));
         let sha_file = cache_dir.join(COMMIT_SHA_FILENAME);
 
@@ -515,10 +624,11 @@ async fn acquire_cargo(
             (None, _) => false,
         };
 
+        let mut built_from_source = None;
         if !probe.exists() || matches!(update, UpdateLevel::Fetch) || sha_changed {
             // `--force` only needed to overwrite an existing install.
             let overwrite = probe.exists();
-            install_cargo_crate(
+            built_from_source = install_cargo_crate(
                 ctx,
                 &cargo.crate_name,
                 cargo.version.as_deref().unwrap_or(""),
@@ -540,6 +650,7 @@ async fn acquire_cargo(
         return Ok(AcquiredCargo {
             cache_dir: Some(cache_dir),
             resolved_executable: Some(resolved),
+            built_from_source,
         });
     }
 
@@ -547,20 +658,20 @@ async fn acquire_cargo(
     // `None` we serve the version recorded by the last freshness check instead
     // — a dispatch never hits the network. `Check`/`Fetch` always re-resolve
     // (picking up newly published versions) and refresh the pointer.
-    let registry_dir = ctx.cache_dir().join("binaries").join(&cargo.crate_name);
-    let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+    let pinned = cargo.version.as_deref().map(exact_version).transpose()?;
+    let pointer = crate_dir.join(CURRENT_VERSION_FILENAME);
     if matches!(update, UpdateLevel::None)
         && let Some((cache_dir, resolved)) =
-            cached_cargo_version(&registry_dir, &pointer, executable_hint)
+            cached_cargo_version(&crate_dir, &pointer, executable_hint)
     {
         return Ok(AcquiredCargo {
             cache_dir: Some(cache_dir),
             resolved_executable: resolved,
+            built_from_source: None,
         });
     }
 
-    let (version, bin_names) =
-        query_crate_binaries(&cargo.crate_name, cargo.version.as_deref()).await?;
+    let (version, bin_names) = query_crate_binaries(&cargo.crate_name, pinned).await?;
 
     let resolved = match executable_hint {
         Some(name) => Some(name.to_string()),
@@ -575,7 +686,7 @@ async fn acquire_cargo(
         },
     };
 
-    let cache_dir = get_binary_cache_dir(ctx, &cargo.crate_name, &version)?;
+    let cache_dir = crate_dir.join(exact_version(&version)?);
     let probe_path = resolved
         .as_ref()
         .map(|n| cache_dir.join("bin").join(platform_binary_exe(n)));
@@ -585,8 +696,9 @@ async fn acquire_cargo(
     // reinstall of the same version.
     let force = matches!(update, UpdateLevel::Fetch);
     let already = probe_path.as_ref().is_some_and(|p| p.exists());
+    let mut built_from_source = None;
     if !already || force {
-        install_cargo_crate(
+        built_from_source = install_cargo_crate(
             ctx,
             &cargo.crate_name,
             &version,
@@ -600,7 +712,7 @@ async fn acquire_cargo(
 
     // Record the resolved version so future `None` acquires can skip the query.
     if let Err(e) =
-        std::fs::create_dir_all(&registry_dir).and_then(|()| std::fs::write(&pointer, &version))
+        std::fs::create_dir_all(&crate_dir).and_then(|()| std::fs::write(&pointer, &version))
     {
         tracing::debug!(error = %e, "failed to record current cargo version pointer");
     }
@@ -608,6 +720,7 @@ async fn acquire_cargo(
     Ok(AcquiredCargo {
         cache_dir: Some(cache_dir),
         resolved_executable: resolved,
+        built_from_source,
     })
 }
 
@@ -621,11 +734,7 @@ fn cached_cargo_version(
     executable_hint: Option<&str>,
 ) -> Option<(PathBuf, Option<String>)> {
     let version = std::fs::read_to_string(pointer).ok()?;
-    let version = version.trim();
-    if version.is_empty() {
-        return None;
-    }
-    let cache_dir = registry_dir.join(version);
+    let cache_dir = registry_dir.join(exact_version(version.trim()).ok()?);
     let bin_dir = cache_dir.join("bin");
     let resolved = match executable_hint {
         Some(name) => {
@@ -715,6 +824,8 @@ pub struct AcquiredSource {
     /// Layout discriminator — cargo binaries live under `<base>/bin/`,
     /// github paths live under `<base>/` directly.
     pub kind: AcquiredKind,
+    /// Why this acquisition built a cargo source from source, when it did.
+    pub built_from_source: Option<SourceBuild>,
 }
 
 /// How an [`AcquiredSource`] was obtained.
@@ -787,12 +898,14 @@ pub async fn acquire_source(
                 base: acquired.cache_dir,
                 resolved_executable: acquired.resolved_executable,
                 kind: AcquiredKind::Cargo,
+                built_from_source: acquired.built_from_source,
             })
         }
         Source::Github(g) => Ok(AcquiredSource {
             base: Some(acquire_github(ctx, g, update).await?),
             resolved_executable: None,
             kind: AcquiredKind::Github,
+            built_from_source: None,
         }),
     }
 }
@@ -839,7 +952,9 @@ fn source_is_cached(ctx: &InstallContext, source: &Source, executable_hint: Opti
                     .exists()
             }
             None => {
-                let registry_dir = ctx.cache_dir().join("binaries").join(&c.crate_name);
+                let Ok(registry_dir) = crate_cache_dir(ctx, &c.crate_name) else {
+                    return false;
+                };
                 let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
                 cached_cargo_version(&registry_dir, &pointer, executable_hint).is_some()
             }
@@ -848,6 +963,83 @@ fn source_is_cached(ctx: &InstallContext, source: &Source, executable_hint: Opti
             .cache_path_for_url(&g.url)
             .is_some_and(|p| p.exists()),
     }
+}
+
+/// Whether `source` belongs in this cache and is not there yet. Always false
+/// for a `global` cargo source, which is installed outside it.
+pub fn source_is_missing(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> bool {
+    !matches!(source, Source::Cargo(cargo) if cargo.global)
+        && !source_is_cached(ctx, source, executable_hint)
+}
+
+/// Whether acquiring `source` failed within the last day and it is still not
+/// in the cache. Reads the disk only.
+pub fn failure_recorded(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> bool {
+    let Some(record) = failure_record(ctx, source, executable_hint) else {
+        return false;
+    };
+    let recent = std::fs::metadata(&record)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|written| written.elapsed().is_ok_and(|age| age < FAILURE_LIFETIME));
+    recent
+        && std::fs::read_to_string(record)
+            .is_ok_and(|recorded| recorded == failure_key(source, executable_hint))
+        && !source_is_cached(ctx, source, executable_hint)
+}
+
+/// Records that acquiring `source` for `executable_hint` failed, beside the
+/// source's cache directory. Each source and executable keeps its own record.
+pub fn record_failure(ctx: &InstallContext, source: &Source, executable_hint: Option<&str>) {
+    let Some(record) = failure_record(ctx, source, executable_hint) else {
+        return;
+    };
+    let written = record
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&record, failure_key(source, executable_hint)));
+    if let Err(e) = written {
+        tracing::debug!(error = %e, "failed to record a failed acquisition");
+    }
+}
+
+/// Drops the record [`record_failure`] left for `source` and `executable_hint`.
+pub fn clear_failure(ctx: &InstallContext, source: &Source, executable_hint: Option<&str>) {
+    if let Some(record) = failure_record(ctx, source, executable_hint) {
+        let _ = std::fs::remove_file(record);
+    }
+}
+
+fn failure_record(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> Option<PathBuf> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let cache_dir = match source {
+        Source::Cargo(cargo) if cargo.global => return None,
+        Source::Cargo(cargo) => crate_cache_dir(ctx, &cargo.crate_name).ok()?,
+        Source::Github(github) => {
+            crate::git::GitCacheManager::new(ctx, "plugins").cache_path_for_url(&github.url)?
+        }
+    };
+    let mut hasher = DefaultHasher::new();
+    failure_key(source, executable_hint).hash(&mut hasher);
+    let mut name = cache_dir.file_name()?.to_os_string();
+    name.push(format!(".{:016x}{FAILURE_SUFFIX}", hasher.finish()));
+    Some(cache_dir.with_file_name(name))
+}
+
+fn failure_key(source: &Source, executable_hint: Option<&str>) -> String {
+    let source = serde_json::to_string(source).unwrap_or_default();
+    format!("{source}\n{}", executable_hint.unwrap_or_default())
 }
 
 /// What an installation resolves to once acquired.
@@ -1004,6 +1196,24 @@ mod tests {
     }
 
     #[test]
+    fn source_is_cached_ignores_a_pointer_that_is_not_an_exact_version() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(root.path().join("cache"));
+        let registry_dir = ctx.cache_dir().join("binaries").join("tool");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        write_cached_binary(root.path(), "outside", "tool");
+        std::fs::write(
+            registry_dir.join(CURRENT_VERSION_FILENAME),
+            "../../../outside",
+        )
+        .unwrap();
+
+        let source = Source::Cargo(CargoSource::new("tool"));
+        assert!(!source_is_cached(&ctx, &source, Some("tool")));
+        assert!(!source_is_cached(&ctx, &source, None));
+    }
+
+    #[test]
     fn source_is_cached_global_is_never_managed() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = InstallContext::new(tmp.path().to_path_buf());
@@ -1034,6 +1244,124 @@ mod tests {
         assert!(!source_is_cached(&ctx, &src, None));
     }
 
+    #[test]
+    fn failure_record_names_one_source_and_stops_counting_once_it_is_cached() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let pinned = Source::Cargo(CargoSource::new("ripgrep").with_version("14.1.0"));
+        let repinned = Source::Cargo(CargoSource::new("ripgrep").with_version("14.1.1"));
+
+        assert!(!failure_recorded(&ctx, &pinned, Some("rg")));
+        record_failure(&ctx, &pinned, Some("rg"));
+        assert!(failure_recorded(&ctx, &pinned, Some("rg")));
+        assert!(!failure_recorded(&ctx, &repinned, Some("rg")));
+        assert!(!failure_recorded(&ctx, &pinned, Some("ripgrep")));
+
+        let registry_dir = ctx.cache_dir().join("binaries").join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        std::fs::write(registry_dir.join(CURRENT_VERSION_FILENAME), "14.1.0").unwrap();
+        assert!(!failure_recorded(&ctx, &pinned, Some("rg")));
+
+        std::fs::remove_dir_all(&registry_dir).unwrap();
+        assert!(failure_recorded(&ctx, &pinned, Some("rg")));
+        clear_failure(&ctx, &pinned, Some("rg"));
+        assert!(!failure_recorded(&ctx, &pinned, Some("rg")));
+    }
+
+    #[test]
+    fn failure_record_of_a_cargo_git_source_follows_its_url_and_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let cargo = CargoSource::new("tool").with_git("https://example.com/o/r");
+        let source = Source::Cargo(cargo.clone());
+        let moved = Source::Cargo(CargoSource::new("tool").with_git("https://example.com/o/fork"));
+        let pinned = Source::Cargo(cargo.clone().with_version("1.2.0"));
+
+        record_failure(&ctx, &source, Some("tool"));
+        let record = failure_record(&ctx, &source, Some("tool")).unwrap();
+        assert_eq!(
+            record.parent(),
+            Some(ctx.cache_dir().join("binaries").as_path())
+        );
+        assert!(record.is_file());
+        assert!(failure_recorded(&ctx, &source, Some("tool")));
+        assert!(!failure_recorded(&ctx, &moved, Some("tool")));
+        assert!(!failure_recorded(&ctx, &pinned, Some("tool")));
+
+        let cache_version =
+            git_cache_version(cargo.git.as_deref().unwrap(), cargo.version.as_deref());
+        let bin_dir = get_binary_cache_dir(&ctx, &cargo.crate_name, &cache_version)
+            .unwrap()
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(platform_binary_exe("tool")), b"").unwrap();
+        assert!(!failure_recorded(&ctx, &source, Some("tool")));
+
+        clear_failure(&ctx, &source, Some("tool"));
+        assert!(!record.exists());
+    }
+
+    #[test]
+    fn failure_records_of_two_sources_of_one_crate_stand_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let from_git = Source::Cargo(CargoSource::new("tool").with_git("https://example.com/o/r"));
+        let pinned = Source::Cargo(CargoSource::new("tool").with_version("1.2.0"));
+
+        record_failure(&ctx, &from_git, Some("tool"));
+        record_failure(&ctx, &pinned, Some("tool"));
+        assert!(failure_recorded(&ctx, &from_git, Some("tool")));
+        assert!(failure_recorded(&ctx, &pinned, Some("tool")));
+
+        clear_failure(&ctx, &pinned, Some("tool"));
+        assert!(failure_recorded(&ctx, &from_git, Some("tool")));
+        assert!(!failure_recorded(&ctx, &pinned, Some("tool")));
+    }
+
+    #[test]
+    fn failure_record_of_a_github_source_sits_beside_its_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let source = Source::Github(GithubSource::new("https://github.com/example/tool"));
+
+        record_failure(&ctx, &source, None);
+        assert!(failure_recorded(&ctx, &source, None));
+        let record = failure_record(&ctx, &source, None).unwrap();
+        assert_eq!(
+            record.parent(),
+            Some(ctx.cache_dir().join("plugins").as_path())
+        );
+        assert!(record.is_file());
+    }
+
+    #[test]
+    fn global_cargo_source_keeps_no_failure_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let mut cargo = CargoSource::new("ripgrep");
+        cargo.global = true;
+        let source = Source::Cargo(cargo);
+
+        record_failure(&ctx, &source, Some("rg"));
+        assert!(!failure_recorded(&ctx, &source, Some("rg")));
+    }
+
+    #[test]
+    fn cargo_source_that_is_not_a_crate_name_keeps_no_failure_record() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let ctx = InstallContext::new(root.join("cache"));
+        let outside = root.join("outside");
+
+        for crate_name in [outside.to_str().unwrap(), "../../outside"] {
+            let source =
+                Source::Cargo(CargoSource::new(crate_name).with_git("file:///never-cloned"));
+            record_failure(&ctx, &source, Some("tool"));
+            assert!(!failure_recorded(&ctx, &source, Some("tool")));
+        }
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+    }
+
     #[tokio::test]
     async fn refresh_source_if_present_skips_absent_source() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1046,5 +1374,128 @@ mod tests {
             .unwrap();
         assert!(!refreshed);
         assert!(!ctx.cache_dir().join("binaries").join("ripgrep").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cargo_source_that_is_not_a_crate_name_is_refused_before_touching_the_disk() {
+        let entries = |dir: &Path| {
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let outside = root.join("outside");
+        std::fs::create_dir_all(outside.join("kept")).unwrap();
+        let cargo = root.join("cargo");
+        std::fs::write(
+            &cargo,
+            format!("#!/bin/sh\ntouch '{}/cargo-ran'\nexit 1\n", root.display()),
+        )
+        .unwrap();
+        make_executable(&cargo).unwrap();
+        let ctx = InstallContext::new(root.join("cache")).with_cargo_bin(cargo);
+
+        let mut errors = Vec::new();
+        for crate_name in [outside.to_str().unwrap(), "../../outside"] {
+            let from_git = CargoSource::new(crate_name).with_git("file:///never-cloned");
+            let mut global = CargoSource::new(crate_name);
+            global.global = true;
+            for cargo in [from_git, global] {
+                let source = Source::Cargo(cargo);
+                let acquired = acquire_source(&ctx, &source, Some("tool"), UpdateLevel::None).await;
+                errors.push(acquired.err().map(|e| e.to_string()));
+            }
+        }
+
+        assert_eq!(entries(&outside), ["kept"]);
+        assert_eq!(entries(root), ["cargo", "outside"]);
+        for error in errors {
+            assert!(error.is_some_and(|e| e.contains("is not a crate name")));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cargo_source_pinned_to_a_path_is_refused_before_touching_the_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let outside = root.join("outside");
+        std::fs::create_dir_all(outside.join("build")).unwrap();
+        let cargo = root.join("cargo");
+        std::fs::write(
+            &cargo,
+            format!("#!/bin/sh\ntouch '{}/cargo-ran'\nexit 1\n", root.display()),
+        )
+        .unwrap();
+        make_executable(&cargo).unwrap();
+        let ctx = InstallContext::new(root.join("cache")).with_cargo_bin(cargo);
+
+        for update in [UpdateLevel::None, UpdateLevel::Check] {
+            let source =
+                Source::Cargo(CargoSource::new("tool").with_version("1.0.0#/../../../../outside"));
+            let acquired = acquire_source(&ctx, &source, Some("tool"), update).await;
+            let error = acquired.err().map(|e| e.to_string());
+            assert!(
+                error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("is not an exact version")),
+                "{error:?}"
+            );
+        }
+
+        assert!(outside.join("build").is_dir());
+        let mut entries: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, ["cargo", "outside"]);
+    }
+
+    #[tokio::test]
+    async fn github_source_whose_url_is_not_plain_names_is_refused_before_touching_the_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(root.path().join("cache"));
+
+        for url in [
+            "https://github.com/o/r/tree/main/../../x",
+            "https://github.com/C:/r",
+            "https://github.com/o/r/tree/main/a\\..\\..\\x",
+        ] {
+            let source = Source::Github(GithubSource::new(url));
+            let acquired = acquire_source(&ctx, &source, None, UpdateLevel::None).await;
+            let error = acquired.err().map(|e| e.to_string());
+            assert!(
+                error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("not a plain name")),
+                "{url}: {error:?}"
+            );
+            assert!(!source_is_cached(&ctx, &source, None));
+        }
+
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn github_source_whose_url_is_not_plain_names_keeps_no_failure_record() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(root.path().join("cache"));
+
+        for url in [
+            "https://github.com/o/r/tree/main/../../x",
+            "https://github.com/C:/r",
+        ] {
+            let source = Source::Github(GithubSource::new(url));
+            record_failure(&ctx, &source, None);
+            assert!(!failure_recorded(&ctx, &source, None));
+        }
+
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }

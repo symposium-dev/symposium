@@ -111,7 +111,10 @@ fn validate_plugin_source(raw: RawPluginSource) -> Result<PluginSource> {
 
                 Ok(match (fields.path, fields.git) {
                     (Some(p), None) => PluginSource::Path(p),
-                    (None, Some(url)) => PluginSource::Git(url),
+                    (None, Some(url)) => {
+                        symposium_install::git::parse_git_url(&url)?;
+                        PluginSource::Git(url)
+                    }
                     (None, None) => bail!("a skill group `source` must set `path` or `git`"),
                     _ => unreachable!("exclusive_count > 1 guard"),
                 })
@@ -700,6 +703,22 @@ fn validate_installation(install: &Installation) -> Result<()> {
         );
     }
     if let Some(Source::Cargo(c)) = &install.source {
+        if !symposium_install::is_crate_name(&c.crate_name) {
+            bail!(
+                "installation `{}`: `crate` is not a crate name (ASCII letters, digits, `-` \
+                 and `_`, starting with a letter, at most 64 characters)",
+                install.name
+            );
+        }
+        if c.version
+            .as_deref()
+            .is_some_and(|version| !symposium_install::is_exact_version(version))
+        {
+            bail!(
+                "installation `{}`: `version` is not an exact version (such as `1.2.3`)",
+                install.name
+            );
+        }
         if c.git.is_some() && install.executable.is_none() {
             bail!(
                 "installation `{}`: cargo source with `git` requires `executable` to be set \
@@ -715,6 +734,10 @@ fn validate_installation(install: &Installation) -> Result<()> {
                 install.name
             );
         }
+    }
+    if let Some(Source::Github(github)) = &install.source {
+        symposium_install::git::parse_git_url(&github.url)
+            .with_context(|| format!("installation `{}`", install.name))?;
     }
     Ok(())
 }
@@ -4638,6 +4661,87 @@ mod tests {
                 .contains("`global = true` requires `executable`"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn cargo_crate_that_is_not_a_crate_name_errors() {
+        for crate_name in ["/opt/tools/rg", "../../rg"] {
+            let err = from_str(&indoc::formatdoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [[installations]]
+                name = "rg"
+                source = "cargo"
+                crate = "{crate_name}"
+                executable = "rg"
+                global = true
+            "#})
+            .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("installation `rg`: `crate` is not a crate name"),
+                "{crate_name}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_version_that_is_not_an_exact_version_errors() {
+        for version in ["14.1.1#/../../../outside", "^14"] {
+            let err = from_str(&indoc::formatdoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [[installations]]
+                name = "rg"
+                source = "cargo"
+                crate = "ripgrep"
+                version = "{version}"
+                executable = "rg"
+            "#})
+            .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("installation `rg`: `version` is not an exact version"),
+                "{version}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_url_that_is_not_plain_names_errors() {
+        for url in [
+            "https://github.com/o/r/tree/main/../../x",
+            "https://github.com/C:/r",
+            r"https://github.com/o/r/tree/main/a\..\..\x",
+        ] {
+            let installation = from_str(&indoc::formatdoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [[installations]]
+                name = "hooks"
+                source = "github"
+                url = '{url}'
+                script = "hook.sh"
+            "#})
+            .unwrap_err();
+            let skills = from_str(&indoc::formatdoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [[skills]]
+                source.git = '{url}'
+            "#})
+            .unwrap_err();
+            for err in [installation, skills] {
+                assert!(
+                    format!("{err:#}").contains("not a plain name"),
+                    "{url}: {err:#}"
+                );
+            }
+        }
     }
 
     /// `git` field on cargo source round-trips through validation.
