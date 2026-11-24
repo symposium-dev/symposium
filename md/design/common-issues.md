@@ -125,6 +125,10 @@ A directory Symposium installed carries a `.symposium` marker file, and the tree
 
 MCP registration runs on every sync, sync runs at every session start, and the agent rewrites the same file, so a registration with nothing to change must not write. Two things hid one that wrote every time. The check compared text: a Codex entry parsed from the file carries the blank line above its header, so it never rendered like a freshly built one, and Goose's section was compared with its indentation stripped against a snippet that kept it. Compare parsed values instead (`toml_entry_values`, `yaml_values`), which also leaves alone an entry the agent or the user laid out differently. And the tests compared the file's content before and after, which a rewrite with the same bytes passes: assert on the modification time, as `assert_second_registration_writes_nothing` does.
 
+## Environment isolation in audit tests
+
+The registry-cache audit tests need a fake `CARGO_HOME`. Configuring it with `std::env::set_var` inside a `OnceLock` only coordinates callers of that lock; native environment readers can still run concurrently on Unix. Each test instead creates its own fake cache and re-executes its test case with `CARGO_HOME` set on the child command before startup. The parent checks a completion marker as well as the exit status, so a stale test filter cannot pass without running the audit assertions. Temporary directories stay alive until the child exits and are then cleaned up.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:
