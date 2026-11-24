@@ -11,6 +11,7 @@
 //! `--locked`, and `editable` never reaches its protected build files.
 
 mod checks;
+mod delivery;
 mod error;
 mod hooks;
 mod manifest;
@@ -28,7 +29,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub(crate) use checks::CheckError;
-pub(crate) use error::{DirProblem, TaskError, TaskErrors};
+pub(crate) use error::{BundleIdentityField, DirProblem, TaskError, TaskErrors};
 pub(crate) use hooks::ExpectedHook;
 pub(crate) use name::{
     BatchName, CheckName, FixtureName, HookName, NameError, PluginName, SkillName, TaskName,
@@ -36,7 +37,7 @@ pub(crate) use name::{
 };
 pub(crate) use pattern::EditablePattern;
 pub(crate) use protected::is_protected;
-pub(crate) use skills::SkillSource;
+pub(crate) use skills::{BundleIdentity, SkillSource};
 
 use crate::evals::Evals;
 use crate::tree::{self, EntryKind};
@@ -213,6 +214,16 @@ impl Task {
     /// Every trusted provider, whether or not an expectation names its skill.
     pub(crate) fn provided_skills(&self) -> &[SkillSource] {
         &self.skill_sources
+    }
+
+    /// The exact native bundle name, derived only from trusted task providers.
+    pub(crate) fn skill_bundle_name(&self, skill: &SkillName) -> Option<&str> {
+        self.skill_sources
+            .iter()
+            .find(|source| source.name == skill.as_str())?
+            .bundle
+            .as_ref()
+            .map(|bundle| bundle.name.as_str())
     }
 
     /// The plugin hooks that must leave a successful record, each with its event.
@@ -702,6 +713,23 @@ mod tests {
     }
 
     #[test]
+    fn unasserted_skills_keep_their_sources_for_bundle_ownership_checks() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/skills/named/SKILL.md", skill_md("named-skill")),
+            ("first/skills/other/SKILL.md", skill_md("other-skill")),
+        ];
+        let (root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+        let task = task.unwrap();
+
+        assert_eq!(task.expected_skills().names().count(), 1);
+        assert_eq!(
+            task.skill_source(&skill_name("other-skill")),
+            Some(under(&root, "plugins/first/skills/other").as_path())
+        );
+    }
+
+    #[test]
     fn an_expected_skill_is_provided_by_the_skill_md_its_name_is_in() {
         let files = [
             ("first/Symposium.toml", SKILLS.to_owned()),
@@ -719,6 +747,118 @@ mod tests {
     }
 
     #[test]
+    fn bundle_identity_uses_the_declared_plugin_name_not_its_registry_folder() {
+        let files = [
+            (
+                "registry-folder/Symposium.toml",
+                format!("name = \"Specialized_Plugin\"\n{SKILLS}"),
+            ),
+            (
+                "registry-folder/skills/only/SKILL.md",
+                skill_md("named-skill"),
+            ),
+        ];
+        let (_root, task) = expecting_skills(
+            &["registry-folder"],
+            r#"installed = ["named-skill"]"#,
+            &files,
+        );
+
+        assert_eq!(
+            task.unwrap().skill_bundle_name(&skill_name("named-skill")),
+            Some("specialized-plugin")
+        );
+    }
+
+    #[test]
+    fn a_mixed_manifest_must_state_its_bundle_identity_in_symposium_toml() {
+        let agent_plugin = serde_json::json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "from-agent-plugin",
+            "version": "1.2.3",
+        });
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/plugin.json", agent_plugin.to_string()),
+            ("first/skills/only/SKILL.md", skill_md("named-skill")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                "plugin `first` relies on adjacent `plugin.json` for `name`; task plugins must state it in `Symposium.toml` so evaluation can verify native bundle identity",
+                "plugin `first` relies on adjacent `plugin.json` for `version`; task plugins must state it in `Symposium.toml` so evaluation can verify native bundle identity",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mixed_manifest_can_state_its_bundle_identity_in_symposium_toml() {
+        let agent_plugin = serde_json::json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "from-agent-plugin",
+            "version": "1.2.3",
+        });
+        let files = [
+            (
+                "first/Symposium.toml",
+                format!("name = \"from-toml\"\nversion = \"2.0.0\"\n{SKILLS}"),
+            ),
+            ("first/plugin.json", agent_plugin.to_string()),
+            ("first/skills/only/SKILL.md", skill_md("named-skill")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+
+        assert_eq!(
+            task.unwrap().skill_bundle_name(&skill_name("named-skill")),
+            Some("from-toml")
+        );
+    }
+
+    #[test]
+    fn a_skill_providing_plugin_must_have_a_native_bundle_name() {
+        let files = [
+            ("first/Symposium.toml", format!("name = \"---\"\n{SKILLS}")),
+            ("first/skills/only/SKILL.md", skill_md("named-skill")),
+        ];
+        let (_root, task) = expecting_skills(&["first"], r#"installed = ["named-skill"]"#, &files);
+
+        assert_eq!(
+            messages(&task.unwrap_err()),
+            [
+                "plugin `first` provides skills but its name `---` has no ASCII letters or digits to name a native bundle"
+            ]
+        );
+    }
+
+    #[test]
+    fn normalized_plugin_name_collisions_are_rejected() {
+        let files = [
+            (
+                "first/Symposium.toml",
+                format!("name = \"Shared_Name\"\n{SKILLS}"),
+            ),
+            (
+                "second/Symposium.toml",
+                format!("name = \"shared-name\"\n{SKILLS}"),
+            ),
+            ("first/skills/one/SKILL.md", skill_md("first-skill")),
+            ("second/skills/two/SKILL.md", skill_md("second-skill")),
+        ];
+        let (_root, task) = expecting_skills(
+            &["first", "second"],
+            r#"installed = ["first-skill", "second-skill"]"#,
+            &files,
+        );
+        let errors = task.unwrap_err();
+
+        assert!(
+            matches!(errors.0.as_slice(), [TaskError::AmbiguousBundleName { name, .. }] if name == "shared-name")
+        );
+    }
+
+    #[test]
     fn a_plugin_without_a_manifest_provides_the_skill_at_its_root() {
         let files = [("bare/SKILL.md", skill_md("bare-skill"))];
         let (root, task) = expecting_skills(&["bare"], r#"installed = ["bare-skill"]"#, &files);
@@ -728,6 +868,10 @@ mod tests {
         assert_eq!(
             task.skill_source(&skill_name("bare-skill")),
             Some(under(&root, "plugins/bare").as_path())
+        );
+        assert_eq!(
+            task.skill_bundle_name(&skill_name("bare-skill")),
+            Some("bare-skill")
         );
     }
 

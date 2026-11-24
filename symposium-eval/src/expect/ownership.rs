@@ -13,8 +13,10 @@ use std::io;
 use std::path::{Component, Path};
 
 use super::installed::{GITIGNORE, GITIGNORE_CONTENTS, MARKER, copy_candidates, same_bytes};
-use crate::task::SkillSource;
+use crate::task::{SkillName, SkillSource};
 use crate::tree::{self, EntryKind, TreeEntry};
+
+mod bundles;
 
 /// Discovers copies independently of assertions, comparing every candidate against
 /// the task's trusted providers. Returns `/`-joined paths relative to `project`.
@@ -26,8 +28,10 @@ pub(crate) fn symposium_copies(
     let mut owned = sources
         .iter()
         .flat_map(|source| {
-            copy_candidates(skills, &source.name)
+            SkillName::new(&source.name)
+                .ok()
                 .into_iter()
+                .flat_map(|name| copy_candidates(skills, &name))
                 .filter_map(|copy| {
                     is_symposium_copy(&copy, &source.dir)
                         .then(|| relative(project, &copy))
@@ -35,6 +39,18 @@ pub(crate) fn symposium_copies(
                 })
         })
         .collect::<Vec<_>>();
+    let source_of = |skill: &SkillName| {
+        sources
+            .iter()
+            .find(|source| source.name == skill.as_str())
+            .and_then(|source| {
+                source
+                    .bundle
+                    .clone()
+                    .map(|bundle| (source.dir.clone(), bundle))
+            })
+    };
+    owned.extend(bundles::symposium_bundles(project, &source_of));
     owned.sort();
     owned.dedup();
     owned
@@ -117,6 +133,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::evals::Evals;
+    use crate::expect::test_support::NativeBundle;
+    use crate::task::{BundleIdentity, Task, TaskName};
 
     /// A skill source, and a project whose skill directory holds sync's copy of it.
     struct Installed {
@@ -124,6 +143,7 @@ mod tests {
         source: PathBuf,
         project: PathBuf,
         copy: PathBuf,
+        bundle: Option<BundleIdentity>,
     }
 
     impl Installed {
@@ -145,13 +165,30 @@ mod tests {
                 source,
                 project,
                 copy,
+                bundle: None,
             }
+        }
+
+        fn bundled(mut self) -> Self {
+            let bundle = NativeBundle::new(&self.project.join(".claude/skills/a-plugin"));
+            let payload = bundle.path().join("skills/first-skill");
+            fs::rename(&self.copy, &payload).unwrap();
+            for metadata in [MARKER, GITIGNORE] {
+                fs::remove_file(payload.join(metadata)).unwrap();
+            }
+            self.copy = payload;
+            self.bundle = Some(BundleIdentity {
+                name: "a-plugin".to_owned(),
+                version: "0.0.0".to_owned(),
+            });
+            self
         }
 
         fn owned(&self) -> Vec<String> {
             let source = SkillSource {
                 name: "first-skill".to_owned(),
                 dir: self.source.clone(),
+                bundle: self.bundle.clone(),
             };
             symposium_copies(
                 &self.project,
@@ -159,6 +196,36 @@ mod tests {
                 &[source],
             )
         }
+    }
+
+    #[test]
+    fn a_native_bundle_with_an_exact_payload_is_symposiums() {
+        let installed = Installed::new().bundled();
+
+        assert_eq!(installed.owned(), [".claude/skills/a-plugin"]);
+    }
+
+    #[test]
+    fn a_native_bundle_keeps_the_plugins_declared_version() {
+        let evals = Evals::in_repository();
+        let task = Task::load(&evals, &TaskName::new("formatting").unwrap()).unwrap();
+        let project = TempDir::new().unwrap();
+        let bundle_path = project.path().join(".claude/skills/format-on-stop");
+        let bundle = NativeBundle::with_version(&bundle_path, "1.2.3");
+        bundle.install_skill(
+            "rust-formatting",
+            task.skill_source(&SkillName::new("rust-formatting").unwrap())
+                .unwrap(),
+        );
+
+        assert_eq!(
+            symposium_copies(
+                project.path(),
+                &project.path().join(".claude/skills"),
+                task.provided_skills(),
+            ),
+            [".claude/skills/format-on-stop"]
+        );
     }
 
     #[test]
@@ -181,10 +248,12 @@ mod tests {
             SkillSource {
                 name: "first-skill".to_owned(),
                 dir: installed.source.clone(),
+                bundle: None,
             },
             SkillSource {
                 name: "first-skill".to_owned(),
                 dir: other_source,
+                bundle: None,
             },
         ];
 

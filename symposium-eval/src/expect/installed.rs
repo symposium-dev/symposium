@@ -1,7 +1,8 @@
 //! Whether sync installed a task's skills (RFD reference, "Skills installed").
 //!
-//! Sync copies a skill's source directory into the client's skill directory, under the
-//! skill's name or, when two sources claim it, `<name>-<hash>`, and marks the copy with
+//! Sync delivers Claude skills inside marked native plugin bundles, and other clients'
+//! skills as loose copies. A loose copy is installed under the
+//! skill's name or, when two sources claim it, `<name>-<hash>`, and is marked with
 //! `.symposium` and a `.gitignore`. A skill is installed when such a marked copy holds
 //! what its source in `evals/` does, read as sync reads a tree: links followed, and a
 //! broken link, a link back into a directory being read, or anything neither file nor
@@ -175,21 +176,52 @@ fn candidates(skills: &Path, skill: &str) -> io::Result<Candidates> {
     };
     let mut candidates = Candidates::default();
     for entry in entries {
-        match candidate(entry, skill) {
-            Ok(Some((path, Identity::Expected))) => candidates.copies.push(path),
-            Ok(Some((_, Identity::Unknown))) => candidates.unidentified = true,
-            Ok(Some((_, Identity::Other)) | None) => {}
-            Err(_) => candidates.unreadable = true,
+        if candidates.inspect(entry, skill).is_err() {
+            candidates.unreadable = true;
         }
     }
     candidates.copies.sort();
     Ok(candidates)
 }
 
-/// Marked copies of a provided skill, independently of install assertions. An
-/// unreadable or unidentified entry cannot establish ownership and is left out.
-pub(super) fn copy_candidates(skills: &Path, skill: &str) -> Vec<PathBuf> {
-    candidates(skills, skill)
+impl Candidates {
+    fn inspect(&mut self, entry: io::Result<fs::DirEntry>, skill: &str) -> io::Result<()> {
+        let entry = entry?;
+        // The marker belongs to the bundle, not to each nested skill. Never follow a
+        // linked bundle or skills directory when discovering installed payloads.
+        let path = entry.path();
+        let bundled = entry.file_type()?.is_dir()
+            && marked(&path)?
+            && !path.join("SKILL.md").try_exists()?
+            && fs::symlink_metadata(path.join(".claude-plugin")).is_ok_and(|meta| meta.is_dir())
+            && file::read(&path.join(".claude-plugin/plugin.json"), 64 * 1024)?.is_some();
+        if bundled {
+            let nested = path.join("skills");
+            if !fs::symlink_metadata(&nested)?.is_dir() {
+                return Err(io::Error::other("plugin skills is not a real directory"));
+            }
+            for child in fs::read_dir(nested)? {
+                self.record(candidate(child, skill, false));
+            }
+        } else {
+            self.record(candidate(Ok(entry), skill, true));
+        }
+        Ok(())
+    }
+    fn record(&mut self, candidate: io::Result<Option<(PathBuf, Identity)>>) {
+        match candidate {
+            Ok(Some((path, Identity::Expected))) => self.copies.push(path),
+            Ok(Some((_, Identity::Unknown))) => self.unidentified = true,
+            Ok(Some((_, Identity::Other)) | None) => {}
+            Err(_) => self.unreadable = true,
+        }
+    }
+}
+
+/// Copies of a provided skill, independently of install assertions. An unreadable or
+/// unidentified entry cannot establish ownership and is left out.
+pub(super) fn copy_candidates(skills: &Path, skill: &SkillName) -> Vec<PathBuf> {
+    candidates(skills, skill.as_str())
         .map(|candidates| candidates.copies)
         .unwrap_or_default()
 }
@@ -199,6 +231,7 @@ pub(super) fn copy_candidates(skills: &Path, skill: &str) -> Vec<PathBuf> {
 fn candidate(
     entry: io::Result<fs::DirEntry>,
     skill: &str,
+    require_marker: bool,
 ) -> io::Result<Option<(PathBuf, Identity)>> {
     let entry = entry?;
     let Some(slot) = entry
@@ -209,7 +242,7 @@ fn candidate(
         return Ok(None);
     };
     // Sync installs a real directory; a link there is not one of its copies.
-    if !entry.file_type()?.is_dir() || !marked(&entry.path())? {
+    if !entry.file_type()?.is_dir() || (require_marker && !marked(&entry.path())?) {
         return Ok(None);
     }
     let identity = match slot {
@@ -385,6 +418,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::expect::test_support::NativeBundle;
 
     fn skill(name: &str) -> SkillName {
         SkillName::new(name).unwrap()
@@ -484,6 +518,95 @@ mod tests {
                 Inconclusive,
                 Inconclusive
             ]
+        );
+    }
+
+    #[test]
+    fn a_skill_in_a_marked_native_plugin_bundle_is_installed() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let original = source(root.path());
+        let bundle = NativeBundle::new(&skills.join("format-on-stop"));
+        bundle.install_skill("first-skill", &original);
+
+        assert_eq!(
+            decide(&skills, &["first-skill"], &["first-skill"], &original),
+            [
+                (InstallEvidence::Matching, Verdict::Pass),
+                (InstallEvidence::Present, Verdict::Fail)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_changed_bundle_payload_is_not_installed() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let original = source(root.path());
+        let bundle = NativeBundle::new(&skills.join("format-on-stop"));
+        let payload = bundle.install_skill("first-skill", &original);
+        fs::write(payload.join("references/notes.md"), "edited").unwrap();
+
+        assert_eq!(
+            decide(&skills, &["first-skill"], &[], &original),
+            [(InstallEvidence::Differing, Verdict::Fail)]
+        );
+    }
+
+    #[test]
+    fn loose_skills_and_bundled_skills_can_coexist() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let loose = install(&skills, "first-skill");
+        let second_source = root.path().join("second-source");
+        fs::create_dir(&second_source).unwrap();
+        fs::write(
+            second_source.join("SKILL.md"),
+            "---\nname: second-skill\n---\n",
+        )
+        .unwrap();
+        let bundle = NativeBundle::new(&skills.join("a-plugin"));
+        let nested = bundle.install_skill("second-skill", &second_source);
+        let first_source = source(root.path());
+        let expected = SkillExpectations::installing(
+            vec![skill("first-skill"), skill("second-skill")],
+            vec![],
+        );
+
+        let installs = skill_installs(&skills, &expected, |name| match name.as_str() {
+            "first-skill" => Some(first_source.clone()),
+            "second-skill" => Some(second_source.clone()),
+            _ => None,
+        });
+
+        assert!(
+            installs
+                .iter()
+                .all(|install| install.verdict == Verdict::Pass),
+            "{installs:?}"
+        );
+        assert_eq!(installs[0].matching_copy, Some(loose));
+        assert_eq!(installs[1].matching_copy, Some(nested));
+    }
+
+    #[test]
+    fn plugin_metadata_inside_a_loose_skill_does_not_make_it_a_bundle() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let copy = install(&skills, "first-skill");
+        let original = source(root.path());
+        for directory in [&copy, &original] {
+            fs::create_dir(directory.join(".claude-plugin")).unwrap();
+            fs::write(
+                directory.join(".claude-plugin/plugin.json"),
+                r#"{"name":"example"}"#,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            decide(&skills, &["first-skill"], &[], &original),
+            [(InstallEvidence::Matching, Verdict::Pass)]
         );
     }
 

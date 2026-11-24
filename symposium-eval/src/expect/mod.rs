@@ -13,6 +13,9 @@ pub(crate) mod ownership;
 pub(crate) mod sync;
 pub(crate) mod trace;
 
+#[cfg(test)]
+mod test_support;
+
 use crate::client::Load;
 use crate::task::{SkillExpectations, SkillName};
 

@@ -28,6 +28,8 @@ pub(super) struct Plugin<'a> {
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct Manifest {
+    pub(super) name: Option<String>,
+    pub(super) version: Option<String>,
     #[serde(default)]
     pub(super) hooks: Vec<RawHook>,
     #[serde(default)]
