@@ -1422,33 +1422,52 @@ mod tests {
 
     #[test]
     fn resolve_logs_dir_uses_xdg_state_home() {
+        const CHILD_ROOT: &str = "SYMPOSIUM_LOG_PATH_TEST_ROOT";
+        if let Some(root) = env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            assert_eq!(
+                resolve_logs_dir(&root),
+                root.join("state").join("symposium").join("logs")
+            );
+            std::fs::write(root.join("checked"), "").unwrap();
+            return;
+        }
+
         let tmp = tempfile::tempdir().unwrap();
         let xdg_state = tmp.path().join("state");
         std::fs::create_dir_all(&xdg_state).unwrap();
-
-        // Temporarily set XDG_STATE_HOME and unset SYMPOSIUM_HOME
-        let old_state = env::var("XDG_STATE_HOME").ok();
-        let old_home = env::var("SYMPOSIUM_HOME").ok();
-        unsafe {
-            env::set_var("XDG_STATE_HOME", &xdg_state);
-            env::remove_var("SYMPOSIUM_HOME");
-        }
-
-        let result = resolve_logs_dir(tmp.path());
-
-        // Restore
-        unsafe {
-            match old_state {
-                Some(v) => env::set_var("XDG_STATE_HOME", v),
-                None => env::remove_var("XDG_STATE_HOME"),
-            }
-            match old_home {
-                Some(v) => env::set_var("SYMPOSIUM_HOME", v),
-                None => env::remove_var("SYMPOSIUM_HOME"),
-            }
-        }
-
-        assert_eq!(result, xdg_state.join("symposium").join("logs"));
+        let before = (env::var_os("XDG_STATE_HOME"), env::var_os("SYMPOSIUM_HOME"));
+        // Configure only the child. In-process mutation cannot exclude native
+        // environment readers in the parallel Unix test harness.
+        let output = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "config::tests::resolve_logs_dir_uses_xdg_state_home",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, tmp.path())
+            .env("XDG_STATE_HOME", &xdg_state)
+            .env_remove("SYMPOSIUM_HOME")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            tmp.path().join("checked").is_file(),
+            "child must execute the log-path assertion\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            (env::var_os("XDG_STATE_HOME"), env::var_os("SYMPOSIUM_HOME")),
+            before,
+            "the parent environment must remain unchanged"
+        );
     }
 
     /// Ids route by name, so a configured package manager cannot take a name
