@@ -111,14 +111,17 @@ Where one rule guards several passes, bind it once and have every guard read tha
 
 ## Incomplete dependency snapshots
 
-A package manager can find a project but fail to list its dependencies. Recording
-that partial result as a fresh workspace snapshot loses the failure state on reuse,
-so later cleanup can mistake unavailable dependencies for removed ones.
-`hook::run_auto_sync` records a snapshot only when `Workspace::failed()` is empty.
-It also invalidates the previous snapshot before resolving again: a forced
-`SessionStart` refresh can fail while the old inputs remain unchanged. The next
-hook retries resolution without waiting for another session or input edit, while
-the separate record of consent notices already delivered remains intact.
+A package manager can find a project but fail to list its dependencies. If the
+hook caches that partial list as fresh, later hooks keep using it until an input
+changes or a new session starts, even after the PM recovers. A forced
+`SessionStart` refresh can also fail while a previous snapshot still looks
+fresh. Invalidate that snapshot before resolving again.
+
+Keep the retry cooldown separate from the successful snapshot. For five
+seconds after a failure, skip auto-sync and omit the failed PMs from the
+hook's PM set. This also covers dispatch, which resolves the workspace even
+when sync is skipped. A new session or a change to a known input allows an
+immediate retry. The consent notice history survives either outcome.
 
 ## An input that does not exist yet is still an input
 

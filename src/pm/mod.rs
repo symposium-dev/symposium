@@ -382,6 +382,12 @@ impl PmRegistry {
         }
     }
 
+    /// Omit PMs that recently failed from a hook's invocation-wide set.
+    pub(crate) fn without(mut self, names: &std::collections::BTreeSet<String>) -> Self {
+        self.instances.retain(|inst| !names.contains(&inst.name));
+        self
+    }
+
     /// Every instance, in order (cargo transport first, then registries).
     pub fn instances(&self) -> impl Iterator<Item = &PmInstance> {
         self.instances.iter()

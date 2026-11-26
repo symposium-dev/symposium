@@ -16,6 +16,8 @@ use crate::installation::{
 };
 use crate::plugins::{HookFormat, Installation};
 use crate::pm::{PackageId, Workspace};
+use crate::predicate_cache::now_ms;
+use crate::workspace_state::WorkspaceState;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -347,13 +349,31 @@ async fn execute_hook_inner(
             Some(s) => PathBuf::from(s),
             None => fallback_cwd,
         };
-        let deps = sym.workspace(&cwd);
+        let session_start = event == HookEvent::SessionStart;
+        let mut state = WorkspaceState::load(sym, &cwd);
+        // Retain the last known inputs even when the failing PM cannot
+        // describe the project on this attempt.
+        let prior_inputs: Vec<_> = state.watched_inputs().cloned().collect();
+        let cooling_down = !session_start
+            && state
+                .failed_attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.cooling_down(now_ms()));
+        let retrying = !cooling_down && state.failed_attempt.take().is_some();
+        let omitted = state
+            .failed_attempt
+            .as_ref()
+            .map(|attempt| &attempt.managers);
+        let deps = sym.workspace_without(&cwd, omitted);
 
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
         // SessionStart refreshes source caches and syncs unconditionally.
-        let session_start = event == HookEvent::SessionStart;
-        let (notify_about_possible_new_plugins, plugin_changes) =
-            run_auto_sync(sym, &deps, session_start).await;
+        let (notify_about_possible_new_plugins, plugin_changes) = if cooling_down {
+            tracing::debug!("auto-sync skipped during package manager cooldown");
+            (false, Vec::new())
+        } else {
+            run_auto_sync(sym, &deps, session_start, &mut state).await
+        };
 
         // SessionStart (once per session) also refreshes every hook's already-
         // cached source, so later events dispatch fresh binaries without per-
@@ -375,7 +395,7 @@ async fn execute_hook_inner(
         let prior_output = builtin_agent_output.to_hook_output();
 
         // Plugin dispatch with format routing
-        let response = match dispatch_plugin_hooks(
+        let dispatched = dispatch_plugin_hooks(
             sym,
             agent,
             event,
@@ -385,8 +405,30 @@ async fn execute_hook_inner(
             builtin_sym_output.additional_context().map(String::from),
             &deps,
         )
-        .await
-        {
+        .await;
+
+        // Later hook stages can discover a failure after sync succeeded. In
+        // that case invalidate its snapshot too, so a retry asks the PM again.
+        let failed = deps.failed();
+        if !failed.is_empty() {
+            let inputs = prior_inputs
+                .into_iter()
+                .chain(
+                    deps.info()
+                        .await
+                        .into_iter()
+                        .flat_map(|ws| ws.inputs.iter().cloned()),
+                )
+                .chain(std::iter::once(sym.config_dir().join("config.toml")));
+            state.record_pm_failure(now_ms(), failed, inputs);
+            state.save(sym, &cwd);
+        } else if retrying && state.last_sync.is_none() {
+            // A successful retry can find no workspace or run with auto-sync
+            // off, so it may have no snapshot to save.
+            state.save(sym, &cwd);
+        }
+
+        let response = match dispatched {
             Ok(final_output) => {
                 let response = handler.respond(&final_output);
                 if receives(
@@ -533,8 +575,7 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &
 ///
 /// Only a sync with no package-manager failures is recorded. Before resolving
 /// again, invalidate the previous snapshot so a failed refresh cannot leave it
-/// reusable. Subsequent events retry until resolution succeeds; reusing partial
-/// results would lose the failure state that keeps cleanup from removing content.
+/// reusable. The hook entry point skips auto-sync during a short PM cooldown.
 ///
 /// `SessionStart` runs once per session, so there we do the real work: refresh
 /// every source cache (`UpdateLevel::Check`) and sync unconditionally, ignoring
@@ -547,6 +588,7 @@ async fn run_auto_sync(
     sym: &Symposium,
     deps: &Arc<Workspace>,
     session_start: bool,
+    state: &mut WorkspaceState,
 ) -> (bool, Vec<(crate::agents::Agent, Vec<String>)>) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
@@ -556,7 +598,6 @@ async fn run_auto_sync(
         return (false, Vec::new());
     };
 
-    let mut state = crate::workspace_state::WorkspaceState::load(sym, &start);
     if !session_start && let Some((workspace, dep_ids)) = state.fresh() {
         tracing::debug!("auto-sync skipped: no package manager input changed since last sync");
         deps.reuse(workspace, dep_ids);
@@ -1373,7 +1414,6 @@ mod tests {
         use crate::pm::{
             PackageManager, PluginKind, PmInstance, PmRegistry, ProjectInfo, UnvalidatedPlugin,
         };
-        use crate::workspace_state::WorkspaceState;
 
         #[derive(Clone, Copy, Debug, PartialEq)]
         enum Failure {
@@ -1446,8 +1486,13 @@ mod tests {
                     ))
                 };
 
+                let attempt = async |ws: Arc<Workspace>, session_start| {
+                    let mut state = WorkspaceState::load(&sym, &root);
+                    run_auto_sync(&sym, &ws, session_start, &mut state).await;
+                };
+
                 if previous_sync {
-                    run_auto_sync(&sym, &workspace(None), true).await;
+                    attempt(workspace(None), true).await;
                     assert!(WorkspaceState::load(&sym, &root).fresh().is_some());
                 }
                 let offered = PackageId::new("demo", "example", "1.0.0");
@@ -1459,7 +1504,7 @@ mod tests {
                 // successful snapshot. A second failure must retry mid-session.
                 for session_start in [true, false] {
                     let failed = workspace(Some(failure));
-                    run_auto_sync(&sym, &failed, session_start).await;
+                    attempt(Arc::clone(&failed), session_start).await;
                     assert_eq!(failed.failed(), ["demo"]);
                     let state = WorkspaceState::load(&sym, &root);
                     assert!(
@@ -1470,13 +1515,13 @@ mod tests {
                 }
 
                 // Recovery needs neither another SessionStart nor an input edit.
-                run_auto_sync(&sym, &workspace(None), false).await;
+                attempt(workspace(None), false).await;
                 let state = WorkspaceState::load(&sym, &root);
                 assert_eq!(state.fresh().unwrap().1, std::slice::from_ref(&offered));
 
                 // Once resolution succeeds, unchanged inputs skip PM work again.
                 let warm = workspace(Some(Failure::Project));
-                run_auto_sync(&sym, &warm, false).await;
+                attempt(Arc::clone(&warm), false).await;
                 assert!(warm.failed().is_empty());
                 assert_eq!(warm.dep_ids().await, [offered]);
             }
