@@ -23,7 +23,7 @@ fn state() -> TelemetryStateV1 {
 }
 
 fn empty_recovery(day: UtcDay) -> AggregateRecoveryIndex {
-    MetricSnapshot::empty(day).recovery_index()
+    MetricSnapshot::empty_for_test(day).recovery_index()
 }
 
 fn public(name: &str) -> ExtensionInvocationAttribution {
@@ -197,7 +197,7 @@ fn adopted_snapshot_row_continues_totals_with_incomplete_session_counts() {
         ),
     );
     let original_event_id = row.event_id;
-    let mut snapshot = MetricSnapshot::empty(recording.day());
+    let mut snapshot = MetricSnapshot::empty_for_test(recording.day());
     snapshot
         .insert(AggregateRow::ExtensionInvocation(Box::new(row.clone())))
         .unwrap();
