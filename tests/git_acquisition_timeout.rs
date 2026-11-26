@@ -93,11 +93,30 @@ fn timed_out_git_probe_does_not_hold_runtime_shutdown() {
 
     let signals = tempfile::tempdir().unwrap();
     let root = signals.path();
-    // Cargo succeeds without invoking the network. The subsequent Git probe
-    // waits for the parent to release it after observing runtime shutdown.
+    // Cargo creates the expected executable without invoking the network.
+    // The subsequent Git probe waits for the parent to release it after
+    // observing runtime shutdown.
     std::fs::write(
         root.join("cargo"),
-        "#!/bin/sh\ncase \"$1\" in binstall) exit 1;; install) exit 0;; *) exit 2;; esac\n",
+        r#"#!/usr/bin/env sh
+set -eu
+case "$1" in
+    binstall) exit 1;;
+    install) shift;;
+    *) exit 2;;
+esac
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = --root ]; then
+        shift
+        mkdir -p "$1/bin"
+        printf '#!/usr/bin/env sh\nexit 0\n' > "$1/bin/git-timeout-probe"
+        chmod +x "$1/bin/git-timeout-probe"
+        exit 0
+    fi
+    shift
+done
+exit 2
+"#,
     )
     .unwrap();
     std::fs::write(
