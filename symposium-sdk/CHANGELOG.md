@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/symposium-dev/symposium/compare/symposium-sdk-v0.2.1...symposium-sdk-v0.2.2) - 2026-11-27
+
+### Other
+
+- updated the following local packages: symposium-install
+
 ## [0.2.1](https://github.com/symposium-dev/symposium/compare/symposium-sdk-v0.2.0...symposium-sdk-v0.2.1) - 2026-11-18
 
 ### Added

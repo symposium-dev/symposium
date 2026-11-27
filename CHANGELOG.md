@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.7.0...symposium-v0.7.1) - 2026-11-27
+
+### Added
+
+- add telemetry hook recording facade
+- stage complete telemetry recording changes
+- add lock-bound telemetry maintenance
+- persist telemetry maintenance scheduling
+- persist telemetry recordings before publication
+
+### Fixed
+
+- *(use)* let use --remove undo a consent prompt answer
+- *(git)* keep distinct source identities in separate cache entries
+- *(install)* preserve cached versions until their replacement succeeds
+
+### Other
+
+- make empty metric snapshots loader-owned
+- consolidate telemetry replacement temporaries
+- prepare private telemetry state before writes
+- isolate telemetry recording writes
+- *(eval)* recognize native skill installs and owned bundles
+- *(eval)* bind skill loads to trusted delivery identities
+- *(config)* isolate log-directory environment in a subprocess
+- *(install)* create the binary in the Git timeout fixture
+- *(eval)* preflight and run one evaluation batch
+- *(eval)* give srt a short runtime directory
+- *(eval)* retain trial results safely
+
 ## [0.7.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.6.0...symposium-v0.7.0) - 2026-11-18
 
 ### Added
