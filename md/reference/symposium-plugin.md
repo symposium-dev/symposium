@@ -59,6 +59,8 @@ Validate plugins without installing anything. Useful when authoring plugins. Eac
 - A [plugin source](./plugin-source.md) directory, such as a checkout of the recommendations repository: every entry in it.
 - Any other `.toml` file, validated as a registry plugin manifest.
 
+Each skill is listed once, even when several skill groups reach it (a crate whose `Symposium.toml` declares `source.path = "skills"` on top of the default `skills/` group), since it is installed once. A `source.git` group is not fetched: it is listed with a warning that its skills are not checked.
+
 | Flag | Description |
 |------|-------------|
 | `<PATH>` | Path to a directory or a manifest file |

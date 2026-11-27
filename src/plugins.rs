@@ -1717,51 +1717,69 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 
         // Validate that local skill groups contain discoverable skills.
         if let Some(parsed) = &plugin {
+            let mut listed = std::collections::HashSet::new();
             for group in &parsed.manifest.skills {
-                if let PluginSource::Path(ref skills_dir) = group.source {
-                    let skills_dir = skills_dir.clone();
-                    let found = crate::skills::discover_skills(
-                        &skills_dir,
-                        group.workspace_member,
-                        &group.predicates,
-                    );
-                    let group_label = group
-                        .source_label
-                        .clone()
-                        .unwrap_or_else(|| "skills".to_string());
-                    if found.is_empty() {
+                let skills_dir = match &group.source {
+                    PluginSource::Path(skills_dir) => skills_dir.clone(),
+                    PluginSource::Git(url) => {
                         children.push(ValidationResult {
-                            id: group_label,
+                            id: format!("git:{url}"),
                             kind: ValidationKind::Skill,
                             result: Ok(()),
                             warnings: vec![
-                                "skill group source.path contains no SKILL.md files".into(),
+                                "skill group source.git is not fetched by validation, so its \
+                                 skills are not checked"
+                                    .into(),
                             ],
                             children: Vec::new(),
                         });
-                    } else {
-                        for skill_result in found {
-                            let (skill_id, result, warnings) = match skill_result {
-                                Ok(skill) => (
-                                    skill.name().to_string(),
-                                    Ok(()),
-                                    skill.path.parent().map_or_else(Vec::new, |dir| {
-                                        crate::sync::unfollowed_entries(
-                                            dir,
-                                            parsed.agent_plugin_root.as_deref(),
-                                        )
-                                    }),
-                                ),
-                                Err(e) => (group_label.clone(), Err(e), Vec::new()),
-                            };
-                            children.push(ValidationResult {
-                                id: skill_id,
-                                kind: ValidationKind::Skill,
-                                result,
-                                warnings,
-                                children: Vec::new(),
-                            });
-                        }
+                        continue;
+                    }
+                };
+                let canonical = |path: &Path| fs::canonicalize(path).unwrap_or(path.to_path_buf());
+                if !listed.insert(canonical(&skills_dir)) {
+                    continue;
+                }
+                let found = crate::skills::discover_skills(
+                    &skills_dir,
+                    group.workspace_member,
+                    &group.predicates,
+                );
+                let group_label = group
+                    .source_label
+                    .clone()
+                    .unwrap_or_else(|| "skills".to_string());
+                if found.is_empty() {
+                    children.push(ValidationResult {
+                        id: group_label,
+                        kind: ValidationKind::Skill,
+                        result: Ok(()),
+                        warnings: vec!["skill group source.path contains no SKILL.md files".into()],
+                        children: Vec::new(),
+                    });
+                } else {
+                    for skill_result in found {
+                        let (skill_id, result, warnings) = match skill_result {
+                            Ok(skill) if !listed.insert(canonical(&skill.path)) => continue,
+                            Ok(skill) => (
+                                skill.name().to_string(),
+                                Ok(()),
+                                skill.path.parent().map_or_else(Vec::new, |dir| {
+                                    crate::sync::unfollowed_entries(
+                                        dir,
+                                        parsed.agent_plugin_root.as_deref(),
+                                    )
+                                }),
+                            ),
+                            Err(e) => (group_label.clone(), Err(e), Vec::new()),
+                        };
+                        children.push(ValidationResult {
+                            id: skill_id,
+                            kind: ValidationKind::Skill,
+                            result,
+                            warnings,
+                            children: Vec::new(),
+                        });
                     }
                 }
             }

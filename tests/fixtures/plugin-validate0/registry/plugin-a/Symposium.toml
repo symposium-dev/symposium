@@ -3,3 +3,6 @@ depends-on = ["serde"]
 
 [[skills]]
 source.path = "skills"
+
+[[skills]]
+source.git = "https://github.com/org/repo/tree/main/skills"
