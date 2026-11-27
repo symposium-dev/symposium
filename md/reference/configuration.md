@@ -177,7 +177,7 @@ use = ["standalone-plugin", { name = "team-tools", workspace = "/home/me/work/se
 
 `use` is what wakes a dormant plugin, and it also enables a plugin whether or not any dependency references it. `auto-enable` is narrower: it is consent for what a dependency you already have carries with it.
 
-You rarely edit this section by hand. [`symposium use`](./symposium-use.md) writes and removes `use` entries; the [consent prompt](./symposium-sync.md#consent-prompt) in an interactive `symposium sync` writes `auto-enable` and `disable`; and [`symposium status`](./symposium-status.md) reports what the section currently decides.
+You rarely edit this section by hand. [`symposium use`](./symposium-use.md) writes and removes `use` entries; the [consent prompt](./symposium-sync.md#consent-prompt) in an interactive `symposium sync` writes `auto-enable` and `disable`, which `symposium use --remove` drops again; and [`symposium status`](./symposium-status.md) reports what the section currently decides.
 
 ## Directory resolution
 

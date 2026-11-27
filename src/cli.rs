@@ -95,7 +95,7 @@ pub enum Commands {
         #[arg(long)]
         global: bool,
 
-        /// Remove a previously recorded enablement instead of adding one
+        /// Remove a previously recorded enablement or consent answer instead of adding one
         #[arg(long)]
         remove: bool,
     },

@@ -935,6 +935,95 @@ async fn use_remove_respects_scope() {
     .unwrap();
 }
 
+/// `--remove` also forgets the consent prompt's answer: an approval, so the
+/// dependency is offered again, and a decline, which `use` refuses to
+/// override and points at `--remove` for. A `"*"` entry is left alone.
+#[tokio::test]
+async fn use_remove_forgets_a_consent_answer() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".agents/skills");
+
+            ctx.sym.config.plugins.auto_enable = vec!["crate_a".into()];
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "a-guidance");
+            ctx.symposium(&["use", "--remove", "crate-a"]).await?;
+            assert!(ctx.sym.config.plugins.auto_enable.is_empty());
+            assert!(find_installed_skills(&skills_dir, "a-guidance").is_empty());
+            let deps = ctx.sym.workspace(&workspace_root);
+            let pending = symposium::discovery::pending_candidates(&ctx.sym, &deps).await;
+            assert!(
+                pending.iter().any(|c| c.id.name == "crate-a"),
+                "offered again: {pending:?}"
+            );
+
+            ctx.sym.config.plugins.auto_enable = vec!["*".into()];
+            ctx.sym.config.plugins.disable = vec!["crate_a".into()];
+            let err = ctx
+                .symposium(&["use", "crate-a"])
+                .await
+                .expect_err("a declined name is refused");
+            assert!(
+                err.to_string().contains("symposium use crate-a --remove"),
+                "{err}"
+            );
+            ctx.symposium(&["use", "--remove", "crate-a"]).await?;
+            assert!(ctx.sym.config.plugins.disable.is_empty());
+            assert_eq!(ctx.sym.config.plugins.auto_enable, ["*"]);
+            find_installed_skill(&skills_dir, "a-guidance");
+
+            ctx.sym.config.plugins.disable = vec!["*".into()];
+            let err = ctx
+                .symposium(&["use", "crate-a"])
+                .await
+                .expect_err("`*` disables it");
+            assert!(err.to_string().contains("remove that entry"), "{err}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A registry plugin sharing the dependency's name does not hide the
+/// approval from `--remove`, which also withdraws the dependency's MCP server.
+#[tokio::test(flavor = "multi_thread")]
+async fn use_remove_forgets_an_approval_a_registry_plugin_shares_a_name_with() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["consent-facets0"],
+        async |mut ctx| {
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+            ctx.symposium(&["init", "--add-agent", "claude", "--hook-scope", "global"])
+                .await?;
+            decide_crate_d(&mut ctx, true).await?;
+            ctx.sym.config.plugins.auto_enable = vec!["crate_d".into()];
+            ctx.symposium(&["sync"]).await?;
+            let user_mcp = ctx.sym.home_dir().join(".claude.json");
+            let registered = || std::fs::read_to_string(&user_mcp).unwrap_or_default();
+            assert!(registered().contains("d-server"), "{}", registered());
+
+            let entry = ctx.sym.config_dir().join("plugins/crate-d");
+            std::fs::create_dir_all(&entry)?;
+            std::fs::write(
+                entry.join("Symposium.toml"),
+                "name = \"crate-d\"\ndepends-on = [\"crate-d\"]\n",
+            )?;
+            ctx.sym.config.defaults.user_plugins = true;
+            ctx.symposium(&["use", "--remove", "crate-d"]).await?;
+            assert!(ctx.sym.config.plugins.auto_enable.is_empty());
+            assert!(!registered().contains("d-server"), "{}", registered());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 // ── search ───────────────────────────────────────────────────────────
 
 /// Search finds both a registry's standalone skills and its plugin entries,
