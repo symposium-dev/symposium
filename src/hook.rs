@@ -258,7 +258,7 @@ const PLUGIN_HOOKS_BUDGET: Duration = Duration::from_secs(8);
 
 /// Returns `None` when the hook was killed at `deadline`. Output goes to files,
 /// not pipes, so neither a full pipe nor a background job can hold dispatch.
-fn run_with_deadline(
+async fn run_with_deadline(
     spec: SpawnSpec,
     dir: Option<&Path>,
     input: Vec<u8>,
@@ -266,29 +266,46 @@ fn run_with_deadline(
 ) -> std::io::Result<Option<Output>> {
     let stdout = tempfile::tempfile()?;
     let stderr = tempfile::tempfile()?;
-    let mut child = spawn_from_spec(spec, dir, &stdout, &stderr)?;
-    if let Some(mut stdin) = child.stdin.take() {
+    let mut running = RunningHook {
+        child: spawn_from_spec(spec, dir, &stdout, &stderr)?,
+        exited: false,
+    };
+    if let Some(mut stdin) = running.child.stdin.take() {
         std::thread::spawn(move || {
             let _ = stdin.write_all(&input);
         });
     }
     let status = loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = running.child.try_wait()? {
+            running.exited = true;
             break status;
         }
         if Instant::now() >= deadline {
-            symposium_install::process_tree::kill(child.id());
-            let _ = child.kill();
-            child.wait()?;
             return Ok(None);
         }
-        std::thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
     };
     Ok(Some(Output {
         status,
         stdout: read_from_start(stdout)?,
         stderr: read_from_start(stderr)?,
     }))
+}
+
+// A dropped dispatch must stop its subprocess just like a deadline does.
+struct RunningHook {
+    child: std::process::Child,
+    exited: bool,
+}
+
+impl Drop for RunningHook {
+    fn drop(&mut self) {
+        if !self.exited {
+            symposium_install::process_tree::kill(self.child.id());
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 fn read_from_start(mut file: File) -> std::io::Result<Vec<u8>> {
@@ -602,7 +619,7 @@ fn plugin_reload_notice(
         HookAgent::Antigravity => "Tell the user to run `/skills reload` to load them now.",
         HookAgent::Codex => "Tell the user to start a new session to load them.",
         HookAgent::Copilot => "Tell the user to run `/restart` to load them now.",
-        HookAgent::Goose | HookAgent::Kiro | HookAgent::OpenCode => return None,
+        _ => return None,
     };
     let (_, updated) = plugin_changes
         .into_iter()
@@ -739,10 +756,7 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps, plugin_reload_notice).await
         }
-        _ => (
-            symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
-            Vec::new(),
-        ),
+        _ => (symposium::OutputEvent::empty_for(input.event()), Vec::new()),
     }
 }
 
@@ -1022,7 +1036,7 @@ pub async fn dispatch_plugin_hooks(
         let run_res = match build_spawn_spec(sym, &hook, dispatch_deadline).await {
             Ok(spec) => {
                 let deadline = dispatch_deadline.min(Instant::now() + PLUGIN_HOOK_TIMEOUT);
-                run_with_deadline(spec, dir, stdin_str.into_bytes(), deadline)
+                run_with_deadline(spec, dir, stdin_str.into_bytes(), deadline).await
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to prepare hook command");
@@ -1075,6 +1089,17 @@ pub async fn dispatch_plugin_hooks(
                                 &child_out.stdout,
                             ) {
                                 Ok(sym_out) => {
+                                    let output_event = sym_out.event();
+                                    if output_event != event {
+                                        tracing::warn!(
+                                            plugin = %hook.plugin_name,
+                                            hook = %hook.hook_name,
+                                            expected_event = ?event,
+                                            output_event = ?output_event,
+                                            "plugin output event does not match input event"
+                                        );
+                                        continue;
+                                    }
                                     let host_out = host_h.translate_output(&sym_out);
                                     (host_out.to_hook_output(), sym_out)
                                 }
@@ -1475,6 +1500,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn builtin_stop_returns_matching_empty_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let deps = sym.workspace(tmp.path());
+        let input = symposium::InputEvent::Stop(symposium::StopInput::new(None, None));
+
+        for notify in [false, true] {
+            let (output, _) = dispatch_builtin(&sym, &input, &deps, notify, None).await;
+            assert!(matches!(&output, symposium::OutputEvent::Stop(_)));
+            assert!(output.additional_context().is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn builtin_post_tool_use_returns_empty_when_dependencies_are_unchanged() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
@@ -1515,8 +1554,20 @@ mod tests {
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ =
-                tx.send(run_with_deadline(spec, None, input, Instant::now() + timeout).unwrap());
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let _ = tx.send(
+                runtime
+                    .block_on(run_with_deadline(
+                        spec,
+                        None,
+                        input,
+                        Instant::now() + timeout,
+                    ))
+                    .unwrap(),
+            );
         });
         rx.recv_timeout(timeout + Duration::from_secs(5))
             .expect("the hook returns by its deadline")

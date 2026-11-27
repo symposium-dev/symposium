@@ -146,7 +146,7 @@ fn listing(agent: Agent) -> Option<(&'static str, &'static [&'static str])> {
         Agent::Copilot => Some(("copilot", &["skill", "list", "--json"])),
         Agent::Goose => Some(("goose", &["skills", "list"])),
         Agent::OpenCode => Some(("opencode", &["debug", "skill"])),
-        Agent::Claude | Agent::Antigravity | Agent::Kiro => None,
+        Agent::Claude | Agent::Antigravity | Agent::Kiro | Agent::Pi => None,
     }
 }
 
@@ -175,7 +175,7 @@ fn listed(agent: Agent, stdout: &str, plugin: &str, skill: &str) -> bool {
         Agent::Goose => stdout
             .lines()
             .any(|line| line.split('|').next().map(str::trim) == Some(skill)),
-        Agent::Claude | Agent::Antigravity | Agent::Kiro => false,
+        Agent::Claude | Agent::Antigravity | Agent::Kiro | Agent::Pi => false,
     }
 }
 

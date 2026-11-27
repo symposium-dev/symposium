@@ -51,7 +51,8 @@ impl TryFrom<Agent> for ExtensionInvocationAgent {
             | Agent::Copilot
             | Agent::Goose
             | Agent::Kiro
-            | Agent::OpenCode => Err(UnsupportedExtensionInvocationAgent { found: agent }),
+            | Agent::OpenCode
+            | Agent::Pi => Err(UnsupportedExtensionInvocationAgent { found: agent }),
         }
     }
 }
