@@ -38,7 +38,9 @@ the command.
 With `--json`, each hit is emitted as a `search_match` event carrying its
 `origin`, `name`, and — where the registry provides them — `version` and
 `description`. A hit for an Agent Plugins package also carries
-`"format": "agent plugin"`.
+`"format": "agent plugin"`. Each group of hits is preceded by a
+`search_origin` event naming its `origin`, which is also the heading `-q`
+keeps.
 
 ## Example
 

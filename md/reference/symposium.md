@@ -24,7 +24,7 @@
 | `-v`, `--verbose` | Print detailed decision trace (which plugins matched, which skills were considered, etc.) |
 | `--json` | Output structured JSON report to stdout; suppresses human-readable output. Combine with `-v` to include the full decision trace. |
 | `--update <LEVEL>` | Plugin source update behavior: `none` (default), `check`, `fetch` |
-| `-q`, `--quiet` | Suppress status output |
+| `-q`, `--quiet` | Suppress status output: progress, installs, enablement changes and warnings. A command's results (`search` hits, `status` lines, `plugin list`, `plugin validate`, `plugin digest`) and errors still print |
 | `--help` | Print help |
 | `--version` | Print version |
 

@@ -18,6 +18,7 @@ use tracing_subscriber::layer::Context;
 pub enum ReportMode {
     /// Pretty-print info-level events to stdout as they arrive.
     Normal,
+    Quiet,
     /// Pretty-print all events (info + debug) to stderr as they arrive.
     Verbose,
     /// Accumulate events, emit as a JSON array at the end.
@@ -102,6 +103,9 @@ pub enum ReportEvent {
 
     /// Informational message.
     Info { message: String },
+
+    /// The heading a group of `symposium search` hits is printed under.
+    SearchOrigin { origin: String },
 
     /// A non-fatal warning.
     Warning { message: String },
@@ -234,6 +238,18 @@ impl ReportEvent {
         )
     }
 
+    fn is_result(&self) -> bool {
+        matches!(
+            self,
+            Self::Validated { .. }
+                | Self::SearchOrigin { .. }
+                | Self::SearchMatch { .. }
+                | Self::PluginStatus { .. }
+                | Self::PayloadDigest { .. }
+                | Self::ProviderListed { .. }
+        )
+    }
+
     fn format_human(&self) -> String {
         match self {
             Self::PluginConsidered {
@@ -296,7 +312,7 @@ impl ReportEvent {
                 plugin,
                 agent,
                 dest,
-            } => format!("installed plugin {plugin} for {agent} -> {dest}"),
+            } => format!("✅ installed plugin {plugin} for {agent} → {dest}"),
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
             }
@@ -309,6 +325,7 @@ impl ReportEvent {
             Self::Info { message } => {
                 format!("ℹ️  {message}")
             }
+            Self::SearchOrigin { origin } => format!("ℹ️  from {origin}:"),
             Self::Warning { message } => {
                 format!("⚠️  {message}")
             }
@@ -549,8 +566,11 @@ where
         }
 
         match self.mode {
-            ReportMode::Normal => {
+            ReportMode::Normal | ReportMode::Quiet => {
                 if let Ok(evt) = serde_json::from_str::<ReportEvent>(&json_str) {
+                    if self.mode == ReportMode::Quiet && !evt.is_result() {
+                        return;
+                    }
                     if evt.human_to_stderr() {
                         eprintln!("{}", evt.format_human());
                     } else {
@@ -576,6 +596,22 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn quiet_keeps_search_headings_and_drops_progress() {
+        assert!(
+            ReportEvent::SearchOrigin {
+                origin: "user-plugins".into()
+            }
+            .is_result()
+        );
+        assert!(
+            !ReportEvent::Info {
+                message: "scanning 0 workspace dependencies".into()
+            }
+            .is_result()
+        );
+    }
+
     /// Only a digest goes to stdout from `plugin digest`; the reason there is
     /// none goes to stderr, so a script capturing stdout gets nothing.
     #[test]
@@ -588,6 +624,28 @@ mod tests {
         let digest = symposium_sdk::audits::Digest::from_bytes([0; 32]);
         assert!(!event(DigestOutcome::Digest(digest)).human_to_stderr());
         assert!(event(DigestOutcome::Ineligible("why".into())).human_to_stderr());
+    }
+
+    #[test]
+    fn plugin_and_skill_install_lines_read_alike() {
+        let skill = ReportEvent::SkillInstalled {
+            skill: "widget".into(),
+            agent: "claude".into(),
+            dest: "/dest".into(),
+        };
+        let plugin = ReportEvent::PluginInstalled {
+            plugin: "widget".into(),
+            agent: "claude".into(),
+            dest: "/dest".into(),
+        };
+        assert_eq!(
+            skill.format_human(),
+            "✅ installed skill widget for claude → /dest"
+        );
+        assert_eq!(
+            plugin.format_human(),
+            "✅ installed plugin widget for claude → /dest"
+        );
     }
 
     /// A status line ends with the audit answer, in the consent prompt's

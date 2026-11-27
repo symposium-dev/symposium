@@ -152,11 +152,11 @@ struct Connection {
 /// a valid error response about one package. Consumers must preserve installed
 /// artifacts when an operation fails this way.
 #[derive(Debug)]
-pub(super) struct Unavailable;
+pub(super) struct Unavailable(String);
 
 impl std::fmt::Display for Unavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("package manager is unavailable")
+        write!(f, "package manager `{}` is unavailable", self.0)
     }
 }
 
@@ -213,28 +213,20 @@ impl RemotePm {
             *guard = Some(Err("hook PM budget exhausted".to_string()));
             return Err(
                 anyhow::anyhow!("`{method}` timed out: hook PM budget exhausted")
-                    .context(Unavailable),
+                    .context(self.unavailable()),
             );
         }
         let mut conn = match previous {
             Some(Ok(conn)) => conn,
             Some(Err(e)) => {
                 *guard = Some(Err(e.clone()));
-                return Err(
-                    anyhow::anyhow!("package manager `{}` is unavailable: {e}", self.name)
-                        .context(Unavailable),
-                );
+                return Err(anyhow::Error::msg(e).context(self.unavailable()));
             }
             None => match self.connect().await {
                 Ok(conn) => conn,
                 Err(e) => {
-                    let e = format!("{e:#}");
-                    *guard = Some(Err(e.clone()));
-                    return Err(anyhow::anyhow!(
-                        "package manager `{}` is unavailable: {e}",
-                        self.name
-                    )
-                    .context(Unavailable));
+                    *guard = Some(Err(format!("{e:#}")));
+                    return Err(e.context(self.unavailable()));
                 }
             },
         };
@@ -249,7 +241,7 @@ impl RemotePm {
                 // dead so later calls fail fast instead of hanging again.
                 conn.child.stop().await;
                 *guard = Some(Err(format!("`{method}` failed: {e:#}")));
-                return Err(e.context(Unavailable));
+                return Err(e.context(self.unavailable()));
             }
         };
         let value = reply.map_err(|e| {
@@ -262,6 +254,10 @@ impl RemotePm {
         })?;
         serde_json::from_value(value)
             .with_context(|| format!("decoding `{method}` result from `{}`", self.name))
+    }
+
+    fn unavailable(&self) -> Unavailable {
+        Unavailable(self.name.clone())
     }
 
     /// Spawn the binary and complete the `initialize` handshake.

@@ -46,7 +46,8 @@ pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
 
     // Install the report layer. Mode determines output format:
-    // --json -> accumulate JSON array; -v -> stderr trace; default -> stdout.
+    // --json -> accumulate JSON array; -v -> stderr trace; -q -> results only;
+    // default -> stdout.
     let (mode, level) = if cli.json {
         let level = if cli.verbose {
             tracing::Level::DEBUG
@@ -56,6 +57,8 @@ pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
         (report::ReportMode::Json, level)
     } else if cli.verbose {
         (report::ReportMode::Verbose, tracing::Level::DEBUG)
+    } else if cli.quiet {
+        (report::ReportMode::Quiet, tracing::Level::INFO)
     } else {
         (report::ReportMode::Normal, tracing::Level::INFO)
     };
@@ -140,7 +143,7 @@ pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
         Some(Commands::Plugin { command }) if !matches!(command, PluginCommand::Try { .. }) => {
-            let code = handle_plugin_command(&sym, command).await;
+            let code = handle_plugin_command(&sym, command, &out).await;
             let events = report_handle.drain();
             if !events.is_empty() {
                 println!("{}", serde_json::to_string_pretty(&events).unwrap());
@@ -181,28 +184,31 @@ pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
     }
 }
 
-async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) -> ExitCode {
+async fn handle_plugin_command(
+    sym: &config::Symposium,
+    command: PluginCommand,
+    out: &Output,
+) -> ExitCode {
     match command {
         PluginCommand::Sync { provider } => {
-            match plugins::sync_registries(sym, provider.as_deref()).await {
-                Ok(synced) => {
-                    if synced.is_empty() {
-                        if let Some(ref p) = provider {
-                            println!("No git source found for provider: {p}");
-                        } else {
-                            println!("No git sources to sync.");
-                        }
-                    } else {
-                        for name in &synced {
-                            println!("Synced: {name}");
-                        }
-                    }
-                    ExitCode::SUCCESS
+            let outcome = plugins::sync_registries(sym, provider.as_deref()).await;
+            for name in &outcome.synced {
+                out.println(format!("Synced: {name}"));
+            }
+            for (name, e) in &outcome.failed {
+                eprintln!("Sync failed for {name}: {e:#}");
+            }
+            if outcome.synced.is_empty() && outcome.failed.is_empty() {
+                if let Some(ref p) = provider {
+                    out.println(format!("No git source found for provider: {p}"));
+                } else {
+                    out.println("No git sources to sync.");
                 }
-                Err(e) => {
-                    eprintln!("Sync failed: {e}");
-                    ExitCode::FAILURE
-                }
+            }
+            if outcome.failed.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             }
         }
         PluginCommand::List => {
@@ -321,15 +327,19 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 }
             }
         }
-        PluginCommand::Import { path, out } => {
-            let dest = match crate::plugin_import::import_claude_plugin(&path, &out) {
+        PluginCommand::Import { path, out: into } => {
+            let dest = match crate::plugin_import::import_claude_plugin(&path, &into) {
                 Ok(dest) => dest,
                 Err(e) => {
                     eprintln!("{}: {e:#}", path.display());
                     return ExitCode::FAILURE;
                 }
             };
-            println!("Imported {} into {}", path.display(), dest.display());
+            out.println(format!(
+                "Imported {} into {}",
+                path.display(),
+                dest.display()
+            ));
             match plugins::validate_source_dir(&dest) {
                 Ok(results) if results.iter().map(emit_validation_results).sum::<usize>() == 0 => {
                     ExitCode::SUCCESS

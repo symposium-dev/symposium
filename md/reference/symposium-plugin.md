@@ -16,7 +16,7 @@ symposium plugin <SUBCOMMAND>
 symposium plugin sync [PROVIDER]
 ```
 
-Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`. The [audits list](./audits.md#where-audits-come-from), when it is on, is synced with them, or alone as `symposium-audits`.
+Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`. The [audits list](./audits.md#where-audits-come-from), when it is on, is synced with them, or alone as `symposium-audits`. A source that cannot be fetched is reported with the error, after the others are synced, and the command exits with a non-zero status.
 
 ### `symposium plugin list`
 
@@ -58,6 +58,8 @@ Validate plugins without installing anything. Useful when authoring plugins. Eac
 - A plugin or skill directory, or an [Agent Plugins package](./agent-plugins.md) directory or its `plugin.json`, validated as that one entry.
 - A [plugin source](./plugin-source.md) directory, such as a checkout of the recommendations repository: every entry in it.
 - Any other `.toml` file, validated as a registry plugin manifest.
+
+Each skill is listed once, even when several skill groups reach it (a crate whose `Symposium.toml` declares `source.path = "skills"` on top of the default `skills/` group), since it is installed once. A `source.git` group is not fetched: it is listed with a warning that its skills are not checked.
 
 | Flag | Description |
 |------|-------------|

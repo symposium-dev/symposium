@@ -40,6 +40,7 @@ async fn validates_a_registry_folder() {
         &[
             "plugin plugin-a ok",
             "  skill a-guide ok",
+            "  skill git:https://github.com/org/repo/tree/main/skills warning: skill group source.git is not fetched by validation, so its skills are not checked",
             "plugin skill-b ok",
             "  skill skill-b ok",
         ],
@@ -51,7 +52,11 @@ async fn validates_a_registry_folder() {
 async fn validates_a_plugin_folder() {
     assert_validates(
         "registry/plugin-a",
-        &["plugin plugin-a ok", "  skill a-guide ok"],
+        &[
+            "plugin plugin-a ok",
+            "  skill a-guide ok",
+            "  skill git:https://github.com/org/repo/tree/main/skills warning: skill group source.git is not fetched by validation, so its skills are not checked",
+        ],
     )
     .await;
 }
@@ -79,6 +84,20 @@ async fn validates_a_crate_manifest_without_a_name() {
     assert_validates(
         "manifest-crate",
         &["plugin manifest-crate ok", "  skill manifest-guide ok"],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn lists_each_crate_skill_once_and_reports_a_git_group() {
+    assert_validates(
+        "listed-crate",
+        &[
+            "plugin listed-crate ok",
+            "  skill git:https://github.com/org/repo/tree/main/skills warning: skill group source.git is not fetched by validation, so its skills are not checked",
+            "  skill listed-guide ok",
+            "  skill deep-guide ok",
+        ],
     )
     .await;
 }

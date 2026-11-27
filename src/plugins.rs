@@ -857,12 +857,18 @@ pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct RegistrySync {
+    pub synced: Vec<String>,
+    pub failed: Vec<(String, anyhow::Error)>,
+}
+
 /// Refresh registry content.
 ///
 /// If `provider` is Some, sync only that registry (ignores auto-update).
 /// If `provider` is None, sync all registries with auto-update = true.
-pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<Vec<String>> {
-    let mut synced = Vec::new();
+pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> RegistrySync {
+    let mut outcome = RegistrySync::default();
 
     for inst in sym.registry_instances() {
         // An explicit provider forces just that registry (ignoring its
@@ -880,10 +886,13 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
         match inst.pm.refresh(UpdateLevel::Fetch).await {
             Ok(true) => {
                 tracing::info!(registry = %inst.name, "synced");
-                synced.push(inst.name.clone());
+                outcome.synced.push(inst.name.clone());
             }
             Ok(false) => {}
-            Err(e) => tracing::warn!(registry = %inst.name, error = %e, "failed to sync"),
+            Err(e) => {
+                tracing::warn!(registry = %inst.name, error = %e, "failed to sync");
+                outcome.failed.push((inst.name.clone(), e));
+            }
         }
     }
 
@@ -894,14 +903,17 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
         match crate::audits::refresh_audits(sym, UpdateLevel::Fetch).await {
             Ok(true) => {
                 tracing::info!(list = audits, "synced");
-                synced.push(audits.to_string());
+                outcome.synced.push(audits.to_string());
             }
             Ok(false) => {}
-            Err(e) => tracing::warn!(list = audits, error = %e, "failed to sync"),
+            Err(e) => {
+                tracing::warn!(list = audits, error = %e, "failed to sync");
+                outcome.failed.push((audits.to_string(), e));
+            }
         }
     }
 
-    Ok(synced)
+    outcome
 }
 
 /// List all providers and their plugins. Routed through the same package
@@ -1705,51 +1717,69 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 
         // Validate that local skill groups contain discoverable skills.
         if let Some(parsed) = &plugin {
+            let mut listed = std::collections::HashSet::new();
             for group in &parsed.manifest.skills {
-                if let PluginSource::Path(ref skills_dir) = group.source {
-                    let skills_dir = skills_dir.clone();
-                    let found = crate::skills::discover_skills(
-                        &skills_dir,
-                        group.workspace_member,
-                        &group.predicates,
-                    );
-                    let group_label = group
-                        .source_label
-                        .clone()
-                        .unwrap_or_else(|| "skills".to_string());
-                    if found.is_empty() {
+                let skills_dir = match &group.source {
+                    PluginSource::Path(skills_dir) => skills_dir.clone(),
+                    PluginSource::Git(url) => {
                         children.push(ValidationResult {
-                            id: group_label,
+                            id: format!("git:{url}"),
                             kind: ValidationKind::Skill,
                             result: Ok(()),
                             warnings: vec![
-                                "skill group source.path contains no SKILL.md files".into(),
+                                "skill group source.git is not fetched by validation, so its \
+                                 skills are not checked"
+                                    .into(),
                             ],
                             children: Vec::new(),
                         });
-                    } else {
-                        for skill_result in found {
-                            let (skill_id, result, warnings) = match skill_result {
-                                Ok(skill) => (
-                                    skill.name().to_string(),
-                                    Ok(()),
-                                    skill.path.parent().map_or_else(Vec::new, |dir| {
-                                        crate::sync::unfollowed_entries(
-                                            dir,
-                                            parsed.agent_plugin_root.as_deref(),
-                                        )
-                                    }),
-                                ),
-                                Err(e) => (group_label.clone(), Err(e), Vec::new()),
-                            };
-                            children.push(ValidationResult {
-                                id: skill_id,
-                                kind: ValidationKind::Skill,
-                                result,
-                                warnings,
-                                children: Vec::new(),
-                            });
-                        }
+                        continue;
+                    }
+                };
+                let canonical = |path: &Path| fs::canonicalize(path).unwrap_or(path.to_path_buf());
+                if !listed.insert(canonical(&skills_dir)) {
+                    continue;
+                }
+                let found = crate::skills::discover_skills(
+                    &skills_dir,
+                    group.workspace_member,
+                    &group.predicates,
+                );
+                let group_label = group
+                    .source_label
+                    .clone()
+                    .unwrap_or_else(|| "skills".to_string());
+                if found.is_empty() {
+                    children.push(ValidationResult {
+                        id: group_label,
+                        kind: ValidationKind::Skill,
+                        result: Ok(()),
+                        warnings: vec!["skill group source.path contains no SKILL.md files".into()],
+                        children: Vec::new(),
+                    });
+                } else {
+                    for skill_result in found {
+                        let (skill_id, result, warnings) = match skill_result {
+                            Ok(skill) if !listed.insert(canonical(&skill.path)) => continue,
+                            Ok(skill) => (
+                                skill.name().to_string(),
+                                Ok(()),
+                                skill.path.parent().map_or_else(Vec::new, |dir| {
+                                    crate::sync::unfollowed_entries(
+                                        dir,
+                                        parsed.agent_plugin_root.as_deref(),
+                                    )
+                                }),
+                            ),
+                            Err(e) => (group_label.clone(), Err(e), Vec::new()),
+                        };
+                        children.push(ValidationResult {
+                            id: skill_id,
+                            kind: ValidationKind::Skill,
+                            result,
+                            warnings,
+                            children: Vec::new(),
+                        });
                     }
                 }
             }

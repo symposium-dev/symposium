@@ -1016,7 +1016,7 @@ async fn search_renders_grouped_by_origin() {
             .filter_map(|e| e["kind"].as_str())
             .collect::<Vec<_>>();
         assert!(
-            kinds.contains(&"info") && kinds.contains(&"search_match"),
+            kinds.contains(&"search_origin") && kinds.contains(&"search_match"),
             "a group heading plus at least one hit: {events:?}"
         );
 
