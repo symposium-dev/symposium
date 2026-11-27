@@ -857,12 +857,18 @@ pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct RegistrySync {
+    pub synced: Vec<String>,
+    pub failed: Vec<(String, anyhow::Error)>,
+}
+
 /// Refresh registry content.
 ///
 /// If `provider` is Some, sync only that registry (ignores auto-update).
 /// If `provider` is None, sync all registries with auto-update = true.
-pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<Vec<String>> {
-    let mut synced = Vec::new();
+pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> RegistrySync {
+    let mut outcome = RegistrySync::default();
 
     for inst in sym.registry_instances() {
         // An explicit provider forces just that registry (ignoring its
@@ -880,10 +886,13 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
         match inst.pm.refresh(UpdateLevel::Fetch).await {
             Ok(true) => {
                 tracing::info!(registry = %inst.name, "synced");
-                synced.push(inst.name.clone());
+                outcome.synced.push(inst.name.clone());
             }
             Ok(false) => {}
-            Err(e) => tracing::warn!(registry = %inst.name, error = %e, "failed to sync"),
+            Err(e) => {
+                tracing::warn!(registry = %inst.name, error = %e, "failed to sync");
+                outcome.failed.push((inst.name.clone(), e));
+            }
         }
     }
 
@@ -894,14 +903,17 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
         match crate::audits::refresh_audits(sym, UpdateLevel::Fetch).await {
             Ok(true) => {
                 tracing::info!(list = audits, "synced");
-                synced.push(audits.to_string());
+                outcome.synced.push(audits.to_string());
             }
             Ok(false) => {}
-            Err(e) => tracing::warn!(list = audits, error = %e, "failed to sync"),
+            Err(e) => {
+                tracing::warn!(list = audits, error = %e, "failed to sync");
+                outcome.failed.push((audits.to_string(), e));
+            }
         }
     }
 
-    Ok(synced)
+    outcome
 }
 
 /// List all providers and their plugins. Routed through the same package

@@ -53,6 +53,17 @@ fn isolated_home() -> tempfile::TempDir {
 }
 
 fn run(home: &Path, binary: Binary, args: &[&str]) -> Output {
+    let output = invoke(home, binary, args);
+    assert!(
+        output.status.success(),
+        "{} {args:?}: {}",
+        binary.name(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn invoke(home: &Path, binary: Binary, args: &[&str]) -> Output {
     let mut command = match binary {
         Binary::Symposium => Command::new(env!("CARGO_BIN_EXE_symposium")),
         Binary::CargoAgents => {
@@ -61,7 +72,7 @@ fn run(home: &Path, binary: Binary, args: &[&str]) -> Output {
             command
         }
     };
-    let output = command
+    command
         .args(args)
         .current_dir(home)
         .env("HOME", home)
@@ -71,14 +82,7 @@ fn run(home: &Path, binary: Binary, args: &[&str]) -> Output {
         .env_remove("XDG_CACHE_HOME")
         .env_remove("XDG_STATE_HOME")
         .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{} {args:?}: {}",
-        binary.name(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
+        .unwrap()
 }
 
 fn stdout(output: &Output) -> String {
@@ -180,4 +184,51 @@ fn quiet_silences_progress_but_keeps_results() {
         &["-q", "plugin", "validate", "my-skill", "--no-check-crates"],
     ));
     assert!(validated.contains("my-skill"), "{validated}");
+}
+
+#[test]
+fn plugin_sync_reports_a_failed_fetch_and_fails() {
+    let home = isolated_home();
+    let config_dir = home.path().join(".symposium");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        indoc::indoc! {r#"
+            auto-update = "off"
+
+            [defaults]
+            symposium-recommendations = false
+            symposium-audits = true
+
+            [[registry]]
+            name = "team"
+            git = "https://github.com/example/team-plugins"
+        "#},
+    )
+    .unwrap();
+    std::fs::create_dir_all(config_dir.join("cache")).unwrap();
+    std::fs::write(config_dir.join("cache/plugin-sources"), "").unwrap();
+
+    for (args, failed) in [
+        (&["plugin", "sync"][..], &["team", "symposium-audits"][..]),
+        (
+            &["plugin", "sync", "symposium-audits"],
+            &["symposium-audits"],
+        ),
+    ] {
+        let output = invoke(home.path(), Binary::Symposium, args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?}: {stderr}");
+        for name in failed {
+            assert!(
+                stderr.contains(&format!(
+                    "Sync failed for {name}: failed to create cache directory"
+                )),
+                "{args:?}: {stderr}"
+            );
+        }
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("No git source found"),
+            "{args:?}"
+        );
+    }
 }

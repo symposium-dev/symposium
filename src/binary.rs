@@ -191,25 +191,24 @@ async fn handle_plugin_command(
 ) -> ExitCode {
     match command {
         PluginCommand::Sync { provider } => {
-            match plugins::sync_registries(sym, provider.as_deref()).await {
-                Ok(synced) => {
-                    if synced.is_empty() {
-                        if let Some(ref p) = provider {
-                            out.println(format!("No git source found for provider: {p}"));
-                        } else {
-                            out.println("No git sources to sync.");
-                        }
-                    } else {
-                        for name in &synced {
-                            out.println(format!("Synced: {name}"));
-                        }
-                    }
-                    ExitCode::SUCCESS
+            let outcome = plugins::sync_registries(sym, provider.as_deref()).await;
+            for name in &outcome.synced {
+                out.println(format!("Synced: {name}"));
+            }
+            for (name, e) in &outcome.failed {
+                eprintln!("Sync failed for {name}: {e:#}");
+            }
+            if outcome.synced.is_empty() && outcome.failed.is_empty() {
+                if let Some(ref p) = provider {
+                    out.println(format!("No git source found for provider: {p}"));
+                } else {
+                    out.println("No git sources to sync.");
                 }
-                Err(e) => {
-                    eprintln!("Sync failed: {e}");
-                    ExitCode::FAILURE
-                }
+            }
+            if outcome.failed.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             }
         }
         PluginCommand::List => {

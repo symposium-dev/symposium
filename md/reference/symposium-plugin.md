@@ -16,7 +16,7 @@ symposium plugin <SUBCOMMAND>
 symposium plugin sync [PROVIDER]
 ```
 
-Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`. The [audits list](./audits.md#where-audits-come-from), when it is on, is synced with them, or alone as `symposium-audits`.
+Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`. The [audits list](./audits.md#where-audits-come-from), when it is on, is synced with them, or alone as `symposium-audits`. A source that cannot be fetched is reported with the error, after the others are synced, and the command exits with a non-zero status.
 
 ### `symposium plugin list`
 
