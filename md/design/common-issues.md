@@ -17,7 +17,7 @@ A deny or rewrite that the translation drops fails open: the tool runs, and sinc
 
 ### Copilot also runs Claude Code's hooks
 
-Copilot CLI reads `.claude/settings.json` as well as its own hook files. In a project where both agents are configured, every Copilot event runs `symposium hook` twice: as `copilot` from `.github/hooks/symposium.json`, and as `claude` from Claude's settings. Plugin hooks with side effects run twice, and whatever symposium tells the agent once (such as a notice) is taken by whichever invocation runs first.
+Copilot CLI reads `.claude/settings.json` as well as its own hook files. In a project where both agents are configured, every Copilot event runs `symposium hook` twice: as `copilot` from `.github/hooks/symposium.json`, and as `claude` from Claude's settings. Plugin hooks with side effects run twice, and whatever symposium tells the agent once (such as a notice) is taken by whichever invocation runs first. A notice written for one agent can then be lost: when the `claude` invocation runs the sync that copies skills into `.agents/skills/`, it names none of them (Claude Code gets plugins, not per-skill copies), and the `copilot` invocation finds nothing left to copy, so Copilot is never told to run `/skills reload`.
 
 ## Hook stdout belongs to the agent
 

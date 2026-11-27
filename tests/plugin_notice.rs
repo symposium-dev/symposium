@@ -231,6 +231,40 @@ async fn a_skill_a_mid_session_sync_copies_for_codex_comes_with_how_to_load_it()
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn copilot_is_told_to_reload_the_skills_any_hook_sync_copies() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "copilot"]).await?;
+            let auto_enable = &mut ctx.sym.config.plugins.auto_enable;
+            auto_enable.extend(["crate-b".to_string(), "crate-d".to_string()]);
+            let root = ctx.workspace_root.clone().unwrap();
+
+            add_dependency(&root, "crate-d");
+            let started = respond(&ctx, HookAgent::Copilot, HookStep::session_start()).await;
+            assert!(
+                started.contains("d-guidance") && started.contains("/skills reload"),
+                "{started}"
+            );
+            let unchanged = respond(&ctx, HookAgent::Copilot, HookStep::session_start()).await;
+            assert!(!unchanged.contains("/skills reload"), "{unchanged}");
+
+            add_dependency(&root, "crate-b");
+            let stdout = respond(&ctx, HookAgent::Copilot, tool_call_finished()).await;
+            assert!(
+                stdout.contains("b-guidance") && stdout.contains("/skills reload"),
+                "{stdout}"
+            );
+            assert!(!stdout.contains("d-guidance"), "{stdout}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_skill_copied_through_a_linked_skills_dir_is_noticed_for_codex() {

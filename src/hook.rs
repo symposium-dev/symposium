@@ -600,9 +600,7 @@ fn reload_notice(
 ) -> Option<String> {
     let synced = synced?;
     let plugins = plugin_reload_notice(agent, synced.plugin_changes);
-    let skills = (!session_start)
-        .then(|| skill_reload_notice(agent, synced.skill_changes))
-        .flatten();
+    let skills = skill_reload_notice(agent, synced.skill_changes, session_start);
     let notices: Vec<String> = [plugins, skills].into_iter().flatten().collect();
     (!notices.is_empty()).then(|| notices.join("\n\n"))
 }
@@ -624,12 +622,14 @@ fn plugin_reload_notice(
 fn skill_reload_notice(
     agent: HookAgent,
     skill_changes: Vec<(crate::agents::Agent, Vec<String>)>,
+    session_start: bool,
 ) -> Option<String> {
     let load_now = match agent {
-        HookAgent::Codex => "Tell the user to start a new session to load them.",
+        HookAgent::Codex if !session_start => "Tell the user to start a new session to load them.",
+        HookAgent::Copilot => "Tell the user to run `/skills reload` to load them now.",
         HookAgent::Antigravity
         | HookAgent::Claude
-        | HookAgent::Copilot
+        | HookAgent::Codex
         | HookAgent::Goose
         | HookAgent::Kiro
         | HookAgent::OpenCode => return None,

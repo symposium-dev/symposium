@@ -211,6 +211,16 @@ The `@github/copilot-sdk` (Node.js, Python, Go, .NET, Java) provides callback-st
 
 Network-layer control with deny-by-default domain allowlist, configured at org/repo level. Not a hook — controls outbound network access.
 
+## Skills added during a session
+
+The Copilot CLI reads its skills when the session starts and offers the model that list until `/skills reload` or a new session. Verified against Copilot CLI 1.0.109 in the TUI, with per-skill copies symposium's hooks made in `.agents/skills/`:
+
+- A copy made mid-session, after a `cargo add`, is not offered on later turns, whether or not `.agents/skills/` existed when the session started.
+- The first prompt runs `userPromptSubmitted` and `sessionStart` together, after the skills were read, so what the first sync of a never-synced project copies is not offered either.
+- `/skills reload` offers all of them from the next request.
+
+So when the sync run by the `sessionStart`, `userPromptSubmitted` or `postToolUse` hook copies or updates skills for Copilot, the hook adds a notice telling the agent to suggest `/skills reload`. A sync first run by `preToolUse` carries no notice, and with Claude Code also configured the [`claude` invocation can run the sync first](../common-issues.md#copilot-also-runs-claude-codes-hooks), so the notice is lost.
+
 ## Plugin Delivery
 
 A plugin enabled with `use --global` reaches the Copilot CLI through its user settings, `~/.copilot/settings.json` (`$COPILOT_HOME/settings.json` when that variable is set). While Codex or Copilot has plugins, symposium writes `.claude-plugin/marketplace.json` into the staging root `~/.symposium/installed/`, registers that root as a directory marketplace and enables each plugin from it:
