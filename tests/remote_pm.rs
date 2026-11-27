@@ -288,7 +288,16 @@ async fn a_missing_binary_fails() {
         "demo",
         RemotePmCommand::new("/nonexistent/symposium-pm-nope"),
     );
-    assert!(pm.active_plugins(&[]).await.is_err());
+    for _ in 0..2 {
+        let err = format!("{:#}", pm.active_plugins(&[]).await.unwrap_err());
+        assert!(
+            err.starts_with(
+                "package manager `demo` is unavailable: spawning `/nonexistent/symposium-pm-nope`"
+            ),
+            "{err}"
+        );
+        assert_eq!(err.matches("unavailable").count(), 1, "{err}");
+    }
 }
 
 // --- The real cargo PM, out of process -------------------------------------
