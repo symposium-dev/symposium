@@ -198,6 +198,16 @@ The `project_doc_fallback_filenames` config option in `~/.codex/config.toml` all
 
 Skills use `SKILL.md` with YAML frontmatter (`name`, `description`) and may include `scripts/`, `references/`, `assets/`, and `agents/openai.yaml`.
 
+### Skills added during a session
+
+Codex caches the skills it finds and clears that cache when a file watcher sees a skill root change; the next turn then sends the model the new list. The watcher registers the repository roots that exist when the session starts, so a `.agents/skills/` created later is never watched. Verified against Codex CLI 0.159.3 in the TUI, with per-skill copies made by symposium's `PostToolUse` sync after a `cargo add`:
+
+- `.agents/skills/` existed when the session started: the new skill is listed from the next turn (Codex handles at most one watcher event per 10 s), never in the turn that made the copy.
+- `.agents/skills/` did not exist: the copy that creates it is listed from the next turn, since the set of roots changed; later copies into it are not listed for the rest of the session. That includes a project that had never synced, whose `.agents/skills/` the `SessionStart` sync creates on the first prompt.
+- `/new` lists all of them.
+
+So a mid-session sync that copies or updates skills for Codex adds a notice telling the agent to suggest a new session.
+
 ## MCP Server Configuration
 
 Configured in `~/.codex/config.toml` or `.codex/config.toml` under `[mcp_servers.<name>]`:

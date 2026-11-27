@@ -176,6 +176,95 @@ async fn a_plugin_a_mid_session_sync_installs_comes_with_how_to_load_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_skill_a_mid_session_sync_copies_for_codex_comes_with_how_to_load_it() {
+    for agents in [&["codex"][..], &["copilot", "codex"]] {
+        with_fixture(
+            TestMode::SimulationOnly,
+            &["plugin-notice0"],
+            async |mut ctx| {
+                let mut init = vec!["init"];
+                for agent in agents {
+                    init.extend(["--add-agent", agent]);
+                }
+                ctx.symposium(&init).await?;
+                ctx.sym.config.sync_debounce_secs = 0;
+                let auto_enable = &mut ctx.sym.config.plugins.auto_enable;
+                auto_enable.extend(["crate-b".to_string(), "crate-d".to_string()]);
+                let root = ctx.workspace_root.clone().unwrap();
+
+                add_dependency(&root, "crate-d");
+                let started = respond(&ctx, HookAgent::Codex, HookStep::session_start()).await;
+                assert!(root.join(".agents/skills/d-guidance/SKILL.md").exists());
+                assert!(!started.contains("new session"), "{agents:?}: {started}");
+
+                add_dependency(&root, "crate-b");
+                let stdout = respond(&ctx, HookAgent::Codex, tool_call_finished()).await;
+                assert!(root.join(".agents/skills/b-guidance/SKILL.md").exists());
+                assert!(
+                    stdout.contains("b-guidance") && stdout.contains("new session"),
+                    "{agents:?}: {stdout}"
+                );
+                assert!(!stdout.contains("d-guidance"), "{agents:?}: {stdout}");
+
+                add_dependency(&root, "crate-c");
+                let unchanged = respond(&ctx, HookAgent::Codex, tool_call_finished()).await;
+                assert!(
+                    !unchanged.contains("new session"),
+                    "{agents:?}: {unchanged}"
+                );
+
+                let skill = root.join("crate-b/skills/b-guidance/SKILL.md");
+                let text = std::fs::read_to_string(&skill)?;
+                std::fs::write(&skill, text.replace("like this", "like that"))?;
+                bump_version(&root, "crate-c", "0.2.0");
+                let edited = respond(&ctx, HookAgent::Codex, tool_call_finished()).await;
+                assert!(
+                    edited.contains("b-guidance") && edited.contains("new session"),
+                    "{agents:?}: {edited}"
+                );
+                assert!(!edited.contains("d-guidance"), "{agents:?}: {edited}");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_skill_copied_through_a_linked_skills_dir_is_noticed_for_codex() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "kiro", "--add-agent", "codex"])
+                .await?;
+            ctx.sym
+                .config
+                .plugins
+                .auto_enable
+                .push("crate-b".to_string());
+            let root = ctx.workspace_root.clone().unwrap();
+            std::fs::create_dir_all(root.join(".agents/skills"))?;
+            std::fs::create_dir_all(root.join(".kiro"))?;
+            std::os::unix::fs::symlink("../.agents/skills", root.join(".kiro/skills"))?;
+            start_session(&ctx, HookAgent::Codex).await;
+
+            add_dependency(&root, "crate-b");
+            let stdout = respond(&ctx, HookAgent::Codex, tool_call_finished()).await;
+            assert!(
+                stdout.contains("b-guidance") && stdout.contains("new session"),
+                "{stdout}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_workspace_seen_for_the_first_time_gets_no_notice() {
     with_fixture(
         TestMode::SimulationOnly,
