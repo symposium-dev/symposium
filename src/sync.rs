@@ -58,6 +58,10 @@ fn skills_parent_dir(agent: Agent, project_root: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Mark a directory as symposium-generated: drop the `.symposium` marker
 /// and a `.gitignore` containing `*` so the directory is recognized on
 /// future syncs and kept out of version control.
@@ -469,6 +473,7 @@ async fn resolve_custom_predicate_entries(
 
 pub struct Synced {
     pub plugin_changes: Vec<(Agent, Vec<String>)>,
+    pub skill_changes: Vec<(Agent, Vec<String>)>,
     pub skill_origins: BTreeSet<String>,
 }
 
@@ -615,6 +620,7 @@ pub(crate) async fn sync_disabling(
     // failed. Anything we find later that has the marker file but isn't in
     // this set is stale.
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut changed_skills: Vec<(PathBuf, String)> = Vec::new();
     // A package manager that failed answered nothing, not nothing-is-offered,
     // so its silence must not retire what it installed before: neither a skill
     // nor an MCP entry. Both cleanups read this one decision.
@@ -808,6 +814,8 @@ pub(crate) async fn sync_disabling(
                 *package_root,
             ) {
                 Ok(true) => {
+                    let parent = skills_parent_dir(agent, &project_root);
+                    changed_skills.push((resolved(&parent), skill_name.clone()));
                     tracing::info!(
                         report = %crate::report::ReportEvent::SkillInstalled {
                             skill: dir_name.clone(),
@@ -928,6 +936,19 @@ pub(crate) async fn sync_disabling(
         );
     }
 
+    let skill_changes = agent_names
+        .iter()
+        .filter_map(|name| Agent::from_config_name(name).ok())
+        .map(|agent| {
+            let parent = resolved(&skills_parent_dir(agent, &project_root));
+            let changed: BTreeSet<String> = changed_skills
+                .iter()
+                .filter(|(dir, _)| *dir == parent)
+                .map(|(_, skill_name)| skill_name.clone())
+                .collect();
+            (agent, changed.into_iter().collect())
+        })
+        .collect();
     let skill_origins = to_install
         .iter()
         .map(|(_, origin_hash, _, _)| origin_hash)
@@ -936,6 +957,7 @@ pub(crate) async fn sync_disabling(
         .collect();
     Ok(Synced {
         plugin_changes,
+        skill_changes,
         skill_origins,
     })
 }

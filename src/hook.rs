@@ -352,7 +352,7 @@ async fn execute_hook_inner(
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
         // SessionStart refreshes source caches and syncs unconditionally.
         let session_start = event == HookEvent::SessionStart;
-        let (notify_about_possible_new_plugins, plugin_changes) =
+        let (notify_about_possible_new_plugins, synced) =
             run_auto_sync(sym, &deps, session_start).await;
 
         // SessionStart (once per session) also refreshes every hook's already-
@@ -368,7 +368,7 @@ async fn execute_hook_inner(
             &sym_input,
             &deps,
             notify_about_possible_new_plugins,
-            plugin_reload_notice(agent, plugin_changes),
+            reload_notice(agent, synced, session_start),
         )
         .await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
@@ -542,25 +542,25 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &
 /// workspace's dependencies are unchanged.
 ///
 /// Returns whether it re-synced mid-session because an input changed, and
-/// the plugins the sync installed or updated for each agent that takes them.
+/// what the sync installed or updated for each agent, if it ran.
 async fn run_auto_sync(
     sym: &Symposium,
     deps: &Arc<Workspace>,
     session_start: bool,
-) -> (bool, Vec<(crate::agents::Agent, Vec<String>)>) {
+) -> (bool, Option<crate::sync::Synced>) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
-        return (false, Vec::new());
+        return (false, None);
     }
     let Some(start) = deps.start().map(Path::to_path_buf) else {
-        return (false, Vec::new());
+        return (false, None);
     };
 
     let mut state = crate::workspace_state::WorkspaceState::load(sym, &start);
     if !session_start && let Some((workspace, dep_ids)) = state.fresh() {
         tracing::debug!("auto-sync skipped: no package manager input changed since last sync");
         deps.reuse(workspace, dep_ids);
-        return (false, Vec::new());
+        return (false, None);
     }
     let inputs_changed = state
         .last_sync
@@ -568,7 +568,7 @@ async fn run_auto_sync(
         .is_some_and(|last| !last.inputs.is_empty());
     if deps.info().await.is_none() {
         tracing::debug!("auto-sync skipped: not in a workspace");
-        return (false, Vec::new());
+        return (false, None);
     }
 
     let update = if session_start {
@@ -578,11 +578,11 @@ async fn run_auto_sync(
     };
 
     tracing::debug!("auto-sync running");
-    let plugin_changes = match crate::sync::sync(sym, deps, update).await {
-        Ok(synced) => synced.plugin_changes,
+    let synced = match crate::sync::sync(sym, deps, update).await {
+        Ok(synced) => synced,
         Err(e) => {
             tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
-            return (false, Vec::new());
+            return (false, None);
         }
     };
 
@@ -590,7 +590,19 @@ async fn run_auto_sync(
         state.record_sync(workspace, deps.dep_ids().await);
         state.save(sym, &start);
     }
-    (!session_start && inputs_changed, plugin_changes)
+    (!session_start && inputs_changed, Some(synced))
+}
+
+fn reload_notice(
+    agent: HookAgent,
+    synced: Option<crate::sync::Synced>,
+    session_start: bool,
+) -> Option<String> {
+    let synced = synced?;
+    let plugins = plugin_reload_notice(agent, synced.plugin_changes);
+    let skills = skill_reload_notice(agent, synced.skill_changes, session_start);
+    let notices: Vec<String> = [plugins, skills].into_iter().flatten().collect();
+    (!notices.is_empty()).then(|| notices.join("\n\n"))
 }
 
 fn plugin_reload_notice(
@@ -604,12 +616,39 @@ fn plugin_reload_notice(
         HookAgent::Copilot => "Tell the user to run `/restart` to load them now.",
         HookAgent::Goose | HookAgent::Kiro | HookAgent::OpenCode => return None,
     };
-    let (_, updated) = plugin_changes
+    changed_since_start(agent, "plugins", plugin_changes, load_now)
+}
+
+fn skill_reload_notice(
+    agent: HookAgent,
+    skill_changes: Vec<(crate::agents::Agent, Vec<String>)>,
+    session_start: bool,
+) -> Option<String> {
+    let load_now = match agent {
+        HookAgent::Codex if !session_start => "Tell the user to start a new session to load them.",
+        HookAgent::Copilot => "Tell the user to run `/skills reload` to load them now.",
+        HookAgent::Antigravity
+        | HookAgent::Claude
+        | HookAgent::Codex
+        | HookAgent::Goose
+        | HookAgent::Kiro
+        | HookAgent::OpenCode => return None,
+    };
+    changed_since_start(agent, "skills", skill_changes, load_now)
+}
+
+fn changed_since_start(
+    agent: HookAgent,
+    kind: &str,
+    changes: Vec<(crate::agents::Agent, Vec<String>)>,
+    load_now: &str,
+) -> Option<String> {
+    let (_, updated) = changes
         .into_iter()
         .find(|(changed_for, _)| changed_for.config_name() == agent.as_str())?;
     (!updated.is_empty()).then(|| {
         format!(
-            "Symposium installed or updated these plugins after this session started, \
+            "Symposium installed or updated these {kind} after this session started, \
              so they are not loaded yet: {}. {load_now}",
             updated.join(", ")
         )
@@ -709,7 +748,7 @@ pub async fn dispatch_builtin(
     input: &symposium::InputEvent,
     deps: &Arc<Workspace>,
     notify_about_possible_new_plugins: bool,
-    plugin_reload_notice: Option<String>,
+    reload_notice: Option<String>,
 ) -> (symposium::OutputEvent, Vec<PackageId>) {
     match input {
         symposium::InputEvent::PreToolUse(_) => (
@@ -722,7 +761,7 @@ pub async fn dispatch_builtin(
                 deps,
                 HookEvent::PostToolUse,
                 notify_about_possible_new_plugins,
-                plugin_reload_notice,
+                reload_notice,
             )
             .await
         }
@@ -732,12 +771,12 @@ pub async fn dispatch_builtin(
                 deps,
                 HookEvent::UserPromptSubmit,
                 notify_about_possible_new_plugins,
-                plugin_reload_notice,
+                reload_notice,
             )
             .await
         }
         symposium::InputEvent::SessionStart(session) => {
-            handle_session_start(sym, session, deps, plugin_reload_notice).await
+            handle_session_start(sym, session, deps, reload_notice).await
         }
         _ => (
             symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
@@ -753,11 +792,11 @@ async fn handle_session_start(
     sym: &Symposium,
     _payload: &SessionStartInput,
     deps: &Arc<Workspace>,
-    plugin_reload_notice: Option<String>,
+    reload_notice: Option<String>,
 ) -> (OutputEvent, Vec<PackageId>) {
     let discovery = discovery_hint(sym, deps).await;
     let (consent, pending) = consent_hint(sym, deps).await;
-    let fragments = [discovery, consent, update_nudge(sym), plugin_reload_notice]
+    let fragments = [discovery, consent, update_nudge(sym), reload_notice]
         .into_iter()
         .flatten()
         .collect::<Vec<String>>();
@@ -869,7 +908,7 @@ async fn mid_session_sync_notices(
     deps: &Arc<Workspace>,
     event: HookEvent,
     notify_about_possible_new_plugins: bool,
-    plugin_reload_notice: Option<String>,
+    reload_notice: Option<String>,
 ) -> (symposium::OutputEvent, Vec<PackageId>) {
     let new = if notify_about_possible_new_plugins {
         let pending = crate::discovery::pending_candidates(sym, deps).await;
@@ -878,7 +917,7 @@ async fn mid_session_sync_notices(
         Vec::new()
     };
     let named = new.iter().map(|c| c.id.clone()).collect();
-    let fragments: Vec<String> = [pending_notice(&new), plugin_reload_notice]
+    let fragments: Vec<String> = [pending_notice(&new), reload_notice]
         .into_iter()
         .flatten()
         .collect();

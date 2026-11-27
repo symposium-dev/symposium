@@ -8,6 +8,8 @@ Config name: `codex`
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
 
+A skill symposium copies in while a session runs, for example after the agent adds a dependency whose plugin you enabled, is listed from the next turn only when the project's `.agents/skills/` existed when the session started; otherwise it may need a new session (`/new`). Symposium tells the agent which skills it added and to suggest one.
+
 ## Plugins
 
 A plugin enabled with `symposium use --global` is installed for you as a Codex plugin:

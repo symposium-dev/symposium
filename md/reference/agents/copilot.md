@@ -11,6 +11,8 @@ Config name: `copilot`
 
 Copilot has no global skills path.
 
+Copilot reads its skills when a session starts, so a skill symposium copies in afterwards, for example after the agent adds a dependency whose plugin you enabled, is offered only after `/skills reload` or in a new session. When the automatic sync in a hook copies them, symposium tells the agent which skills it added and to suggest `/skills reload`.
+
 ## Plugins
 
 A plugin enabled with `symposium use --global` is installed for you as a Copilot CLI plugin:
