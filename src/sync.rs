@@ -716,14 +716,22 @@ pub(crate) async fn sync_disabling(
             let file = agent.mcp_config_path(mcp_scope, &project_root, sym);
             let project_file =
                 agent.mcp_config_path(crate::agents::McpScope::Project, &project_root, sym);
-            let offered: &[String] = if file == project_file { &names } else { &[] };
+            let user_file =
+                agent.mcp_config_path(crate::agents::McpScope::User, &project_root, sym);
+            let stale_file = |recorded: &Path| {
+                recorded == project_file
+                    || (mcp_scope == crate::agents::McpScope::Project && recorded == user_file)
+            };
+            let resolved = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.into());
+            let written = resolved(&file);
             if agent.supports_project_mcp_scope() && !skip_cleanup {
                 unregister_recorded_mcp_servers(
                     sym,
                     |_, registration| {
                         registration.agent == *agent_name
-                            && registration.file == project_file
-                            && !offered.contains(&registration.name)
+                            && stale_file(&registration.file)
+                            && !(resolved(&registration.file) == written
+                                && names.contains(&registration.name))
                     },
                     out,
                 );

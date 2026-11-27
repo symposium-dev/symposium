@@ -620,7 +620,7 @@ All supported agents have MCP server configuration. Symposium handles the format
 | OpenCode | `opencode.json` | `mcp.<name>` |
 | Goose | `~/.config/goose/config.yaml` (no project file) | `extensions.<name>` |
 
-Servers are registered at the scope chosen by the `hook-scope` setting (see [Configuration](./configuration.md)): with `"project"`, in the files above; with `"global"` (the default), in each agent's user-level configuration. Agents without a project-level file always get the user-level one. See each agent's page under [Supported agents](./supported-agents.md) for the global locations.
+Servers are registered at the scope chosen by the `hook-scope` setting (see [Configuration](./configuration.md)): with `"project"`, in the files above; with `"global"` (the default), in each agent's user-level configuration. Agents without a project-level file always get the user-level one. After switching to `"project"`, the next sync in a project registers its servers there and removes the ones Symposium registered at user level, for agents with a project-level file; another project gets its servers back at its own next sync. See each agent's page under [Supported agents](./supported-agents.md) for the global locations.
 
 ## `[subcommand.<name>]`
 

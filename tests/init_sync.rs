@@ -881,6 +881,72 @@ async fn sync_at_project_hook_scope_removes_the_global_hooks() {
 }
 
 #[tokio::test]
+async fn switching_to_project_hook_scope_moves_the_mcp_servers_into_the_project() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            let claude_user = ctx.sym.home_dir().join(".claude.json");
+            std::fs::write(
+                &claude_user,
+                r#"{"mcpServers": {"mine": {"command": "own"}}}"#,
+            )?;
+            ctx.symposium(&[
+                "init",
+                "--hook-scope",
+                "global",
+                "--add-agent",
+                "claude",
+                "--add-agent",
+                "codex",
+            ])
+            .await?;
+            ctx.symposium(&["sync"]).await?;
+            assert!(std::fs::read_to_string(&claude_user)?.contains("always-server"));
+
+            ctx.symposium(&["init", "--hook-scope", "project"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let user: Value = serde_json::from_str(&std::fs::read_to_string(&claude_user)?)?;
+            let names: Vec<_> = user["mcpServers"].as_object().unwrap().keys().collect();
+            assert_eq!(names, ["mine"]);
+            let root = ctx.workspace_root.as_ref().unwrap();
+            assert!(std::fs::read_to_string(root.join(".mcp.json"))?.contains("always-server"));
+            let codex = ctx.sym.home_dir().join(".codex/config.toml");
+            assert!(std::fs::read_to_string(codex)?.contains("always-server"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sync_keeps_the_mcp_servers_of_a_project_file_linked_to_the_user_level_one() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            let claude_user = ctx.sym.home_dir().join(".claude.json");
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+            ctx.symposium(&["sync"]).await?;
+            let root = ctx.workspace_root.clone().unwrap();
+            std::os::unix::fs::symlink(&claude_user, root.join(".mcp.json"))?;
+
+            ctx.symposium(&["init", "--hook-scope", "project"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(std::fs::read_to_string(&claude_user)?.contains("always-server"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn sync_keeps_the_project_hooks_while_the_global_ones_cannot_be_registered() {
     with_fixture(
         TestMode::SimulationOnly,
