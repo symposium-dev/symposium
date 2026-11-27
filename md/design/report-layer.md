@@ -21,10 +21,13 @@ tracing::info!(           →   ReportLayer::on_event()      →   stdout/stderr
 | Mode | CLI flags | Output target | Level filter |
 |------|-----------|---------------|--------------|
 | `Normal` | (none) | stdout | INFO only |
+| `Quiet` | `-q` | stdout | INFO only, results only |
 | `Verbose` | `-v` | stderr | INFO + DEBUG |
 | `Json` | `--json` | buffered → stdout at exit | INFO (or DEBUG with `-v --json`) |
 
 The layer is **always installed** — commands don't need to check whether reporting is active.
+
+`Quiet` prints only the events that are a command's result (`ReportEvent::is_result`: validation lines, search hits and the origin headings they are grouped under, status lines, the digest, provider listings) and drops progress, installs, enablement changes and warnings, the same things `Output::quiet` drops. An `Info` event is never a result, so a command with nothing to show prints nothing under `-q`. Errors are not report events, so they still print. `--json` and `-v` take precedence over `-q`. The `plugin` commands the binary handles itself print their status lines through `Output`, so `-q` silences those too.
 
 A warning is rendered once per layer, so once per command: `symposium use` loads the registries and then syncs, which loads them again, and each load reports the same skipped entries.
 

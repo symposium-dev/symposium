@@ -437,6 +437,7 @@ remain errors rather than entering this path.
 Provides user-facing output for all commands via a custom tracing layer. Commands emit `tracing::info!` or `tracing::debug!` events with a `report = %ReportEvent::Variant { ... }` field; the `ReportLayer` intercepts these and renders them based on mode:
 
 - `Normal` — prints `format_human()` to stdout (default for most commands)
+- `Quiet` (`-q`): prints only the events that are a command's result (`ReportEvent::is_result`) to stdout
 - `Verbose` (`-v`) — prints all events (info + debug) to stderr
 - `Json` (`--json`) — accumulates events in a buffer, drained as a JSON array at the end
 

@@ -141,3 +141,43 @@ fn symposium_init_after_cargo_agents_init_changes_nothing() {
     assert!(second.contains("hooks already registered"), "{second}");
     assert_eq!(after_first, snapshot(home.path()));
 }
+
+#[test]
+fn quiet_silences_progress_but_keeps_results() {
+    let home = isolated_home();
+    std::fs::write(
+        home.path().join("Cargo.toml"),
+        "[package]\nname = \"ws\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir(home.path().join("src")).unwrap();
+    std::fs::write(home.path().join("src/lib.rs"), "").unwrap();
+    let skill = home.path().join("my-skill");
+    std::fs::create_dir(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: A skill.\n---\n\nBody.\n",
+    )
+    .unwrap();
+
+    let loud = stdout(&run(home.path(), Binary::Symposium, &["sync"]));
+    assert!(loud.contains("scanning"), "{loud}");
+    let quiet = stdout(&run(home.path(), Binary::Symposium, &["-q", "sync"]));
+    assert_eq!(quiet, "");
+
+    let loud = stdout(&run(home.path(), Binary::Symposium, &["plugin", "sync"]));
+    assert!(loud.contains("No git sources to sync."), "{loud}");
+    let quiet = stdout(&run(
+        home.path(),
+        Binary::Symposium,
+        &["-q", "plugin", "sync"],
+    ));
+    assert_eq!(quiet, "");
+
+    let validated = stdout(&run(
+        home.path(),
+        Binary::Symposium,
+        &["-q", "plugin", "validate", "my-skill", "--no-check-crates"],
+    ));
+    assert!(validated.contains("my-skill"), "{validated}");
+}

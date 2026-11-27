@@ -104,7 +104,7 @@ pub async fn search(sym: &Symposium, query: &str) -> Result<()> {
     }
     for origin in origins {
         tracing::info!(
-            report = %ReportEvent::Info { message: format!("from {origin}:") },
+            report = %ReportEvent::SearchOrigin { origin: origin.to_string() },
         );
         for m in matches.iter().filter(|m| m.origin == origin) {
             tracing::info!(
