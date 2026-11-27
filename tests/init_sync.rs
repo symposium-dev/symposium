@@ -776,6 +776,237 @@ async fn removing_agent_removes_hooks() {
     .unwrap();
 }
 
+const GLOBAL_HOOK_FILES: [&str; 5] = [
+    "home/.claude/settings.json",
+    "home/.codex/hooks.json",
+    "home/.copilot/settings.json",
+    "home/.gemini/config/hooks.json",
+    "home/.kiro/agents/symposium.json",
+];
+
+const PROJECT_HOOK_FILES: [&str; 5] = [
+    "workspace/.agents/hooks.json",
+    "workspace/.claude/settings.json",
+    "workspace/.codex/hooks.json",
+    "workspace/.github/hooks/symposium.json",
+    "workspace/.kiro/agents/symposium.json",
+];
+
+async fn init_hook_agents(
+    ctx: &mut symposium_testlib::TestContext,
+    hook_scope: &str,
+) -> anyhow::Result<()> {
+    let mut args = vec!["init", "--hook-scope", hook_scope];
+    for agent in ["antigravity", "claude", "codex", "copilot", "kiro"] {
+        args.extend(["--add-agent", agent]);
+    }
+    ctx.symposium(&args).await?;
+    Ok(())
+}
+
+fn files_with_symposium_hooks(ctx: &symposium_testlib::TestContext) -> Vec<&'static str> {
+    let root = ctx.workspace_root.as_ref().unwrap();
+    GLOBAL_HOOK_FILES
+        .into_iter()
+        .chain(PROJECT_HOOK_FILES)
+        .filter(|label| {
+            let path = match label.split_once('/').unwrap() {
+                ("home", rest) => ctx.sym.home_dir().join(rest),
+                (_, rest) => root.join(rest),
+            };
+            std::fs::read_to_string(path).is_ok_and(|c| c.contains("symposium hook"))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn switching_to_global_hook_scope_removes_the_project_hooks() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            init_hook_agents(&mut ctx, "project").await?;
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(files_with_symposium_hooks(&ctx), PROJECT_HOOK_FILES);
+
+            ctx.symposium(&["init", "--hook-scope", "global"]).await?;
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(files_with_symposium_hooks(&ctx), GLOBAL_HOOK_FILES);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn switching_to_project_hook_scope_removes_the_global_hooks() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            init_hook_agents(&mut ctx, "global").await?;
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(files_with_symposium_hooks(&ctx), GLOBAL_HOOK_FILES);
+
+            ctx.symposium(&["init", "--hook-scope", "project"]).await?;
+            assert!(files_with_symposium_hooks(&ctx).is_empty());
+
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(files_with_symposium_hooks(&ctx), PROJECT_HOOK_FILES);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_at_project_hook_scope_removes_the_global_hooks() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            init_hook_agents(&mut ctx, "global").await?;
+            ctx.sym.config.hook_scope = symposium::config::HookScope::Project;
+            ctx.sym.save_config()?;
+
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(files_with_symposium_hooks(&ctx), PROJECT_HOOK_FILES);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn switching_to_project_hook_scope_moves_the_mcp_servers_into_the_project() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            let claude_user = ctx.sym.home_dir().join(".claude.json");
+            std::fs::write(
+                &claude_user,
+                r#"{"mcpServers": {"mine": {"command": "own"}}}"#,
+            )?;
+            ctx.symposium(&[
+                "init",
+                "--hook-scope",
+                "global",
+                "--add-agent",
+                "claude",
+                "--add-agent",
+                "codex",
+            ])
+            .await?;
+            ctx.symposium(&["sync"]).await?;
+            assert!(std::fs::read_to_string(&claude_user)?.contains("always-server"));
+
+            ctx.symposium(&["init", "--hook-scope", "project"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let user: Value = serde_json::from_str(&std::fs::read_to_string(&claude_user)?)?;
+            let names: Vec<_> = user["mcpServers"].as_object().unwrap().keys().collect();
+            assert_eq!(names, ["mine"]);
+            let root = ctx.workspace_root.as_ref().unwrap();
+            assert!(std::fs::read_to_string(root.join(".mcp.json"))?.contains("always-server"));
+            let codex = ctx.sym.home_dir().join(".codex/config.toml");
+            assert!(std::fs::read_to_string(codex)?.contains("always-server"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sync_keeps_the_mcp_servers_of_a_project_file_linked_to_the_user_level_one() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            let claude_user = ctx.sym.home_dir().join(".claude.json");
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+            ctx.symposium(&["sync"]).await?;
+            let root = ctx.workspace_root.clone().unwrap();
+            std::os::unix::fs::symlink(&claude_user, root.join(".mcp.json"))?;
+
+            ctx.symposium(&["init", "--hook-scope", "project"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(std::fs::read_to_string(&claude_user)?.contains("always-server"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_keeps_the_project_hooks_while_the_global_ones_cannot_be_registered() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude", "--hook-scope", "project"])
+                .await?;
+            ctx.symposium(&["sync"]).await?;
+            let settings = ctx.sym.home_dir().join(".claude/settings.json");
+            std::fs::create_dir_all(settings.parent().unwrap())?;
+            std::fs::write(&settings, "[]")?;
+
+            assert!(
+                ctx.symposium(&["init", "--hook-scope", "global"])
+                    .await
+                    .is_err()
+            );
+            ctx.symposium(&["sync"]).await?;
+
+            assert_eq!(
+                files_with_symposium_hooks(&ctx),
+                ["workspace/.claude/settings.json"]
+            );
+            assert_eq!(std::fs::read_to_string(&settings)?, "[]");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn init_leaves_user_level_hooks_alone_while_the_scope_stays_project() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude", "--hook-scope", "project"])
+                .await?;
+            let home = ctx.sym.home_dir().to_path_buf();
+            symposium::agents::Agent::Claude.register_hooks(
+                symposium::config::HookScope::Global,
+                &home,
+                &ctx.sym,
+                &symposium::output::Output::quiet(),
+            )?;
+
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+
+            assert_eq!(
+                files_with_symposium_hooks(&ctx),
+                ["home/.claude/settings.json"]
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn removing_an_agent_reaps_its_skills_in_the_workspace() {
     with_fixture(
