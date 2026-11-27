@@ -1,6 +1,6 @@
 [package]
 name = "symposium-pm-cargo"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "The cargo package manager for Symposium: resolves crates from a Cargo workspace into unvalidated plugins"
@@ -11,7 +11,7 @@ name = "symposium_pm_cargo"
 path = "src/lib.rs"
 
 [dependencies]
-symposium-sdk = { path = "../symposium-sdk", version = "0.2.1" }
+symposium-sdk = { path = "../symposium-sdk", version = "0.2.2" }
 
 anyhow = "1"
 async-trait = "0.1"

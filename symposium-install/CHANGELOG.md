@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/symposium-dev/symposium/compare/symposium-install-v0.1.3...symposium-install-v0.1.4) - 2026-11-27
+
+### Fixed
+
+- *(git)* keep distinct source identities in separate cache entries
+- *(install)* preserve cached versions until their replacement succeeds
+
+### Other
+
+- *(git)* reproduce distinct subpaths sharing cached content
+- *(install)* reproduce failed replacement deleting the cached version
+
 ## [0.1.3](https://github.com/symposium-dev/symposium/compare/symposium-install-v0.1.2...symposium-install-v0.1.3) - 2026-11-18
 
 ### Added
