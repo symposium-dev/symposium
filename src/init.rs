@@ -7,7 +7,7 @@ use dialoguer::MultiSelect;
 use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
-use crate::config::{AgentEntry, Symposium};
+use crate::config::{AgentEntry, HookScope, Symposium};
 use crate::output::{Output, display_path};
 
 /// Options that can be provided on the command line to skip interactive prompts.
@@ -242,6 +242,7 @@ pub async fn init(
         .map(|name| AgentEntry { name: name.clone() })
         .collect();
 
+    let previous_hook_scope = sym.config.hook_scope;
     sym.config.hook_scope = match opts.hook_scope {
         Some(scope) => scope,
         None if should_prompt && !agents.is_empty() => {
@@ -301,7 +302,10 @@ pub async fn init(
         agent_names.join(", ")
     ));
 
-    if sym.config.hook_scope == crate::config::HookScope::Global {
+    // Only a switch from global removes user-level hooks at project scope: the
+    // user-level file can also be the project file of a workspace rooted at
+    // the home directory, which only that workspace's sync can tell.
+    if sym.config.hook_scope == HookScope::Global || previous_hook_scope == HookScope::Global {
         crate::sync::register_hooks(sym, out).context("failed to register global hooks")?;
     }
 

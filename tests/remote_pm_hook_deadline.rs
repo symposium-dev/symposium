@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use symposium::agents::Agent;
-use symposium::config::Symposium;
+use symposium::config::{HookScope, Symposium};
 use symposium::hook::HookResponse;
 use symposium::hook_schema::{HookAgent, HookEvent, agent_event};
 use symposium::output::Output;
@@ -30,7 +30,7 @@ fn registered_deadline(ctx: &TestContext, agent: HookAgent) -> Duration {
         _ => unreachable!(),
     };
     agent
-        .register_project_hooks(&ctx.tempdir, &ctx.sym, &Output::quiet())
+        .register_hooks(HookScope::Project, &ctx.tempdir, &ctx.sym, &Output::quiet())
         .unwrap();
     let registration: Value =
         serde_json::from_slice(&std::fs::read(ctx.tempdir.join(path)).unwrap()).unwrap();

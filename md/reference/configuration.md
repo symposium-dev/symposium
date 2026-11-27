@@ -71,6 +71,8 @@ Registering hooks globally ensures that Symposium activates whenever you use the
 
 Registering hooks at the project level requires you to run `symposium sync` within each project at least once to create the hooks. After that, the `auto-sync` feature will keep you up-to-date.
 
+Changing the scope moves the hooks rather than adding a second set, which would run Symposium twice on every agent event. `symposium init --hook-scope project` removes Symposium's hooks from your home directory, and `symposium sync` in each project registers them there. After `symposium init --hook-scope global`, the next sync in each project removes the hooks it held (the automatic one at the start of a session, unless `auto-sync` is off); a session already running may keep running them until it ends. A project's hook files are edited in place, so with `"global"` Symposium's entries also come out of one your team commits.
+
 ## `[[agent]]`
 
 Each `[[agent]]` entry identifies an agent you use. You can configure multiple agents.

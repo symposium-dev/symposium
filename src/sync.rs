@@ -14,7 +14,7 @@ use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
 use crate::compile;
-use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
+use crate::config::{HookScope, INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::dir_walk::{self, EntryKind};
 use crate::output::{Output, display_path};
 use crate::plugins;
@@ -679,23 +679,14 @@ pub(crate) async fn sync_disabling(
             continue;
         };
 
-        // Hooks: the project and global locations are genuinely different files
-        // for some agents - Antigravity writes `.agents/hooks.json` but
-        // `~/.gemini/config/hooks.json`, and Copilot `.github/hooks/` but
-        // `~/.copilot/settings.json` - so project scope cannot be produced by
-        // rooting the global path at the workspace.
-        let hooks = match sym.config.hook_scope {
-            crate::config::HookScope::Global => agent.register_hooks(sym.home_dir(), sym, out),
-            crate::config::HookScope::Project => {
-                agent.register_project_hooks(&project_root, sym, out)
-            }
-        };
-        if let Err(e) = hooks {
-            tracing::info!(
+        let hook_scope = sym.config.hook_scope;
+        match agent.register_hooks(hook_scope, &project_root, sym, out) {
+            Ok(()) => agent.unregister_hooks_outside(hook_scope, &project_root, sym, out),
+            Err(e) => tracing::info!(
                 report = %crate::report::ReportEvent::Warning {
                     message: format!("failed to register hooks for {agent_name}: {e:#}"),
                 },
-            );
+            ),
         }
 
         // MCP does not follow the hook scope: an agent's MCP file differs from
@@ -904,14 +895,7 @@ pub(crate) async fn sync_disabling(
     // workspace's project file waits for a sync there.
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
-            match sym.config.hook_scope {
-                crate::config::HookScope::Global => {
-                    agent.unregister_hooks(sym.home_dir(), sym, out)
-                }
-                crate::config::HookScope::Project => {
-                    agent.unregister_project_hooks(&project_root, sym, out)
-                }
-            }
+            agent.unregister_hooks(sym.config.hook_scope, &project_root, sym, out);
         }
     }
     unregister_unconfigured_mcp_servers(sym, &agent_names, in_reach, out);
@@ -1092,27 +1076,29 @@ fn unregister_project_plugins(sym: &Symposium, project_root: &Path) {
     }
 }
 
-/// Register global hooks for all configured agents.
-/// Register hooks for all configured agents. Uses `home_dir` (global scope).
-/// Called from `init` after writing the user config.
+/// Bring the global hook files in line with the user config: hooks for every
+/// configured agent at global scope, none at project scope or for an agent no
+/// longer configured. Called from `init` after writing the user config.
 pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     // `init` has no workspace to evaluate a plugin's gate against, so MCP
-    // servers are left to `sync`.
+    // servers are left to `sync`, and so are project hook files.
     let home = sym.home_dir();
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
             out.warn(unknown_agent_warning(agent_name));
             continue;
         };
-        agent.register_hooks(home, sym, out)?;
+        match sym.config.hook_scope {
+            HookScope::Global => agent.register_hooks(HookScope::Global, home, sym, out)?,
+            HookScope::Project => agent.unregister_hooks(HookScope::Global, home, sym, out),
+        }
     }
 
-    // Unregister hooks for agents no longer configured
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
-            agent.unregister_hooks(home, sym, out);
+            agent.unregister_hooks(HookScope::Global, home, sym, out);
         }
     }
     unregister_unconfigured_mcp_servers(

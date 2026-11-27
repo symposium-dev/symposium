@@ -40,7 +40,7 @@ Removing an agent also runs [`symposium sync`](./symposium-sync.md) when `init` 
 |------|-------------|
 | `--add-agent <name>` | Add an agent (e.g., `antigravity`, `claude`, `copilot`). Repeatable. Skips the interactive prompt. |
 | `--remove-agent <name>` | Remove an agent, including one this version no longer knows. Repeatable. |
-| `--hook-scope <scope>` | Where to install hooks: `global` (default, writes to `~/`) or `project` (writes to the project directory). |
+| `--hook-scope <scope>` | Where to install hooks: `global` (default, writes to `~/`) or `project` (writes to the project directory). Switching to `project` removes Symposium's hooks from `~/`; switching to `global` leaves each project's hooks to the next `symposium sync` there, which removes them (see [Hook scope](./configuration.md#hook-scope-control-whether-symposium-activates-in-all-projects-or-only-those-you-select)). |
 
 ## Examples
 

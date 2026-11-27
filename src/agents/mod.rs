@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
-use crate::config::Symposium;
+use crate::config::{HookScope, Symposium};
 use crate::output::{Output, display_path};
 
 const HOOK_COMMAND: &str = "symposium hook";
@@ -256,72 +256,116 @@ impl Agent {
     // Hook registration
     // -----------------------------------------------------------------------
 
-    /// Register hooks in the project-level agent config.
-    pub fn register_project_hooks(
+    /// The file symposium's hooks live in at `scope`, `None` for an agent
+    /// that takes no hooks.
+    fn hooks_location(
         &self,
+        scope: HookScope,
         project_root: &Path,
-        _sym: &Symposium,
-        out: &Output,
-    ) -> Result<()> {
-        match self {
-            Agent::Antigravity => {
-                register_antigravity_hooks(&project_root.join(".agents").join("hooks.json"), out)
+        sym: &Symposium,
+    ) -> Option<PathBuf> {
+        let home = sym.home_dir();
+        Some(match (self, scope) {
+            (Agent::Antigravity, HookScope::Project) => {
+                project_root.join(".agents").join("hooks.json")
             }
-            Agent::Claude => {
-                register_claude_hooks(&project_root.join(".claude").join("settings.json"), out)
+            (Agent::Antigravity, HookScope::Global) => {
+                home.join(".gemini").join("config").join("hooks.json")
             }
-            Agent::Codex => {
-                register_codex_hooks(&project_root.join(".codex").join("hooks.json"), out)
+            (Agent::Claude, HookScope::Project) => {
+                project_root.join(".claude").join("settings.json")
             }
-            Agent::Copilot => {
-                register_copilot_hooks(&project_root.join(".github").join("hooks"), out)
+            (Agent::Claude, HookScope::Global) => claude_config_dir(sym).join("settings.json"),
+            (Agent::Codex, HookScope::Project) => project_root.join(".codex").join("hooks.json"),
+            (Agent::Codex, HookScope::Global) => codex_dir(sym).join("hooks.json"),
+            (Agent::Copilot, HookScope::Project) => project_root
+                .join(".github")
+                .join("hooks")
+                .join("symposium.json"),
+            (Agent::Copilot, HookScope::Global) => copilot_config_dir(sym).join("settings.json"),
+            (Agent::Kiro, HookScope::Project) => project_root
+                .join(".kiro")
+                .join("agents")
+                .join("symposium.json"),
+            (Agent::Kiro, HookScope::Global) => {
+                home.join(".kiro").join("agents").join("symposium.json")
             }
-            Agent::Kiro => register_kiro_hooks(&project_root.join(".kiro").join("agents"), out),
-            Agent::Goose => {
-                out.info(
-                    "Goose uses MCP extensions for hooks; skipping hook registration (skills only)",
-                );
-                Ok(())
-            }
-            Agent::OpenCode => {
-                out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
-                Ok(())
-            }
-        }?;
-
-        Ok(())
+            (Agent::Goose | Agent::OpenCode, _) => return None,
+        })
     }
 
-    /// Register hooks in the global agent config.
-    pub fn register_hooks(&self, home: &Path, sym: &Symposium, out: &Output) -> Result<()> {
-        tracing::debug!(agent = %self.config_name(), "registering hooks");
-        // Register hooks
-        match self {
-            Agent::Antigravity => register_antigravity_hooks(
-                &home.join(".gemini").join("config").join("hooks.json"),
-                out,
-            ),
-            Agent::Claude => {
-                register_claude_hooks(&claude_config_dir(sym).join("settings.json"), out)
-            }
-            Agent::Codex => register_codex_hooks(&codex_dir(sym).join("hooks.json"), out),
-            Agent::Copilot => {
-                register_copilot_hooks_global(&copilot_config_dir(sym).join("settings.json"), out)
-            }
-            Agent::Kiro => register_kiro_hooks(&home.join(".kiro").join("agents"), out),
-            Agent::Goose => {
-                out.info(
-                    "Goose uses MCP extensions for hooks; skipping hook registration (skills only)",
-                );
-                Ok(())
-            }
-            Agent::OpenCode => {
-                out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
-                Ok(())
-            }
-        }?;
+    /// Register hooks at `scope`; `project_root` is ignored at global scope.
+    pub fn register_hooks(
+        &self,
+        scope: HookScope,
+        project_root: &Path,
+        sym: &Symposium,
+        out: &Output,
+    ) -> Result<()> {
+        tracing::debug!(agent = %self.config_name(), ?scope, "registering hooks");
+        let Some(location) = self.hooks_location(scope, project_root, sym) else {
+            let how = match self {
+                Agent::Goose => "Goose uses MCP extensions for hooks",
+                _ => "OpenCode uses JS/TS plugins for hooks",
+            };
+            out.info(format!("{how}; skipping hook registration (skills only)"));
+            return Ok(());
+        };
+        match (self, scope) {
+            (Agent::Antigravity, _) => register_antigravity_hooks(&location, out),
+            (Agent::Claude, _) => register_claude_hooks(&location, out),
+            (Agent::Codex, _) => register_codex_hooks(&location, out),
+            (Agent::Copilot, HookScope::Project) => register_copilot_hooks(&location, out),
+            (Agent::Copilot, HookScope::Global) => register_copilot_hooks_global(&location, out),
+            (Agent::Kiro, _) => register_kiro_hooks(&location, out),
+            (Agent::Goose | Agent::OpenCode, _) => Ok(()),
+        }
+    }
 
-        Ok(())
+    /// Remove hooks at `scope`; `project_root` is ignored at global scope.
+    pub fn unregister_hooks(
+        &self,
+        scope: HookScope,
+        project_root: &Path,
+        sym: &Symposium,
+        out: &Output,
+    ) {
+        let Some(location) = self.hooks_location(scope, project_root, sym) else {
+            return;
+        };
+        match (self, scope) {
+            (Agent::Antigravity, _) => unregister_antigravity_hooks(&location, out),
+            (Agent::Claude, _) => unregister_claude_hooks(&location, out),
+            (Agent::Codex, _) => unregister_codex_hooks(&location, out),
+            (Agent::Copilot, HookScope::Project) => unregister_copilot_hooks(&location, out),
+            (Agent::Copilot, HookScope::Global) => unregister_copilot_hooks_global(&location, out),
+            (Agent::Kiro, _) => unregister_kiro_hooks(&location, out),
+            (Agent::Goose | Agent::OpenCode, _) => {}
+        }
+    }
+
+    /// Remove hooks from the other scope's file, where they would run
+    /// symposium a second time per event, unless both scopes resolve to the
+    /// same file (a workspace rooted at the home directory, or linked to it),
+    /// which then holds the hooks `scope` needs.
+    pub fn unregister_hooks_outside(
+        &self,
+        scope: HookScope,
+        project_root: &Path,
+        sym: &Symposium,
+        out: &Output,
+    ) {
+        let resolved = |scope| {
+            self.hooks_location(scope, project_root, sym)
+                .map(|location| fs::canonicalize(&location).unwrap_or(location))
+        };
+        let other = match scope {
+            HookScope::Global => HookScope::Project,
+            HookScope::Project => HookScope::Global,
+        };
+        if resolved(other) != resolved(scope) {
+            self.unregister_hooks(other, project_root, sym, out);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -497,47 +541,6 @@ impl Agent {
         }
         Some(delivery)
     }
-
-    /// Remove hooks from the project-level agent config.
-    pub fn unregister_project_hooks(&self, project_root: &Path, _sym: &Symposium, out: &Output) {
-        match self {
-            Agent::Antigravity => {
-                unregister_antigravity_hooks(&project_root.join(".agents").join("hooks.json"), out)
-            }
-            Agent::Claude => {
-                unregister_claude_hooks(&project_root.join(".claude").join("settings.json"), out)
-            }
-            Agent::Codex => {
-                unregister_codex_hooks(&project_root.join(".codex").join("hooks.json"), out)
-            }
-            Agent::Copilot => {
-                unregister_copilot_hooks(&project_root.join(".github").join("hooks"), out)
-            }
-            Agent::Kiro => unregister_kiro_hooks(&project_root.join(".kiro").join("agents"), out),
-            Agent::Goose => {}    // no hooks to unregister
-            Agent::OpenCode => {} // no hooks to unregister
-        }
-    }
-
-    /// Remove hooks from the global agent config.
-    pub fn unregister_hooks(&self, home: &Path, sym: &Symposium, out: &Output) {
-        match self {
-            Agent::Antigravity => unregister_antigravity_hooks(
-                &home.join(".gemini").join("config").join("hooks.json"),
-                out,
-            ),
-            Agent::Claude => {
-                unregister_claude_hooks(&claude_config_dir(sym).join("settings.json"), out)
-            }
-            Agent::Codex => unregister_codex_hooks(&codex_dir(sym).join("hooks.json"), out),
-            Agent::Copilot => {
-                unregister_copilot_hooks_global(&copilot_config_dir(sym).join("settings.json"), out)
-            }
-            Agent::Kiro => unregister_kiro_hooks(&home.join(".kiro").join("agents"), out),
-            Agent::Goose => {}    // no hooks to unregister
-            Agent::OpenCode => {} // no hooks to unregister
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -697,14 +700,12 @@ fn register_copilot_hooks_global(config_path: &Path, out: &Output) -> Result<()>
     Ok(())
 }
 
-/// Register hooks in a project-level Copilot hooks directory (`.github/hooks/`).
-fn register_copilot_hooks(hooks_dir: &Path, out: &Output) -> Result<()> {
-    fs::create_dir_all(hooks_dir)?;
-    let hook_file = hooks_dir.join("symposium.json");
+/// Register hooks in a project-level Copilot hooks file (`.github/hooks/symposium.json`).
+fn register_copilot_hooks(hook_file: &Path, out: &Output) -> Result<()> {
     let display = display_path(&hook_file);
 
     if hook_file.exists() {
-        let existing = fs::read_to_string(&hook_file)?;
+        let existing = fs::read_to_string(hook_file)?;
         if existing.contains(HOOK_COMMAND) {
             out.already_ok(format!("{display}: hooks already registered"));
             return Ok(());
@@ -721,7 +722,7 @@ fn register_copilot_hooks(hooks_dir: &Path, out: &Output) -> Result<()> {
         "hooks": hooks_obj
     });
 
-    save_json(&hook_file, &hooks)?;
+    save_json(hook_file, &hooks)?;
     out.done(format!("{display}: added hooks"));
     Ok(())
 }
@@ -912,18 +913,16 @@ fn merge_kiro_hooks(
 }
 
 /// Register hooks by creating a Kiro agent file (`.kiro/agents/symposium.json`).
-fn register_kiro_hooks(agents_dir: &Path, out: &Output) -> Result<()> {
-    fs::create_dir_all(agents_dir)?;
-    let hook_file = agents_dir.join("symposium.json");
-    let display = display_path(&hook_file);
+fn register_kiro_hooks(hook_file: &Path, out: &Output) -> Result<()> {
+    let display = display_path(hook_file);
 
-    let mut config = load_json_or_empty(&hook_file)?;
+    let mut config = load_json_or_empty(hook_file)?;
     let (changed, added) = merge_kiro_hooks(&mut config, "symposium", &display)?;
 
     if !changed {
         out.already_ok(format!("{display}: hooks already registered"));
     } else {
-        save_json(&hook_file, &config)?;
+        save_json(hook_file, &config)?;
         if added.is_empty() {
             out.done(format!("{display}: updated agent config"));
         } else {
@@ -977,12 +976,11 @@ fn kiro_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
     ]
 }
 
-/// Remove the symposium agent file from a Kiro agents directory.
-fn unregister_kiro_hooks(agents_dir: &Path, out: &Output) {
-    let hook_file = agents_dir.join("symposium.json");
+/// Remove the symposium agent file Kiro reads its hooks from.
+fn unregister_kiro_hooks(hook_file: &Path, out: &Output) {
     if hook_file.exists() {
-        let display = display_path(&hook_file);
-        if fs::remove_file(&hook_file).is_ok() {
+        let display = display_path(hook_file);
+        if fs::remove_file(hook_file).is_ok() {
             out.removed(format!("{display}: removed hooks"));
         }
     }
@@ -1055,12 +1053,11 @@ fn unregister_claude_hooks(settings_path: &Path, out: &Output) {
     unregister_settings_hooks(settings_path, out);
 }
 
-/// Remove symposium hooks from a Copilot project hooks directory.
-fn unregister_copilot_hooks(hooks_dir: &Path, out: &Output) {
-    let hook_file = hooks_dir.join("symposium.json");
+/// Remove symposium's own Copilot project hooks file.
+fn unregister_copilot_hooks(hook_file: &Path, out: &Output) {
     if hook_file.exists() {
-        let display = display_path(&hook_file);
-        if fs::remove_file(&hook_file).is_ok() {
+        let display = display_path(hook_file);
+        if fs::remove_file(hook_file).is_ok() {
             out.removed(format!("{display}: removed hooks"));
         }
     }
@@ -1442,7 +1439,9 @@ mod tests {
             });
             let read = |file: &str| fs::read_to_string(tmp.path().join(file)).unwrap();
 
-            agent.register_hooks(sym.home_dir(), &sym, &out).unwrap();
+            agent
+                .register_hooks(HookScope::Global, project, &sym, &out)
+                .unwrap();
             agent
                 .register_mcp_servers(McpScope::User, project, &sym, &servers, &out)
                 .unwrap();
@@ -1451,7 +1450,7 @@ mod tests {
             }
             assert!(read(mcp).contains("symposium"), "{agent:?} {env:?}");
 
-            agent.unregister_hooks(sym.home_dir(), &sym, &out);
+            agent.unregister_hooks(HookScope::Global, project, &sym, &out);
             agent
                 .unregister_mcp_servers(
                     &agent.mcp_config_path(McpScope::User, project, &sym),
@@ -1463,6 +1462,44 @@ mod tests {
                 assert!(!read(hooks).contains("symposium hook"), "{agent:?} {env:?}");
             }
             assert!(!read(mcp).contains("symposium"), "{agent:?} {env:?}");
+        }
+    }
+
+    #[test]
+    fn hooks_stay_where_both_scopes_resolve_to_the_same_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let sym = Symposium::from_dir(&home);
+        let out = Output::quiet();
+        let has_hooks = |path: &Path| {
+            fs::read_to_string(path).is_ok_and(|content| content.contains("symposium hook"))
+        };
+
+        for scope in [HookScope::Global, HookScope::Project] {
+            Agent::Claude
+                .register_hooks(scope, &home, &sym, &out)
+                .unwrap();
+            Agent::Claude.unregister_hooks_outside(scope, &home, &sym, &out);
+            assert!(has_hooks(&home.join(".claude/settings.json")), "{scope:?}");
+        }
+
+        #[cfg(unix)]
+        {
+            let project = tmp.path().join("project");
+            fs::create_dir_all(&project).unwrap();
+            std::os::unix::fs::symlink(home.join(".claude"), project.join(".claude")).unwrap();
+            Agent::Claude.unregister_hooks_outside(HookScope::Global, &project, &sym, &out);
+            assert!(has_hooks(&home.join(".claude/settings.json")));
+
+            let kiro_file = home.join(".kiro/agents/symposium.json");
+            Agent::Kiro
+                .register_hooks(HookScope::Global, &project, &sym, &out)
+                .unwrap();
+            fs::create_dir_all(project.join(".kiro/agents")).unwrap();
+            std::os::unix::fs::symlink(&kiro_file, project.join(".kiro/agents/symposium.json"))
+                .unwrap();
+            Agent::Kiro.unregister_hooks_outside(HookScope::Project, &project, &sym, &out);
+            assert!(has_hooks(&kiro_file));
         }
     }
 
@@ -1509,7 +1546,7 @@ mod tests {
             (
                 "kiro",
                 "symposium.json",
-                &|path: &Path| register_kiro_hooks(path.parent().unwrap(), &out),
+                &|path: &Path| register_kiro_hooks(path, &out),
                 json_hooks,
             ),
             (
@@ -1588,12 +1625,12 @@ mod tests {
         match agent {
             Agent::Claude => vec![root.join(".claude").join("settings.json")],
             Agent::Codex => vec![root.join(".codex").join("hooks.json")],
-            Agent::Copilot => vec![root.join(".github").join("hooks")],
+            Agent::Copilot => vec![root.join(".github").join("hooks").join("symposium.json")],
             Agent::Antigravity => vec![
                 root.join(".agents").join("hooks.json"),
                 root.join(".gemini").join("config").join("hooks.json"),
             ],
-            Agent::Kiro => vec![root.join(".kiro").join("agents")],
+            Agent::Kiro => vec![root.join(".kiro").join("agents").join("symposium.json")],
             // Skills-only agents register no hooks at all.
             Agent::Goose | Agent::OpenCode => vec![],
         }
@@ -1694,10 +1731,9 @@ mod tests {
     #[test]
     fn register_copilot_hooks_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let hooks_dir = tmp.path().join("hooks");
-        register_copilot_hooks(&hooks_dir, &Output::quiet()).unwrap();
+        let hook_file = tmp.path().join("hooks").join("symposium.json");
+        register_copilot_hooks(&hook_file, &Output::quiet()).unwrap();
 
-        let hook_file = hooks_dir.join("symposium.json");
         assert!(hook_file.exists());
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
@@ -1731,10 +1767,9 @@ mod tests {
     #[test]
     fn register_kiro_hooks_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join("agents");
-        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
+        let hook_file = tmp.path().join("agents").join("symposium.json");
+        register_kiro_hooks(&hook_file, &Output::quiet()).unwrap();
 
-        let hook_file = agents_dir.join("symposium.json");
         assert!(hook_file.exists());
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
@@ -1754,11 +1789,10 @@ mod tests {
     #[test]
     fn register_kiro_hooks_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join("agents");
-        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
-        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
+        let hook_file = tmp.path().join("agents").join("symposium.json");
+        register_kiro_hooks(&hook_file, &Output::quiet()).unwrap();
+        register_kiro_hooks(&hook_file, &Output::quiet()).unwrap();
 
-        let hook_file = agents_dir.join("symposium.json");
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
         let pre_tool = content["hooks"]["preToolUse"].as_array().unwrap();
@@ -1774,7 +1808,6 @@ mod tests {
     fn registering_over_legacy_hooks_rewrites_them_in_place() {
         let tmp = tempfile::tempdir().unwrap();
         let out = Output::quiet();
-        let kiro_dir = tmp.path().join("kiro");
         let registrations: [(PathBuf, fn(&Path, &Output) -> Result<()>); 4] = [
             (tmp.path().join("claude.json"), register_claude_hooks),
             (tmp.path().join("codex.json"), register_codex_hooks),
@@ -1782,9 +1815,7 @@ mod tests {
                 tmp.path().join("copilot.json"),
                 register_copilot_hooks_global,
             ),
-            (kiro_dir.join("symposium.json"), |path, out| {
-                register_kiro_hooks(path.parent().unwrap(), out)
-            }),
+            (tmp.path().join("kiro/symposium.json"), register_kiro_hooks),
         ];
         for (path, register) in registrations {
             register(&path, &out).unwrap();
@@ -1832,13 +1863,11 @@ mod tests {
     #[test]
     fn unregister_kiro_hooks_removes_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join("agents");
-        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
-
-        let hook_file = agents_dir.join("symposium.json");
+        let hook_file = tmp.path().join("agents").join("symposium.json");
+        register_kiro_hooks(&hook_file, &Output::quiet()).unwrap();
         assert!(hook_file.exists());
 
-        unregister_kiro_hooks(&agents_dir, &Output::quiet());
+        unregister_kiro_hooks(&hook_file, &Output::quiet());
         assert!(!hook_file.exists());
     }
 
