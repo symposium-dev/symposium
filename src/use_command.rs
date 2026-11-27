@@ -56,10 +56,17 @@ async fn use_in(
 
     // `disable` outranks every way of enabling a plugin, `use` included, so
     // recording an entry here would report success and then install nothing.
-    // Re-enabling is dropping the `disable` entry, which is a deliberate edit
-    // rather than something `use` undoes on the user's behalf.
+    // Re-enabling is dropping the `disable` entry first with `use --remove`,
+    // a deliberate step rather than something `use` undoes on the user's behalf.
     if sym.config.plugins.is_disabled(pms, &found).await {
-        bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
+        if sym.config.plugins.disable.iter().any(|entry| entry == "*") {
+            bail!(
+                "`{name}` is disabled by `\"*\"` in `[plugins] disable`; remove that entry to enable it"
+            );
+        }
+        bail!(
+            "`{name}` is disabled in `[plugins] disable`; `symposium use {name} --remove` drops that entry"
+        );
     }
 
     // A configured registry is a trust root: what it offers is already
@@ -146,8 +153,10 @@ async fn use_in(
 /// are reaped now.
 ///
 /// The scope must match: without `--global` this removes the entry recorded
-/// for the current workspace, with it the unscoped entry. A scope mismatch is
-/// an error rather than a silent success.
+/// for the current workspace, with it the unscoped entry. The consent prompt's
+/// answer for the name, its `auto-enable` or `disable` entry, has no scope and
+/// is dropped either way, so the dependency is offered again. Finding no entry
+/// at all is an error rather than a silent success.
 pub async fn remove_plugin(
     sym: &mut Symposium,
     cwd: &Path,
@@ -180,20 +189,59 @@ pub async fn remove_plugin(
             removed_global.push(stored);
         }
     }
-    if sym.config.plugins.used.len() == before {
+    let removed_use = sym.config.plugins.used.len() != before;
+
+    let mut answered: Vec<PackageId> = found.iter().cloned().collect();
+    for dep in deps.dep_ids().await {
+        let dep = PackageId::any_version(&dep.pm, &dep.name);
+        if !answered.contains(&dep)
+            && crate::config::names_match(pms, std::iter::once(name), &dep)
+                .await
+                .unwrap_or(false)
+        {
+            answered.push(dep);
+        }
+    }
+    let plugins = &mut sym.config.plugins;
+    let mut forgotten = BTreeSet::new();
+    for (list, key) in [
+        (&mut plugins.auto_enable, "auto-enable"),
+        (&mut plugins.disable, "disable"),
+    ] {
+        for entry in std::mem::take(list) {
+            if answer_names(pms, &entry, name, &answered).await {
+                forgotten.insert(key);
+            } else {
+                list.push(entry);
+            }
+        }
+    }
+
+    if !removed_use && forgotten.is_empty() {
         let scope = if global { "--global" } else { "this workspace" };
-        bail!("no `use` entry for `{name}` ({scope}); see `symposium status`");
+        bail!(
+            "no `use` entry for `{name}` ({scope}), nor an `auto-enable` or `disable` one; see `symposium status`"
+        );
     }
     sym.save_config().context("failed to write user config")?;
     for stored in &removed_global {
         crate::state::forget_trial_use(sym.config_dir(), stored);
     }
-    tracing::info!(
-        report = %ReportEvent::PluginRemoved {
-            name: name.to_string(),
-            global,
-        },
-    );
+    if removed_use {
+        tracing::info!(
+            report = %ReportEvent::PluginRemoved {
+                name: name.to_string(),
+                global,
+            },
+        );
+    }
+    for key in &forgotten {
+        tracing::info!(
+            report = %ReportEvent::Info {
+                message: format!("removed `{name}` from `[plugins] {key}`"),
+            },
+        );
+    }
 
     let registry_plugin = match &id {
         Some(id) => registry_plugin_of(pms, &registry.plugins, id)
@@ -202,13 +250,20 @@ pub async fn remove_plugin(
             .flatten(),
         None => None,
     };
-    let disabled = match (registry_plugin, &found) {
+    let mut disabled = match (registry_plugin, &found) {
         (Some(plugin), _) => crate::sync::declared_mcp_servers([plugin]),
         (None, Some(found)) => {
             crate::sync::declared_mcp_servers(&pms.load_plugin(found, UpdateLevel::None).await)
         }
         (None, None) => BTreeSet::new(),
     };
+    if !forgotten.is_empty() {
+        for dep in answered.iter().filter(|dep| Some(*dep) != found.as_ref()) {
+            disabled.extend(crate::sync::declared_mcp_servers(
+                &pms.load_plugin(dep, UpdateLevel::None).await,
+            ));
+        }
+    }
     if workspace_root.is_some() {
         crate::sync::sync_disabling(sym, &deps, update, &disabled).await?;
     } else {
@@ -228,6 +283,27 @@ async fn registry_plugin_of<'a>(
         }
     }
     Ok(None)
+}
+
+/// Does the `auto-enable` or `disable` entry `entry` name one of the packages
+/// `answered` that `name` resolved to, compared the way those lists are? `"*"`
+/// names no package in particular, so it is never one to drop.
+async fn answer_names(pms: &PmRegistry, entry: &str, name: &str, answered: &[PackageId]) -> bool {
+    if entry == "*" {
+        return false;
+    }
+    if entry == name {
+        return true;
+    }
+    for id in answered {
+        if crate::config::names_match(pms, std::iter::once(entry), id)
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn in_scope(entry: &UseEntry, global: bool, workspace_root: Option<&Path>) -> bool {

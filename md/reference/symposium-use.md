@@ -15,7 +15,7 @@ symposium use <NAME> --remove [--global]
 |------|-------------|
 | `<NAME>` | Plugin or crate name to enable |
 | `--global` | Enable for every workspace instead of just the current one, and install it for you rather than per project |
-| `--remove` | Drop a previously recorded enablement instead of adding one |
+| `--remove` | Drop a previously recorded enablement or consent answer instead of adding one |
 
 ## Behavior
 
@@ -87,19 +87,31 @@ A crate the [audits list](./audits.md#revocations) revokes cannot be enabled:
 `symposium-audits` list: it tells the agent to fetch and run remote code``) and
 writes nothing, since a revocation outranks every `use` entry. The check is
 made against the release that would load. A name in `[plugins] disable` is
-refused the same way.
+refused the same way, and the error points at `symposium use <NAME> --remove`,
+which drops that entry. A `"*"` entry is the exception: remove it by hand.
 
 ### `--remove`
 
 Removes the entry in the matching scope: without `--global` the entry recorded
-for the current workspace, with it the unscoped one. A scope mismatch (or no
-entry at all) is an error rather than a silent success. The name is matched
+for the current workspace, with it the unscoped one; an entry in the other
+scope stays. The name is matched
 the way `use` matches it, so either spelling of a crate removes its entry. The
 sync that follows reaps the plugin's installed skills and unregisters the MCP
 servers symposium registered for it, from your user-level agent files and this
 workspace's, unless a plugin still enabled declares a server of the same name.
 Outside a workspace, `--remove --global` removes what was installed for you,
 MCP servers included.
+
+It also forgets the answer the [consent prompt](./symposium-sync.md#consent-prompt)
+recorded for the name, its `[plugins] auto-enable` or `[plugins] disable`
+entry, with or without `--global`, since those entries apply in every
+workspace. A registry plugin of the same name does not hide the answer about
+the dependency, whose MCP servers are unregistered too. Unless another entry,
+such as a `use` entry or `"*"`, still covers it, the dependency is then
+undecided again, so the next interactive `symposium sync` asks about it. A
+`"*"` entry is left alone. With no `use` entry in that scope and no
+`auto-enable` or `disable` entry naming the plugin, the command is an error
+rather than a silent success.
 
 ## Example
 

@@ -69,6 +69,10 @@ agent context, so these stay off until you say otherwise. Three answers:
 Only explicit answers are recorded, so hitting Enter through the prompt never
 permanently declines anything. Escape leaves the remaining questions undecided.
 
+To change an answer later, [`symposium use <crate> --remove`](./symposium-use.md#--remove)
+drops it, and unless another entry still covers the crate, the next
+interactive sync asks again.
+
 Each question also says what the [audits list](./audits.md) says about the
 plugin: audited by the `symposium-audits` list, or not audited. When the list
 audits the crate but this release's payload cannot be checked against an
