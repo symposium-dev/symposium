@@ -312,7 +312,7 @@ impl ReportEvent {
                 plugin,
                 agent,
                 dest,
-            } => format!("installed plugin {plugin} for {agent} -> {dest}"),
+            } => format!("✅ installed plugin {plugin} for {agent} → {dest}"),
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
             }
@@ -624,6 +624,28 @@ mod tests {
         let digest = symposium_sdk::audits::Digest::from_bytes([0; 32]);
         assert!(!event(DigestOutcome::Digest(digest)).human_to_stderr());
         assert!(event(DigestOutcome::Ineligible("why".into())).human_to_stderr());
+    }
+
+    #[test]
+    fn plugin_and_skill_install_lines_read_alike() {
+        let skill = ReportEvent::SkillInstalled {
+            skill: "widget".into(),
+            agent: "claude".into(),
+            dest: "/dest".into(),
+        };
+        let plugin = ReportEvent::PluginInstalled {
+            plugin: "widget".into(),
+            agent: "claude".into(),
+            dest: "/dest".into(),
+        };
+        assert_eq!(
+            skill.format_human(),
+            "✅ installed skill widget for claude → /dest"
+        );
+        assert_eq!(
+            plugin.format_human(),
+            "✅ installed plugin widget for claude → /dest"
+        );
     }
 
     /// A status line ends with the audit answer, in the consent prompt's
