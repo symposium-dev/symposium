@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Symposium;
 use crate::pm::{PackageId, WorkspaceInfo};
 
+const PM_RETRY_DELAY_MS: u64 = 5_000;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkspaceState {
     /// `None` until the first successful sync.
@@ -24,6 +26,29 @@ pub struct WorkspaceState {
     pub last_sync: Option<LastSync>,
     #[serde(default)]
     pub surfaced: BTreeSet<PackageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failed_attempt: Option<FailedAttempt>,
+}
+
+/// A PM failure only delays retries. It carries no workspace or dependency
+/// answers that another hook could mistake for a successful sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FailedAttempt {
+    started_ms: u64,
+    pub(crate) managers: BTreeSet<String>,
+    inputs: BTreeMap<PathBuf, Option<u64>>,
+}
+
+impl FailedAttempt {
+    pub(crate) fn cooling_down(&self, now_ms: u64) -> bool {
+        now_ms
+            .checked_sub(self.started_ms)
+            .is_some_and(|elapsed| elapsed < PM_RETRY_DELAY_MS)
+            && self
+                .inputs
+                .iter()
+                .all(|(path, mtime)| crate::pm::file_mtime(path) == *mtime)
+    }
 }
 
 /// What a sync found: the workspace and its dependencies, with each input's
@@ -76,6 +101,36 @@ impl WorkspaceState {
         })
     }
 
+    pub(crate) fn watched_inputs(&self) -> impl Iterator<Item = &PathBuf> {
+        self.last_sync
+            .iter()
+            .flat_map(|last| last.inputs.keys())
+            .chain(
+                self.failed_attempt
+                    .iter()
+                    .flat_map(|last| last.inputs.keys()),
+            )
+    }
+
+    pub(crate) fn record_pm_failure(
+        &mut self,
+        now_ms: u64,
+        managers: Vec<String>,
+        inputs: impl IntoIterator<Item = PathBuf>,
+    ) {
+        self.last_sync = None;
+        let failed = self.failed_attempt.get_or_insert_with(|| FailedAttempt {
+            started_ms: now_ms,
+            managers: BTreeSet::new(),
+            inputs: BTreeMap::new(),
+        });
+        failed.managers.extend(managers);
+        for path in inputs {
+            let mtime = crate::pm::file_mtime(&path);
+            failed.inputs.entry(path).or_insert(mtime);
+        }
+    }
+
     pub fn surface(&mut self, pending: &[PackageId]) -> Vec<PackageId> {
         pending
             .iter()
@@ -114,6 +169,31 @@ fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::pm::{file_mtime, workspace_dir_name};
+
+    #[test]
+    fn pm_cooldown_ends_when_time_elapses_or_an_input_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("lock");
+        let mut state = WorkspaceState::default();
+        state.record_sync(&workspace_with_input(tmp.path()), &[]);
+        state.record_pm_failure(100, vec!["cargo".into()], [input.clone()]);
+        assert!(state.fresh().is_none());
+
+        // Another failure during the window joins the cooldown without
+        // shifting the original deadline.
+        state.record_pm_failure(200, vec!["demo".into()], []);
+        let failed = state.failed_attempt.unwrap();
+        assert_eq!(
+            failed.managers,
+            BTreeSet::from(["cargo".into(), "demo".into()])
+        );
+        assert!(failed.cooling_down(100 + PM_RETRY_DELAY_MS - 1));
+        assert!(!failed.cooling_down(100 + PM_RETRY_DELAY_MS));
+        assert!(!failed.cooling_down(99));
+
+        fs::write(input, "appeared").unwrap();
+        assert!(!failed.cooling_down(200));
+    }
 
     #[test]
     fn workspace_dir_name_uses_tail_and_hash() {

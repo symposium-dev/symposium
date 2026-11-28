@@ -703,10 +703,20 @@ impl Symposium {
     /// set, which is what keeps an out-of-process PM to one process per
     /// invocation rather than one per call site.
     pub fn workspace(&self, dir: &Path) -> Arc<crate::pm::Workspace> {
-        Arc::new(crate::pm::Workspace::new(
-            Some(dir.to_path_buf()),
-            self.package_managers(&self.workspace_deps(dir), Some(dir)),
-        ))
+        self.workspace_without(dir, None)
+    }
+
+    pub(crate) fn workspace_without(
+        &self,
+        dir: &Path,
+        omitted: Option<&std::collections::BTreeSet<String>>,
+    ) -> Arc<crate::pm::Workspace> {
+        let pms = self.package_managers(&self.workspace_deps(dir), Some(dir));
+        let pms = match omitted {
+            Some(names) => pms.without(names),
+            None => pms,
+        };
+        Arc::new(crate::pm::Workspace::new(Some(dir.to_path_buf()), pms))
     }
 
     /// Override the cargo binary path (test-only).

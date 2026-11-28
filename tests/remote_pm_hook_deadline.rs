@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use symposium::agents::Agent;
-use symposium::config::Symposium;
+use symposium::config::{PackageManagerConfig, Symposium};
 use symposium::hook::HookResponse;
 use symposium::hook_schema::{HookAgent, HookEvent, agent_event};
 use symposium::output::Output;
+use symposium::workspace_state::WorkspaceState;
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
 fn registered_deadline(ctx: &TestContext, agent: HookAgent) -> Duration {
@@ -166,4 +167,73 @@ async fn several_silent_pms_share_one_hook_budget() {
 #[tokio::test(flavor = "multi_thread")]
 async fn initialization_and_operations_share_one_hook_budget() {
     healthy_plugin_answers_despite_a_silent_pm(HookAgent::Copilot, 1, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_pm_cools_down_until_a_session_start_retries_it() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hook-decisions0", "workspace-empty0"],
+        async |mut ctx| {
+            let root = ctx.workspace_root.clone().unwrap();
+            let script = ctx.tempdir.join("intermittent-pm.sh");
+            let requested = ctx.tempdir.join("pm-requested");
+            let recovered = ctx.tempdir.join("pm-recovered");
+            std::fs::write(
+                &script,
+                r#"while IFS= read -r line; do
+  printf requested > "$1"
+  test -f "$2" || continue
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*) result='{"protocol_version":1,"name":"intermittent"}' ;;
+    *'"list_deps"'*) result='{"deps":[]}' ;;
+    *'"active_plugins"'*) result='{"plugins":[]}' ;;
+    *) result='{"project":{}}' ;;
+  esac
+  printf '{"id":%s,"jsonrpc":"2.0","result":%s}\n' "$id" "$result"
+done
+"#,
+            )?;
+            ctx.sym.config.auto_sync = true;
+            ctx.sym.config.package_managers.push(PackageManagerConfig {
+                name: "intermittent".into(),
+                command: "sh".into(),
+                args: [&script, &requested, &recovered]
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .to_vec(),
+            });
+            let agent = HookAgent::Codex;
+            let invoke = async |step: HookStep| {
+                let event = step.event();
+                let payload: Value = serde_json::from_str(
+                    &agent_event(agent, event)
+                        .unwrap()
+                        .translate_input(&step.to_input_event(&root.to_string_lossy()))
+                        .to_string()?,
+                )?;
+                ctx.invoke_hook(agent, event, &payload).await
+            };
+            let tool = || HookStep::PreToolUse {
+                tool_name: "DenyProbe".into(),
+                tool_input: json!({}),
+            };
+
+            assert_healthy_plugin_answered(agent, invoke(tool()).await?);
+            assert!(requested.is_file(), "the first hook must call the PM");
+            std::fs::remove_file(&requested)?;
+            std::fs::write(&recovered, "ready")?;
+
+            assert_healthy_plugin_answered(agent, invoke(tool()).await?);
+            assert!(!requested.exists(), "dispatch must also skip the PM");
+            assert!(WorkspaceState::load(&ctx.sym, &root).fresh().is_none());
+
+            assert_eq!(invoke(HookStep::SessionStart).await?.exit_code, 0);
+            assert!(requested.is_file(), "SessionStart must retry the PM");
+            assert!(WorkspaceState::load(&ctx.sym, &root).fresh().is_some());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
 }

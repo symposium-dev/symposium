@@ -113,6 +113,20 @@ A listing that swallows read errors returns the same empty list for "nothing the
 
 Where one rule guards several passes, bind it once and have every guard read that binding. `sync` has several such passes, the project MCP removal inside the per-agent loop, the MCP removal for a plugin `use --remove` disabled, and the stale-skill reap, and all read the single `skip_cleanup`. Spelling the rule out twice instead invites the copies to diverge, and a shadowed rebinding hides the divergence at the use site: the guard still reads `skip_cleanup`, so nothing there says which of the two it got. Had one copy omitted `Workspace::failed`, a failed package manager would keep its skills and silently lose its MCP entries, which is exactly the data loss the rule exists to prevent. The same holds for anything else derived from a condition several passes share, and across entry points: `sync_user_plugins` compiles and reaps the user-level plugins outside a workspace, so the rule is one function, `cleanup_held_back`, that it and `sync` both call.
 
+## Incomplete dependency snapshots
+
+A package manager can find a project but fail to list its dependencies. If the
+hook caches that partial list as fresh, later hooks keep using it until an input
+changes or a new session starts, even after the PM recovers. A forced
+`SessionStart` refresh can also fail while a previous snapshot still looks
+fresh. Invalidate that snapshot before resolving again.
+
+Keep the retry cooldown separate from the successful snapshot. For five
+seconds after a failure, skip auto-sync and omit the failed PMs from the
+hook's PM set. This also covers dispatch, which resolves the workspace even
+when sync is skipped. A new session or a change to a known input allows an
+immediate retry. The consent notice history survives either outcome.
+
 ## An input that does not exist yet is still an input
 
 A cache keyed on "have my inputs changed?" has to name the files whose *appearance* changes the answer, not just the ones it read. `ProjectInfo::inputs` is the files a package manager's answers depend on, and the mtime of a file that does not exist records as `None`, so a path reported while absent and later found present reads as a change. That is what lets a hook notice a workspace it could not have read before: a `Cargo.toml` appearing between the session's starting directory and the cached root re-roots the workspace, and no lockfile under the old root would ever show it. A package manager that reports only the files it actually opened will pin a stale root for the rest of the session. The matching rule on the consumer side is already in `WorkspaceState::fresh`: a workspace that names no inputs is never fresh, since nothing would tell that its answers had changed.
